@@ -9,7 +9,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::{
     NetworkError, ProtocolFrame, ProtocolMessage, context::ConnectionContext,
@@ -750,6 +750,14 @@ async fn handle_connection(
                                 if let Some(handler) =
                                     server.get_channel_handler(&channel_name).await
                                 {
+                                    // channel lifecycle の "open" 側ログ。
+                                    // close 側 (= 下記の debug!) と対になり、 1 接続中の
+                                    // channel 開閉 trace が debug level で揃う。
+                                    // info level にしない理由: 1 接続で channel が頻繁に
+                                    // open/close される設計 (= 1 request/response = 1 channel)
+                                    // なので info noise になりがち。
+                                    debug!("Channel '{}' opened", channel_name);
+
                                     // チャネル用のUnisonStreamを作成（ストリームは生きたまま）
                                     let stream = UnisonStream::from_streams(
                                         request.id,
@@ -759,10 +767,21 @@ async fn handle_connection(
                                         recv_stream,
                                     );
                                     if let Err(e) = handler(ctx, stream).await {
-                                        error!(
-                                            "Channel handler error for '{}': {}",
-                                            channel_name, e
-                                        );
+                                        // sender 側が request/response 完了後に正常 close した
+                                        // end-of-stream は real error ではないので debug level に
+                                        // degrade。 これにより毎 channel session の終端で発生する
+                                        // ERROR log noise (= journal で大半を占める) を抑制。
+                                        if e.is_normal_close() {
+                                            debug!(
+                                                "Channel '{}' closed normally (end of stream)",
+                                                channel_name
+                                            );
+                                        } else {
+                                            error!(
+                                                "Channel handler error for '{}': {}",
+                                                channel_name, e
+                                            );
+                                        }
                                     }
                                 } else {
                                     warn!("No channel handler for: {}", channel_name);
