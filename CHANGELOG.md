@@ -5,6 +5,13 @@
 フォーマットは [Keep a Changelog](https://keepachangelog.com/ja/1.0.0/) に基づいており、
 このプロジェクトは [セマンティックバージョニング](https://semver.org/lang/ja/) に準拠しています。
 
+## [0.8.1] - 2026-05-15
+
+### 修正
+- **README の relative link を絶対 URL 化** — crates.io 上で render される際に repo 内の他ファイル/ディレクトリへの相対参照が壊れる問題を解消
+  - `CHANGELOG.md` / `LICENSE` / `crates/unison-protocol` / `crates/unison-agent` / `spec/01-core-concept/SPEC.md` / `spec/02-unified-channel/SPEC.md` / `guides/channel-guide.md` の 7 link を `https://github.com/chronista-club/unison/...` に書き換え
+- API・実装の変更なし、README のみの patch
+
 ## [0.8.0] - 2026-05-15
 
 ### 追加
