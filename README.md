@@ -2,13 +2,16 @@
 
 KDL スキーマベースの型安全な QUIC 通信フレームワーク。
 
-[![Crates.io](https://img.shields.io/crates/v/unison.svg)](https://crates.io/crates/unison)
+[![Crates.io](https://img.shields.io/crates/v/club-unison.svg)](https://crates.io/crates/club-unison)
 [![Build Status](https://github.com/chronista-club/unison/workflows/CI/badge.svg)](https://github.com/chronista-club/unison/actions)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ```toml
 [dependencies]
-unison = "^0.3"
+# crates.io 名は `club-unison` (chronista-club 命名規則)、import path は `use unison::...` のまま
+club-unison = { version = "^0.5", package = "club-unison" }
+# もしくは alias で旧来の使用感に
+# unison = { package = "club-unison", version = "^0.5" }
 tokio = { version = "1.40", features = ["full"] }
 ```
 
@@ -188,7 +191,7 @@ protocol "my-service" version="1.0.0" {
 
 | クレート | 説明 |
 |---------|------|
-| [`unison-protocol`](crates/unison-protocol) | コアライブラリ。crates.io では `unison` として公開。KDL スキーマ、QUIC、チャネル、パケット |
+| [`unison-protocol`](crates/unison-protocol) | コアライブラリ。crates.io では `club-unison` として公開、import 時の lib name は `unison` 据置。KDL スキーマ、QUIC、チャネル、パケット |
 | [`unison-agent`](crates/unison-agent) | [Claude Agent SDK](https://crates.io/crates/claude-agent-sdk) 統合。AgentClient、InteractiveClient、MCP ツール公開 |
 
 ### unison-agent の例

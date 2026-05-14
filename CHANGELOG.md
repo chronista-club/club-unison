@@ -5,6 +5,31 @@
 フォーマットは [Keep a Changelog](https://keepachangelog.com/ja/1.0.0/) に基づいており、
 このプロジェクトは [セマンティックバージョニング](https://semver.org/lang/ja/) に準拠しています。
 
+## [0.5.0] - 2026-05-15
+
+### 変更 (Breaking — Cargo.toml level only)
+- **crate を `unison` から `club-unison` に rename** (chronista-club 命名規則に統一)
+  - crates.io 上の名前: `unison` → **`club-unison`** (旧名は別人 RobertWHurst の config loader、名前衝突回避)
+  - lib name は `unison` で据置 — **ソースコードの `use unison::...` は変更不要**
+  - 下流 consumer は Cargo.toml の dep 行のみ更新:
+    ```toml
+    # 旧
+    unison = "0.4"
+    # 新
+    club-unison = "0.5"
+    # または alias 維持
+    unison = { package = "club-unison", version = "0.5" }
+    ```
+- workspace 内の `unison-agent` / `unison-mcp-probe` の `unison` dep は `package = "club-unison"` alias で `use unison::...` を据置
+
+### 内部
+- ディレクトリ名は据置 (`crates/unison-protocol/` 等)。package name のみ rename。
+- 命名規則の根拠: chronista-club ecosystem の crates.io 公開 crate は **`club-` prefix** で統一 (vs 内部ツール用 `cc-` prefix = ccwire / ccws)
+
+### Future (本リリースの blocker ではないが残課題)
+- `unison-kdl` も同様に `club-kdl` に rename 予定 (別 repo 作業)
+- `club-kdl` の crates.io 公開後、本 crate も `cargo publish` 可能になる (現状は git dep 依存のため publish 不可)
+
 ## [0.4.2] - 2026-05-14
 
 ### 修正
