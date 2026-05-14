@@ -39,7 +39,7 @@ impl SchemaParser {
     pub fn parse(&self, input: &str) -> Result<ParsedSchema> {
         // unison-kdlを使ってパース
         let schema: ParsedSchema =
-            unison_kdl::from_str(input).map_err(|e| anyhow::anyhow!("KDL parsing error: {}", e))?;
+            club_kdl::from_str(input).map_err(|e| anyhow::anyhow!("KDL parsing error: {}", e))?;
 
         Ok(schema)
     }

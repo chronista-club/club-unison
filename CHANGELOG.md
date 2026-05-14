@@ -5,6 +5,48 @@
 フォーマットは [Keep a Changelog](https://keepachangelog.com/ja/1.0.0/) に基づいており、
 このプロジェクトは [セマンティックバージョニング](https://semver.org/lang/ja/) に準拠しています。
 
+## [0.6.0] - 2026-05-15
+
+### 変更 (Breaking)
+- **`club-kdl` への依存切替 + lib name 統一**
+  - workspace dep: `unison-kdl = { git = ... }` → **`club-kdl = "0.5"`** (crates.io から取得、git dep 廃止)
+  - `crates/unison-protocol/Cargo.toml` の `[lib].name`: `unison` → **`club_unison`** (full rename policy 採用)
+  - 全 `use unison::...` → **`use club_unison::...`** (40+ 箇所一括置換)
+  - 全 `use unison_kdl::...` → **`use club_kdl::...`** (2 箇所)
+- workspace 内 dep: `unison = { package = "club-unison", ... }` alias を廃止 → 直接 `club-unison = { path = "..." }` 参照に変更
+
+### 命名規則の確定 (full rename policy)
+
+v0.5.0 では「package name のみ rename、lib name は据置」だったが、v0.6.0 で **「lib name も full rename」** へ方針変更:
+
+| Layer | v0.5.0 (旧方針) | v0.6.0 (新方針) |
+|-------|----------------|----------------|
+| crates.io package | `club-unison` | `club-unison` |
+| lib name (`use`) | `unison` (据置) | **`club_unison`** (rename) |
+| directory | `crates/unison-protocol/` | (据置) |
+
+理由: `club-kdl` 側 (lib name `club_kdl` に full rename 採用) と整合性を取るため、本 crate も統一。
+
+### 内部
+- `deny.toml`: git source 許可リストから unison-kdl 削除 (crates.io 公開に移行)
+- README: dep 例 + 使用例を `club_unison` に更新
+
+### 下流影響
+
+下流 consumer (fleetflow / vp / fleetstage / 等):
+```toml
+# 旧
+club-unison = "0.5"   # use unison::...
+# 新 (v0.6.0)
+club-unison = "0.6"   # use club_unison::...
+```
+
+ソースコードの `use unison::...` も全て `use club_unison::...` に書き換え必須。
+
+### crates.io publish
+
+本リリースで初の crates.io 公開が可能になる (依存 `club-kdl` が crates.io 公開済みのため)。
+
 ## [0.5.0] - 2026-05-15
 
 ### 変更 (Breaking — Cargo.toml level only)

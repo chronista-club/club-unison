@@ -56,7 +56,7 @@ impl ConnectionEventReceiver {
     /// # 例
     ///
     /// ```rust,no_run
-    /// # use unison::ProtocolServer;
+    /// # use club_unison::ProtocolServer;
     /// # async fn example(server: &ProtocolServer) {
     /// let mut rx = server.subscribe_connection_events();
     /// loop {
@@ -238,7 +238,7 @@ impl ProtocolServer {
     /// # 例
     ///
     /// ```rust,no_run
-    /// # use unison::ProtocolServer;
+    /// # use club_unison::ProtocolServer;
     /// # async fn example(server: &ProtocolServer) {
     /// let mut rx = server.subscribe_connection_events();
     ///

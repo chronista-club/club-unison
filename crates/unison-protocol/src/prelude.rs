@@ -6,7 +6,7 @@
 //! # 使用例
 //!
 //! ```rust
-//! use unison::prelude::*;
+//! use club_unison::prelude::*;
 //! ```
 
 // パーサー関連

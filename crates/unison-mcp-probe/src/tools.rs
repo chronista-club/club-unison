@@ -73,7 +73,7 @@ impl UnisonProbe {
         &self,
         Parameters(args): Parameters<PingArgs>,
     ) -> Result<CallToolResult, McpError> {
-        use unison::ProtocolClient;
+        use club_unison::ProtocolClient;
 
         let client = ProtocolClient::new_default()
             .map_err(|e| McpError::internal_error(format!("client init failed: {e}"), None))?;
@@ -92,7 +92,7 @@ impl UnisonProbe {
         &self,
         Parameters(args): Parameters<CallArgs>,
     ) -> Result<CallToolResult, McpError> {
-        use unison::ProtocolClient;
+        use club_unison::ProtocolClient;
 
         let client = ProtocolClient::new_default()
             .map_err(|e| McpError::internal_error(format!("client init failed: {e}"), None))?;

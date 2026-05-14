@@ -4,7 +4,7 @@
 //! buffa::Message トレイト経由で正しく往復できることを検証する。
 
 use buffa::Message;
-use unison::codec::proto::creo_sync::*;
+use club_unison::codec::proto::creo_sync::*;
 
 #[test]
 fn test_subscribe_roundtrip() {

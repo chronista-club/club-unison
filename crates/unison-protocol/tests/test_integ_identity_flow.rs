@@ -1,8 +1,8 @@
 mod common;
 
-use unison::network::MessageType;
-use unison::network::identity::*;
-use unison::packet::UnisonPacketHeader;
+use club_unison::network::MessageType;
+use club_unison::network::identity::*;
+use club_unison::packet::UnisonPacketHeader;
 
 #[test]
 fn test_integ_identity_to_protocol_message_round_trip() {
@@ -19,7 +19,7 @@ fn test_integ_identity_to_protocol_message_round_trip() {
 
 #[tokio::test]
 async fn test_integ_identity_build_and_frame() {
-    use unison::network::ProtocolServer;
+    use club_unison::network::ProtocolServer;
 
     let server = ProtocolServer::with_identity("test-srv", "1.0.0", "ns");
     server
@@ -89,7 +89,7 @@ fn test_integ_channel_update_variants_json() {
 
 #[tokio::test]
 async fn test_integ_connection_context_identity_flow() {
-    use unison::network::context::ConnectionContext;
+    use club_unison::network::context::ConnectionContext;
 
     let ctx = ConnectionContext::new();
     assert!(ctx.identity().await.is_none());

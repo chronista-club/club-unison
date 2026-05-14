@@ -192,9 +192,8 @@ skip-tree = [
 unknown-registry = "warn"
 unknown-git = "warn"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = [
-    "https://github.com/chronista-club/unison-kdl.git",
-]
+allow-git = []
+# club-kdl は crates.io 公開 (v0.5.0~) のため git source 不要
 
 [sources.allow-org]
 # github.com organizations to allow git sources for

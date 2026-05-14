@@ -1,9 +1,9 @@
 mod common;
 
 use serde_json::Value;
-use unison::context::handlers::{CompositeHandler, EchoHandler, PingHandler};
-use unison::context::{HandlerRegistry, MessageDispatcher};
-use unison::network::{MessageType, NetworkError, ProtocolMessage};
+use club_unison::context::handlers::{CompositeHandler, EchoHandler, PingHandler};
+use club_unison::context::{HandlerRegistry, MessageDispatcher};
+use club_unison::network::{MessageType, NetworkError, ProtocolMessage};
 
 /// PingHandler を登録 → ProtocolMessage で dispatch → "Pong: ..." レスポンス検証
 #[tokio::test]
@@ -68,7 +68,7 @@ async fn test_integ_unregistered_method_dispatch() {
 /// MessageHandler トレイト経由での dispatch
 #[tokio::test]
 async fn test_integ_message_handler_trait_dispatch() {
-    use unison::context::MessageHandler as MH;
+    use club_unison::context::MessageHandler as MH;
 
     let registry = HandlerRegistry::new();
     registry.register("echo", EchoHandler).await;

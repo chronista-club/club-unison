@@ -7,7 +7,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 authors = ["Mako<mito@chronista.club>"]
 license = "MIT"
@@ -74,7 +74,7 @@ indexmap = "2.6"
 scc = "3"
 tempfile = "3.13"
 kdl = "6.3.4"
-unison-kdl = { git = "https://github.com/chronista-club/unison-kdl.git" }
+club-kdl = "0.5"
 
 # Dev dependencies
 pretty_assertions = "1.4"

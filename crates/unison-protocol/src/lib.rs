@@ -17,7 +17,7 @@
 //! # use anyhow::Result;
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
-//! use unison::{UnisonProtocol, NetworkError};
+//! use club_unison::{UnisonProtocol, NetworkError};
 //!
 //! // プロトコルスキーマを読み込み
 //! let mut protocol = UnisonProtocol::new();

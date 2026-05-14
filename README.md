@@ -8,11 +8,14 @@ KDL スキーマベースの型安全な QUIC 通信フレームワーク。
 
 ```toml
 [dependencies]
-# crates.io 名は `club-unison` (chronista-club 命名規則)、import path は `use unison::...` のまま
-club-unison = { version = "^0.5", package = "club-unison" }
-# もしくは alias で旧来の使用感に
-# unison = { package = "club-unison", version = "^0.5" }
+# crates.io package = `club-unison`、Rust crate identifier = `club_unison`
+club-unison = "^0.6"
 tokio = { version = "1.40", features = ["full"] }
+```
+
+```rust
+use club_unison::{ProtocolServer, NetworkError};
+use club_unison::network::UnisonChannel;
 ```
 
 ---
@@ -47,8 +50,8 @@ sequenceDiagram
 ## サーバーを書く
 
 ```rust
-use unison::{ProtocolServer, NetworkError};
-use unison::network::UnisonChannel;
+use club_unison::{ProtocolServer, NetworkError};
+use club_unison::network::UnisonChannel;
 use serde_json::json;
 
 #[tokio::main]
@@ -83,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## クライアントを書く
 
 ```rust
-use unison::ProtocolClient;
+use club_unison::ProtocolClient;
 use serde_json::json;
 
 #[tokio::main]
@@ -191,7 +194,7 @@ protocol "my-service" version="1.0.0" {
 
 | クレート | 説明 |
 |---------|------|
-| [`unison-protocol`](crates/unison-protocol) | コアライブラリ。crates.io では `club-unison` として公開、import 時の lib name は `unison` 据置。KDL スキーマ、QUIC、チャネル、パケット |
+| [`unison-protocol`](crates/unison-protocol) | コアライブラリ。crates.io では `club-unison` として公開、Rust crate identifier は `club_unison`。KDL スキーマ、QUIC、チャネル、パケット |
 | [`unison-agent`](crates/unison-agent) | [Claude Agent SDK](https://crates.io/crates/claude-agent-sdk) 統合。AgentClient、InteractiveClient、MCP ツール公開 |
 
 ### unison-agent の例

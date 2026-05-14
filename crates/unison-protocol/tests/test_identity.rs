@@ -1,4 +1,4 @@
-use unison::network::identity::*;
+use club_unison::network::identity::*;
 
 #[test]
 fn test_identity_serialization() {

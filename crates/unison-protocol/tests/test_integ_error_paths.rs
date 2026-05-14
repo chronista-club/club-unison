@@ -1,13 +1,13 @@
 mod common;
 
 use bytes::Bytes;
-use unison::context::{HandlerRegistry, MessageDispatcher};
-use unison::network::{MessageType, NetworkError, ProtocolMessage};
-use unison::packet::config::{CompressionConfig, PacketConfig};
-use unison::packet::header::{PacketType, UnisonPacketHeader};
-use unison::packet::payload::RkyvPayload;
-use unison::packet::serialization::PacketSerializer;
-use unison::packet::{SerializationError, UnisonPacket};
+use club_unison::context::{HandlerRegistry, MessageDispatcher};
+use club_unison::network::{MessageType, NetworkError, ProtocolMessage};
+use club_unison::packet::config::{CompressionConfig, PacketConfig};
+use club_unison::packet::header::{PacketType, UnisonPacketHeader};
+use club_unison::packet::payload::RkyvPayload;
+use club_unison::packet::serialization::PacketSerializer;
+use club_unison::packet::{SerializationError, UnisonPacket};
 
 /// 56バイト未満のバイト列 → from_bytes がエラー
 #[test]

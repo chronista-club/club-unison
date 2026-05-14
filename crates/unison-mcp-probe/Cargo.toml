@@ -19,8 +19,8 @@ path = "src/main.rs"
 rmcp.workspace = true
 schemars.workspace = true
 
-# Unison client (package rename: `club-unison`, but kept as `unison` for import compatibility)
-unison = { package = "club-unison", path = "../unison-protocol" }
+# club-unison: crates.io package、lib identifier は `club_unison`
+club-unison = { path = "../unison-protocol" }
 
 # Runtime
 tokio.workspace = true

@@ -6,7 +6,7 @@
 use claude_agent_sdk::mcp::{SdkMcpServer, SdkMcpTool, ToolResult};
 use serde_json::{Value, json};
 use tracing::{debug, info};
-use unison::ProtocolClient;
+use club_unison::ProtocolClient;
 
 use crate::error::{AgentError, Result};
 

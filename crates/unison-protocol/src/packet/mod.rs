@@ -12,7 +12,7 @@
 //! ## 使用例
 //!
 //! ```ignore
-//! use unison::packet::{UnisonPacket, StringPayload};
+//! use club_unison::packet::{UnisonPacket, StringPayload};
 //!
 //! // フレーム作成
 //! let payload = StringPayload::from_string("Hello, World!");

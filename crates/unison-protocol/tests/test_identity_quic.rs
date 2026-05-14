@@ -1,4 +1,4 @@
-use unison::network::identity::*;
+use club_unison::network::identity::*;
 
 #[tokio::test]
 async fn test_identity_channel_flow() {

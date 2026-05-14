@@ -20,11 +20,11 @@ exclude = [
 ]
 rust-version.workspace = true
 
-# lib name 据置: package を `club-unison` に rename しても、
-# `use unison::Channel` のような import path は変更不要 (Cargo の rename trick)。
-# 詳細: creo-memories `mem_1Cb2haX6ZicuCweEpxAvj4` (club- prefix 命名規則)
+# lib name も `club_unison` に統一 (full rename policy、v0.6.0 で確定):
+# crates.io package = `club-unison`、Rust crate identifier = `club_unison`。
+# 詳細: creo-memories `mem_1Cb2haX6ZicuCweEpxAvj4` + annotations
 [lib]
-name = "unison"
+name = "club_unison"
 path = "src/lib.rs"
 
 [dependencies]
@@ -79,7 +79,7 @@ indexmap.workspace = true
 scc.workspace = true
 tempfile.workspace = true
 kdl.workspace = true
-unison-kdl.workspace = true
+club-kdl.workspace = true
 
 [build-dependencies]
 buffa-build.workspace = true
