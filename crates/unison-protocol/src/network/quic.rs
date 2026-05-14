@@ -9,7 +9,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::{
     NetworkError, ProtocolFrame, ProtocolMessage, context::ConnectionContext,
@@ -759,10 +759,21 @@ async fn handle_connection(
                                         recv_stream,
                                     );
                                     if let Err(e) = handler(ctx, stream).await {
-                                        error!(
-                                            "Channel handler error for '{}': {}",
-                                            channel_name, e
-                                        );
+                                        // sender 側が request/response 完了後に正常 close した
+                                        // end-of-stream は real error ではないので debug level に
+                                        // degrade。 これにより毎 channel session の終端で発生する
+                                        // ERROR log noise (= journal で大半を占める) を抑制。
+                                        if e.is_normal_close() {
+                                            debug!(
+                                                "Channel '{}' closed normally (end of stream)",
+                                                channel_name
+                                            );
+                                        } else {
+                                            error!(
+                                                "Channel handler error for '{}': {}",
+                                                channel_name, e
+                                            );
+                                        }
                                     }
                                 } else {
                                     warn!("No channel handler for: {}", channel_name);

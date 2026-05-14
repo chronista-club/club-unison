@@ -49,6 +49,22 @@ pub enum NetworkError {
     UnsupportedTransport(String),
 }
 
+impl NetworkError {
+    /// この error が **正常な channel 終端** (= sender side 完了で drop) を表すか判定する。
+    ///
+    /// `UnisonChannel::recv()` / `recv_raw()` は tokio mpsc receiver が None を返した時
+    /// `Protocol("Channel closed" | "Raw channel closed")` を生成する。 これは sender 側が
+    /// request/response 完了後に正常 close した end-of-stream であり、 真の error ではない。
+    /// caller (= e.g. QUIC server の channel handler dispatcher) は log level を ERROR ではなく
+    /// debug / info に degrade することで noise を抑えられる。
+    pub fn is_normal_close(&self) -> bool {
+        matches!(
+            self,
+            NetworkError::Protocol(msg) if msg == "Channel closed" || msg == "Raw channel closed"
+        )
+    }
+}
+
 /// プロトコルメッセージラッパー
 #[derive(Debug, Clone, Serialize, Deserialize, Archive, RkyvSerialize, RkyvDeserialize)]
 #[archive(check_bytes)]
@@ -148,4 +164,44 @@ pub struct ProtocolError {
     pub code: i32,
     pub message: String,
     pub details: Option<serde_json::Value>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `NetworkError::is_normal_close()` が `UnisonChannel::recv()` /
+    /// `recv_raw()` で生成される 2 種類の "Channel closed" を正常終端と判定し、
+    /// それ以外の Protocol error / 他 variant は real error 扱いするか確認。
+    #[test]
+    fn is_normal_close_recognizes_channel_eof() {
+        // recv() の end-of-stream
+        assert!(NetworkError::Protocol("Channel closed".to_string()).is_normal_close());
+        // recv_raw() の end-of-stream
+        assert!(NetworkError::Protocol("Raw channel closed".to_string()).is_normal_close());
+    }
+
+    #[test]
+    fn is_normal_close_rejects_other_errors() {
+        // 他 Protocol error は real failure
+        assert!(
+            !NetworkError::Protocol("Failed to send channel open: io".to_string())
+                .is_normal_close()
+        );
+        assert!(
+            !NetworkError::Protocol("Failed to parse identity: bad json".to_string())
+                .is_normal_close()
+        );
+        // 別 variant
+        assert!(!NetworkError::Connection("conn refused".to_string()).is_normal_close());
+        assert!(!NetworkError::Quic("transport".to_string()).is_normal_close());
+        assert!(!NetworkError::Timeout.is_normal_close());
+        assert!(!NetworkError::NotConnected.is_normal_close());
+        assert!(
+            !NetworkError::HandlerNotFound {
+                method: "x".to_string()
+            }
+            .is_normal_close()
+        );
+    }
 }
