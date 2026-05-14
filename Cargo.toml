@@ -7,7 +7,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 authors = ["Mako<mito@chronista.club>"]
 license = "MIT"
@@ -35,7 +35,7 @@ quinn = "0.11"
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 rustls-pemfile = "2.1"
 rcgen = "0.13"
-rust-embed = { version = "8.5", features = ["include-exclude"] }
+webpki-roots = "0.26"
 futures-util = "0.3"
 
 # Error handling

@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use quinn::{ClientConfig, Connection, Endpoint, RecvStream, SendStream, ServerConfig};
-use rust_embed::RustEmbed;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::{ClientConfig as RustlsClientConfig, ServerConfig as RustlsServerConfig};
 use std::net::SocketAddr;
@@ -205,13 +204,6 @@ pub async fn write_typed_frame(send: &mut SendStream, frame_type: u8, data: &[u8
     Ok(())
 }
 
-/// Embedded certificates for development use
-#[derive(RustEmbed)]
-#[folder = "assets/certs"]
-#[include = "*.pem"]
-#[include = "*.der"]
-struct EmbeddedCerts;
-
 /// QUIC client implementation
 pub struct QuicClient {
     endpoint: Mutex<Option<Endpoint>>,
@@ -240,34 +232,45 @@ impl QuicClient {
         })
     }
 
-    /// Configure client with custom TLS configuration
-    pub async fn configure_client() -> Result<ClientConfig> {
-        let client_crypto_config = RustlsClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
-            .with_no_client_auth();
-
+    /// Configure client with a given trust anchor source.
+    ///
+    /// v0.7.0+: operator must explicitly choose how server certs are verified.
+    /// See [`crate::network::trust::TrustAnchors`] for variants.
+    pub async fn configure_client_with(
+        trust: super::trust::TrustAnchors,
+    ) -> Result<ClientConfig> {
+        let rustls_client_config = trust.build_client_config()?;
+        // ClientConfig is Arc<rustls::ClientConfig> — extract and rewrap for quinn
+        let client_crypto_config: RustlsClientConfig = (*rustls_client_config).clone();
         let crypto = quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto_config)?;
         let mut client_config = ClientConfig::new(Arc::new(crypto));
 
-        // Configure QUIC transport parameters optimized for real-time communication
         let mut transport_config = quinn::TransportConfig::default();
-
-        // Optimize for low latency
         transport_config
             .max_idle_timeout(Some(std::time::Duration::from_secs(60).try_into().unwrap()));
         transport_config.keep_alive_interval(Some(std::time::Duration::from_secs(10)));
-
-        // Enable 0-RTT for faster reconnection
-        transport_config.max_concurrent_uni_streams(0u32.into()); // Unlimited unidirectional streams
-        transport_config.max_concurrent_bidi_streams(1000u32.into()); // Support many bidirectional streams
-
-        // Optimize congestion control for real-time data
+        transport_config.max_concurrent_uni_streams(0u32.into());
+        transport_config.max_concurrent_bidi_streams(1000u32.into());
         transport_config.initial_rtt(std::time::Duration::from_millis(100));
-
         client_config.transport_config(Arc::new(transport_config));
 
         Ok(client_config)
+    }
+
+    /// Configure client with the legacy `SkipVerification` default.
+    ///
+    /// **DEPRECATED**: explicit trust selection is required from v0.9.0.
+    /// Use [`Self::configure_client_with`] with an explicit
+    /// [`crate::network::trust::TrustAnchors`] instead.
+    #[deprecated(
+        since = "0.7.0",
+        note = "Use configure_client_with(TrustAnchors::System) for prod, or \
+                configure_client_with(TrustAnchors::SkipVerification) for dev only. \
+                Will be removed in v0.9.0 (target 2026-08-15)."
+    )]
+    pub async fn configure_client() -> Result<ClientConfig> {
+        info!("QuicClient::configure_client() defaulting to TrustAnchors::SkipVerification — explicit migration required by v0.9.0");
+        Self::configure_client_with(super::trust::TrustAnchors::SkipVerification).await
     }
 
     // 双方向ストリームを使うため、start_receive_loopは不要になりました
@@ -317,7 +320,10 @@ impl QuicClient {
         // URL を解決 (IPv4 / IPv6 / DNS hostname)
         let addr = Self::parse_server_address(url).await?;
 
-        let client_config = Self::configure_client().await?;
+        // 内部既定は SkipVerification (= 旧 configure_client() の挙動を維持)。
+        // 明示的な trust 選択は今後 ProtocolClient::builder() で行う。
+        let client_config =
+            Self::configure_client_with(super::trust::TrustAnchors::SkipVerification).await?;
 
         // bind addr は target family に揃える (IPv4 target には 0.0.0.0、IPv6 target には [::])
         let bind_addr: SocketAddr = match addr {
@@ -441,91 +447,60 @@ impl QuicServer {
         Ok((certs, private_key.clone_key()))
     }
 
-    /// 埋め込みアセットから証明書を読み込み（rust-embed）
-    pub fn load_cert_embedded() -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
-        // Try to load embedded certificate files
-        let cert_data = EmbeddedCerts::get("cert.pem")
-            .ok_or_else(|| anyhow::anyhow!("Embedded cert.pem not found"))?;
-        let key_data = EmbeddedCerts::get("private_key.der")
-            .ok_or_else(|| anyhow::anyhow!("Embedded private_key.der not found"))?;
+    /// Configure server with TLS, given a [`CertSource`].
+    ///
+    /// v0.7.0+: operator must explicitly choose how to obtain the certificate.
+    /// See [`crate::network::cert::CertSource`] for variants.
+    pub async fn configure_server_with(
+        cert_source: super::cert::CertSource,
+    ) -> Result<ServerConfig> {
+        let certified_key = cert_source.resolve()?;
 
-        // Parse certificate
-        let cert_pem = std::str::from_utf8(&cert_data.data)?;
-        let cert_chain = rustls_pemfile::certs(&mut cert_pem.as_bytes())
-            .collect::<Result<Vec<_>, _>>()
-            .context("Failed to parse embedded certificate")?;
-        let certs = cert_chain;
-
-        // Load private key (already in DER format) - clone to own the data
-        let key_data_owned = key_data.data.to_vec();
-        let private_key = PrivateKeyDer::try_from(key_data_owned.as_ref())
-            .map_err(|e| anyhow::anyhow!("Failed to parse embedded private key: {}", e))?;
-
-        info!("Loaded embedded certificate from rust-embed");
-        Ok((certs, private_key.clone_key()))
-    }
-
-    /// Automatically load certificate with fallback priority:
-    /// 1. External files (assets/certs/)
-    /// 2. Embedded certificates (rust-embed)
-    /// 3. Generated self-signed certificate
-    pub fn load_cert_auto() -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
-        // Priority 1: External files
-        if std::path::Path::new(DEFAULT_CERT_PATH).exists()
-            && std::path::Path::new(DEFAULT_KEY_PATH).exists()
-        {
-            info!("Loading certificate from external files");
-            return Self::load_cert_from_files(DEFAULT_CERT_PATH, DEFAULT_KEY_PATH);
-        }
-
-        // Priority 2: Embedded certificates (rust-embed使用)
-        if let Ok(result) = Self::load_cert_embedded() {
-            return Ok(result);
-        }
-
-        // Priority 3: Generate self-signed certificate
-        info!("Generating self-signed certificate (no certificate files found)");
-        Self::generate_self_signed_cert()
-    }
-
-    /// Configure server with TLS (using auto certificate detection)
-    pub async fn configure_server() -> Result<ServerConfig> {
-        let (certs, private_key) = Self::load_cert_auto()?;
-
+        // CertifiedKey holds both cert chain and signing key in a single Arc,
+        // avoiding any clone_key() of the private key (zeroize-friendlier).
         let rustls_server_config = RustlsServerConfig::builder()
             .with_no_client_auth()
-            .with_single_cert(certs, private_key)
-            .map_err(|e| anyhow::anyhow!("Failed to configure TLS: {}", e))?;
+            .with_cert_resolver(Arc::new(SingleCertResolver(certified_key)));
 
         let crypto = quinn::crypto::rustls::QuicServerConfig::try_from(rustls_server_config)?;
         let mut server_config = ServerConfig::with_crypto(Arc::new(crypto));
 
-        // Configure QUIC transport parameters optimized for real-time communication
         let mut transport_config = quinn::TransportConfig::default();
-
-        // Optimize for low latency and high throughput
         transport_config
             .max_idle_timeout(Some(std::time::Duration::from_secs(60).try_into().unwrap()));
         transport_config.keep_alive_interval(Some(std::time::Duration::from_secs(10)));
-
-        // Support many concurrent streams for multiplexed communication
-        transport_config.max_concurrent_uni_streams(0u32.into()); // Unlimited unidirectional streams
-        transport_config.max_concurrent_bidi_streams(1000u32.into()); // Support many bidirectional streams
-
-        // Optimize for protocol-level communication patterns
+        transport_config.max_concurrent_uni_streams(0u32.into());
+        transport_config.max_concurrent_bidi_streams(1000u32.into());
         transport_config.initial_rtt(std::time::Duration::from_millis(100));
-        // Max UDP payload is handled automatically by QUIC
-
         server_config.transport_config(Arc::new(transport_config));
 
         Ok(server_config)
+    }
+
+    /// Configure server using a `dev_localhost()` self-signed certificate.
+    ///
+    /// **DEPRECATED**: explicit cert source selection is required from v0.9.0.
+    /// Use [`Self::configure_server_with`] with an explicit
+    /// [`crate::network::cert::CertSource`] instead.
+    #[deprecated(
+        since = "0.7.0",
+        note = "Use configure_server_with(CertSource::dev_localhost()) or pass a production-grade \
+                CertSource. Will be removed in v0.9.0 (target 2026-08-15)."
+    )]
+    pub async fn configure_server() -> Result<ServerConfig> {
+        info!("QuicServer::configure_server() defaulting to CertSource::dev_localhost() — explicit migration required by v0.9.0");
+        Self::configure_server_with(super::cert::CertSource::dev_localhost()).await
     }
 
     pub async fn bind(&mut self, addr: &str) -> Result<()> {
         // IPv4 / IPv6 / DNS hostname のいずれにも対応
         let socket_addr = Self::parse_socket_addr(addr).await?;
 
-        let server_config = Self::configure_server().await?;
+        // 内部既定は dev_localhost (= 旧 configure_server() の挙動を維持、ただし
+        // assets/certs/ や rust-embed への fallback は廃止)。
+        // 明示的な cert 指定は今後 ProtocolServer::builder() で行う。
+        let server_config =
+            Self::configure_server_with(super::cert::CertSource::dev_localhost()).await?;
         let endpoint = Endpoint::server(server_config, socket_addr)?;
 
         info!("QUIC server bound to {}", socket_addr);
@@ -821,57 +796,19 @@ async fn handle_connection(
     Ok(())
 }
 
-/// 検証をスキップするカスタム証明書検証器（テスト専用）
+/// Server-side cert resolver that always returns the same [`rustls::sign::CertifiedKey`].
+///
+/// Holds the key behind a single `Arc` so the private key material exists in
+/// memory exactly once for the lifetime of the server.
 #[derive(Debug)]
-pub struct SkipServerVerification;
+struct SingleCertResolver(Arc<rustls::sign::CertifiedKey>);
 
-impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
-    fn verify_server_cert(
+impl rustls::server::ResolvesServerCert for SingleCertResolver {
+    fn resolve(
         &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &rustls::pki_types::ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: rustls::pki_types::UnixTime,
-    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        use rustls::SignatureScheme;
-        vec![
-            SignatureScheme::RSA_PKCS1_SHA1,
-            SignatureScheme::ECDSA_SHA1_Legacy,
-            SignatureScheme::RSA_PKCS1_SHA256,
-            SignatureScheme::ECDSA_NISTP256_SHA256,
-            SignatureScheme::RSA_PKCS1_SHA384,
-            SignatureScheme::ECDSA_NISTP384_SHA384,
-            SignatureScheme::RSA_PKCS1_SHA512,
-            SignatureScheme::ECDSA_NISTP521_SHA512,
-            SignatureScheme::RSA_PSS_SHA256,
-            SignatureScheme::RSA_PSS_SHA384,
-            SignatureScheme::RSA_PSS_SHA512,
-            SignatureScheme::ED25519,
-            SignatureScheme::ED448,
-        ]
+        _client_hello: rustls::server::ClientHello<'_>,
+    ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+        Some(Arc::clone(&self.0))
     }
 }
 
