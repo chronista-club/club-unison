@@ -5,6 +5,42 @@
 フォーマットは [Keep a Changelog](https://keepachangelog.com/ja/1.0.0/) に基づいており、
 このプロジェクトは [セマンティックバージョニング](https://semver.org/lang/ja/) に準拠しています。
 
+## [0.4.2] - 2026-05-14
+
+### 修正
+- QUIC channel handler の正常 close (EOF) を ERROR から DEBUG に degrade ([#30](https://github.com/chronista-club/unison/pull/30))
+  - 正常終端の `NetworkError::Protocol("Channel closed" | "Raw channel closed" | "Request cancelled: channel closed")` が ERROR ログされていた問題を解消
+  - fleetstage prod で 24h 5739 件の偽 ERROR ノイズを発生させていた base 要因を除去
+
+### 追加
+- `NetworkError::is_normal_close()` helper メソッド
+  - 3 種類の正常 channel 終端 (`recv` / `recv_raw` / `request`) を判定
+  - 文字列マッチで暫定実装 (将来 `NetworkError::ChannelEof` enum variant 化予定 — USN-5)
+- Channel lifecycle ログの対称化: open 側も `debug!` で記録 (close 側と対応)
+
+### 内部
+- 設計ヒアリングを Linear に集約 (USN-1〜5)
+- Hierophant Green 💚 KDL schema を `schemas/hierophant.kdl` に定義 (USN-3 Phase 1)
+- `unison-mcp-probe` crate を追加: Claude Code から Unison サーバを対話的につつく MCP tool 群 (USN-2)
+
+## [0.4.1] - 2026-04-25
+
+### 追加
+- QUIC が DNS hostname と IPv4 リテラルを受け付けるように拡張 ([#29](https://github.com/chronista-club/unison/pull/29))
+  - `parse_ipv6_address` → `resolve_socket_addr` (async, `tokio::net::lookup_host` ベース)
+  - URL scheme strip (`https://` / `http://` / `quic://`)
+  - 9 件の unit test 追加 (IPv4 / IPv6 / hostname / scheme / unresolvable)
+
+### 後方互換
+- 既存 `[ipv6]:port` / `::1` / `8080` / `localhost:port` 経路は全て維持 (additive)
+
+## [0.4.0] - 2026-04-19
+
+### 追加
+- Codec トレイト + buffa (protobuf) 統合
+  - `UnisonChannel<C: Codec>` で JSON / protobuf を差し替え可能に
+  - `JsonCodec` (`serde::Serialize` / `DeserializeOwned`) と `ProtoCodec` (`buffa::Message`) を提供
+
 ## [0.3.0] - 2026-02-20
 
 ### 追加
