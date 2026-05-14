@@ -30,7 +30,7 @@ let pair = InternalMeshKeypair::generate(["broker.local".into(), "*.unison.local
 // pair.client_trust_anchors → client 側
 ```
 
-詳細な trust model 設計は [CHANGELOG](CHANGELOG.md) の v0.7.0 entry 参照。
+詳細な trust model 設計は [CHANGELOG](https://github.com/chronista-club/unison/blob/main/CHANGELOG.md) の v0.7.0 entry 参照。
 
 ---
 
@@ -208,8 +208,8 @@ protocol "my-service" version="1.0.0" {
 
 | クレート | 説明 |
 |---------|------|
-| [`unison-protocol`](crates/unison-protocol) | コアライブラリ。crates.io では `club-unison` として公開、Rust crate identifier は `club_unison`。KDL スキーマ、QUIC、チャネル、パケット |
-| [`unison-agent`](crates/unison-agent) | [Claude Agent SDK](https://crates.io/crates/claude-agent-sdk) 統合。AgentClient、InteractiveClient、MCP ツール公開 |
+| [`unison-protocol`](https://github.com/chronista-club/unison/tree/main/crates/unison-protocol) | コアライブラリ。crates.io では `club-unison` として公開、Rust crate identifier は `club_unison`。KDL スキーマ、QUIC、チャネル、パケット |
+| [`unison-agent`](https://github.com/chronista-club/unison/tree/main/crates/unison-agent) | [Claude Agent SDK](https://crates.io/crates/claude-agent-sdk) 統合。AgentClient、InteractiveClient、MCP ツール公開 |
 
 ### unison-agent の例
 
@@ -235,13 +235,13 @@ IPv6 専用設計。アドレスは `[::1]:port` を使う。
 
 ## ドキュメント
 
-- [コアコンセプト](spec/01-core-concept/SPEC.md) — Everything is a Channel
-- [Unified Channel Protocol](spec/02-unified-channel/SPEC.md) — KDL スキーマ、コード生成
-- [チャネルガイド](guides/channel-guide.md) — 実践ガイド
+- [コアコンセプト](https://github.com/chronista-club/unison/blob/main/spec/01-core-concept/SPEC.md) — Everything is a Channel
+- [Unified Channel Protocol](https://github.com/chronista-club/unison/blob/main/spec/02-unified-channel/SPEC.md) — KDL スキーマ、コード生成
+- [チャネルガイド](https://github.com/chronista-club/unison/blob/main/guides/channel-guide.md) — 実践ガイド
 
 ## ライセンス
 
-MIT License - [LICENSE](LICENSE)
+MIT License - [LICENSE](https://github.com/chronista-club/unison/blob/main/LICENSE)
 
 ---
 
