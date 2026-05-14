@@ -11,8 +11,6 @@ homepage.workspace = true
 repository.workspace = true
 readme = "../../README.md"
 exclude = [
-    "assets/certs/*.pem",
-    "assets/certs/*.der",
     ".github/*",
     "docs/*",
     "benches/*",
@@ -49,7 +47,7 @@ quinn.workspace = true
 rustls.workspace = true
 rustls-pemfile.workspace = true
 rcgen.workspace = true
-rust-embed.workspace = true
+webpki-roots.workspace = true
 futures-util.workspace = true
 
 # Error handling

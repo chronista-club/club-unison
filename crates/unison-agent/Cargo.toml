@@ -14,7 +14,7 @@ claude-agent-sdk = "0.1.1"
 futures = "0.3"
 
 # club-unison: crates.io package、lib identifier は `club_unison`
-club-unison = { path = "../unison-protocol", version = "0.6.0" }
+club-unison = { path = "../unison-protocol", version = "0.7.0" }
 
 # Workspace dependencies
 tokio = { workspace = true }

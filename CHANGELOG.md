@@ -5,6 +5,67 @@
 フォーマットは [Keep a Changelog](https://keepachangelog.com/ja/1.0.0/) に基づいており、
 このプロジェクトは [セマンティックバージョニング](https://semver.org/lang/ja/) に準拠しています。
 
+## [0.7.0] - 2026-05-15
+
+### 追加 (新 TLS API)
+- **`CertSource` enum** (`network::cert`) — server 側の証明書取得戦略
+  - `SelfSigned { subject_alt_names }` — 起動時 self-signed (dev / internal mesh)
+  - `Provided { certified_key: Arc<CertifiedKey> }` — 直接渡し (production)、`Arc` で private key の duplication を回避
+  - `FromFile { cert_path, key_path }` — k8s secret mount 等の path-based
+  - Helper: `CertSource::dev_localhost()` / `CertSource::internal_mesh(sans)`
+- **`TrustAnchors` enum** (`network::trust`) — client 側の trust anchor
+  - `System` — webpki-roots Mozilla bundle (production)
+  - `Custom(Vec<CertificateDer>)` — pinned CA / internal mesh
+  - `SkipVerification` — **DEV ONLY**、選択時 `tracing::warn!` 警告
+- **`InternalMeshKeypair`** (`network::mesh`) — server cert + client trust anchor のペア生成
+  - `InternalMeshKeypair::generate(sans)` で同じ cert material 由来の両半分を取得
+- **`QuicServer::configure_server_with(CertSource)`** / **`QuicClient::configure_client_with(TrustAnchors)`** — 明示的 cert/trust 指定
+
+### 削除 (Breaking)
+- **build.rs での cert 生成廃止** — `build_certs.rs` 削除、`assets/certs/` ディレクトリ削除
+- **`rust-embed` 依存削除** — embed された self-signed cert は配布不可
+- **`QuicServer::load_cert_embedded()` 削除** — embed 経路自体が無くなったため
+- **`QuicServer::load_cert_auto()` 削除** — 暗黙の fallback chain 廃止、operator 明示選択へ
+- `network::quic::SkipServerVerification` (pub) → `network::trust` 内に internal 化
+
+### 非推奨化 (v0.9.0 = 2026-08-15 削除予定)
+- `QuicServer::configure_server()` — `configure_server_with(CertSource::dev_localhost())` を呼ぶだけのコンパチ wrapper
+- `QuicClient::configure_client()` — `configure_client_with(TrustAnchors::SkipVerification)` を呼ぶだけのコンパチ wrapper
+
+### crates.io publish 解禁
+- v0.7.0 で `cargo publish -p club-unison` の verify step (`Source directory was modified`) が通る
+  - 原因だった build.rs の `assets/certs/` 書込みを排除
+- 初の crates.io 公開 (club-unison v0.7.0)
+
+### 設計原則
+- **「Default は不便にする」** — 暗黙の安全でない default を消す
+- **「ライブラリは plumbing、operator が trust 決定」** — trust model を library が選ばない
+- **「Variant 拡張可能性」** — 将来 `Acme` (Let's Encrypt) / `Pkcs11` 等を variant 追加可能
+- 議論記録: creo `mem_1Cb37qLW3Yq1hE7kQmV34a` (+ Moody Blues review annotation `mem_1Cb38UA6WyEd8pKPM4yFsL`)
+
+### Moody Blues review 反映
+- Issue 1 (Critical, Score 92): SkipVerification の de-facto default を回避、`SkipVerification` 選択時に `tracing::warn!` 警告
+- Issue 2 (High, Score 88): `Provided` は `Arc<rustls::sign::CertifiedKey>` を取り、private key の clone を排除
+- Issue 3 (High, Score 82): `InternalMeshKeypair` が server cert + client trust の **ペア**を返す (client 側の穴を塞ぐ)
+- Issue 4 (High, Score 79): 旧 API は `#[deprecated]` で残し、v0.9.0 削除予定 sunset date を明記
+
+### 下流影響
+
+下流 (fleetflow / vp / fleetstage):
+```toml
+club-unison = "0.7"
+```
+
+旧 API は deprecation warning が出る。`#[deprecated]` 期限は **2026-08-15 (v0.9.0)**:
+```rust
+// 旧 (deprecation warning)
+let server_config = QuicServer::configure_server().await?;
+
+// 新 (推奨)
+use club_unison::network::CertSource;
+let server_config = QuicServer::configure_server_with(CertSource::dev_localhost()).await?;
+```
+
 ## [0.6.0] - 2026-05-15
 
 ### 変更 (Breaking)

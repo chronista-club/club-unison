@@ -9,14 +9,28 @@ KDL スキーマベースの型安全な QUIC 通信フレームワーク。
 ```toml
 [dependencies]
 # crates.io package = `club-unison`、Rust crate identifier = `club_unison`
-club-unison = "^0.6"
+club-unison = "^0.7"
 tokio = { version = "1.40", features = ["full"] }
 ```
 
 ```rust
-use club_unison::{ProtocolServer, NetworkError};
-use club_unison::network::UnisonChannel;
+use club_unison::network::{CertSource, TrustAnchors};
+use club_unison::network::quic::{QuicClient, QuicServer};
+
+// Server: TLS cert を CertSource enum で明示選択
+let server_config = QuicServer::configure_server_with(CertSource::dev_localhost()).await?;
+
+// Client: trust anchor も TrustAnchors enum で明示選択
+let client_config = QuicClient::configure_client_with(TrustAnchors::System).await?;
+
+// 内部メッシュ: 両端を 1 つの pair で生成
+use club_unison::network::InternalMeshKeypair;
+let pair = InternalMeshKeypair::generate(["broker.local".into(), "*.unison.local".into()])?;
+// pair.server_cert_source → server 側
+// pair.client_trust_anchors → client 側
 ```
+
+詳細な trust model 設計は [CHANGELOG](CHANGELOG.md) の v0.7.0 entry 参照。
 
 ---
 
