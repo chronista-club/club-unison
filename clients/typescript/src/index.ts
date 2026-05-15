@@ -10,9 +10,17 @@
  * See `design/typescript-client-api.md` for the API contract this package will satisfy.
  */
 
-// === Phase 2b: transport === (= 未実装、 placeholder)
-// export type { Transport, Connection } from "./transport/types.js";
-// export { connect } from "./transport/web_transport.js";
+// === Phase 2b: transport === (= scaffold、 全 method は stub throw)
+export type {
+  BidiStream,
+  Connection,
+  ConnectionEvent,
+  ConnectOptions,
+  Transport,
+  TrustMode,
+  UniStream,
+} from "./transport/types.js";
+export { WebTransportClient, WebTransportConnection, connect } from "./transport/web_transport.js";
 
 // === Phase 2c: channel === (= 未実装、 placeholder)
 // export type { UnisonChannel, DatagramChannel } from "./channel/types.js";
