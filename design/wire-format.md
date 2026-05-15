@@ -127,26 +127,33 @@ server は接続できない、 逆も同様)。 v0.9.0 を major bump 扱いと
 - [ ] channel negotiation の spec / KDL schema 拡張 (= `wire_format="buffa"` 等)
 - [ ] format ごとの benchmark baseline 追加 (= 現状は buffa only)
 
-### 5.2 datagram backend (= v0.9.0 で MVP 開通、 v0.10+ で channel 統合)
+### 5.2 datagram backend (= v0.10.0 で channel API 統合決定)
 
-v0.9.0 で `QuicClient::send_datagram` / `recv_datagram` の **connection-level MVP** を
-入れた。 v0.10+ で以下を統合する:
+v0.9.0 の `QuicClient::send_datagram` / `recv_datagram` (= connection-level MVP) は
+v0.10.0 で **channel API narrative に統合** された。 詳細設計は
+[`design/datagram-channel.md`](./datagram-channel.md) を参照。
 
-- [ ] `event "X" backend="datagram"` KDL schema 拡張 (= event ごとに stream / datagram 選択)
-- [ ] `register_channel_datagram` / `open_datagram_channel` (= channel 抽象 statement)
-- [ ] datagram payload に channel ID prefix (1-2 bytes) を付ける demux protocol
-- [ ] server side `accept_datagram_loop` (= 受信 datagram を channel ID で demux 配信)
-- [ ] `WireFormat::supports_datagram() -> bool` flag 追加 (= format 別の datagram 適性)
-- [ ] spec/02 §8.5 update (= MVP → channel 統合済みへ)
-- [ ] migration guide (= raw connection-level → channel 経由)
+v0.10.0 で確定した骨子:
 
-詳細は creo-memories `unison` Atlas の `wire-format-pluggable` 系 memory を参照。
+- 1 channel = 1 (virtual) stream のメンタルモデル維持、 datagram channel は `channel_id`
+  で識別される virtual stream
+- KDL `channel "X" backend="datagram" channel_id=N` で宣言、 1 channel = 1 backend strict
+- Wire format: `[varint channel_id] [buffa-encoded event payload]`
+- 型 API: `DatagramChannel<C>` を `UnisonChannel<C>` と別型分離
+- v0.9.0 connection-level API は escape hatch として残存
+
+v0.10+ で残存 task:
+
+- [ ] `WireFormat::supports_datagram() -> bool` flag (= 将来 MessagePack/CBOR backend 追加時)
+- [ ] Mixed backend channel (= 同 KDL channel に stream / datagram event 共存) の許容化判断
+- [ ] datagram channel の bench 拡充 (= channel API 経由の demux overhead 計測)
 
 ---
 
 ## 6. 関連
 
-- [spec/02-unified-channel/SPEC.md](../spec/02-unified-channel/SPEC.md) §8.4
+- [spec/02-unified-channel/SPEC.md](../spec/02-unified-channel/SPEC.md) §8.4 (= wire format)、 §8.5 (= datagram channel)
+- [design/datagram-channel.md](./datagram-channel.md) — datagram channel 設計 living doc (v0.10.0)
 - [crates/unison-protocol/proto/protocol.proto](../crates/unison-protocol/proto/protocol.proto) — wire schema
 - [crates/unison-protocol/src/packet/](../crates/unison-protocol/src/packet/) — packet serializer / deserializer
 - [crates/unison-protocol/src/wire/mod.rs](../crates/unison-protocol/src/wire/mod.rs) — WireFormat trait

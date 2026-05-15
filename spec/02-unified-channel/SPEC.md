@@ -1,8 +1,8 @@
 # spec/02: Unison Protocol - Unified Channel プロトコル仕様
 
-**バージョン**: 2.0.0
+**バージョン**: 2.1.0-draft (v0.10.0 で `backend` / `channel_id` 属性追加)
 **最終更新**: 2026-05-15
-**ステータス**: Stable (v0.9.0 で確定)
+**ステータス**: Stable (v0.9.0 で 2.0.0 確定)、 v0.10.0 で datagram channel narrative を additive 拡張中
 
 ---
 
@@ -185,6 +185,15 @@ channel "<name>" from="<direction>" lifetime="<lifetime>" {
 | `from` | `"either"` | 双方が送信可能 |
 | `lifetime` | `"persistent"` | 接続中ずっと維持される |
 | `lifetime` | `"transient"` | リクエスト単位で開閉される |
+| `backend` | `"stream"` | QUIC bidi stream を使う (= default、 ordered + reliable) |
+| `backend` | `"datagram"` | QUIC datagram を使う (= unordered + unreliable + ≤MTU)、 `channel_id` 必須 |
+| `channel_id` | `1..` | `backend="datagram"` 時の demux 識別子 (= varint encoded prefix)、 author が明示割り当て (= proto3 field number 哲学) |
+
+`backend` のメンタルモデル:
+
+- **1 channel = 1 (virtual) stream**: stream channel は QUIC bidi stream に直接対応、 datagram channel は connection 内の共有 datagram path 上に `channel_id` で識別される **virtual stream** として存在。
+- **1 channel = 1 backend (strict)**: 1 channel block 内の event は全て同じ backend に従う。 stream/datagram event の mixed channel は v0.10.0 では disallow (= forward-compatible、 将来許容化可)。
+- **互換性**: `backend` 属性なしの v0.9.0 schema は default `"stream"` 解釈で動作、 v0.9.0 caller は無改修。
 
 #### メッセージブロック
 
@@ -485,29 +494,30 @@ default の packet 経路 (= buffa direct) のみが稼働する。
 
 設計詳細は [`design/wire-format.md`](../../design/wire-format.md) 参照。
 
-### 8.5 Datagram (QUIC unreliable / unordered、 ≤MTU)
+### 8.5 Datagram channel (v0.10.0 で channel API 統合完了)
 
-v0.9.0 で `QuicClient::send_datagram` / `recv_datagram` MVP API を新設した。 これは
-**connection-level thin wrapper** (= channel 抽象を経由しない、 caller が demux
-header を payload に含める責任)。 想定用途:
+v0.10.0 で datagram を **channel API narrative に統合** した。 v0.9.0 で導入された
+connection-level MVP API (`QuicClient::send_datagram` / `recv_datagram`) は escape
+hatch として残存するが、 推奨は KDL schema 経由の datagram channel。
 
-- **3DCG position+rotation transform 大量配信** (= 60Hz / 120Hz、 1 frame で 100-1000
-  peer broadcast、 unreliable OK で latency 優先)
-- **low-latency event push** (= ack 不要 fire-and-forget)
-- **heartbeat / presence**
+#### Mental model
 
-サイズは **MTU 安全値 ≤1300B** (= IP MTU 1500 - IP/UDP/QUIC header)。 超過すると
-`SendDatagramError::TooLarge` が返り fragment 不可。
+| | Stream channel | Datagram channel |
+|---|---|---|
+| **対応 QUIC primitive** | bidi stream | virtual stream (= channel_id で識別、 connection の共有 datagram path) |
+| **配送保証** | Ordered + Reliable | Unordered + Unreliable + ≤MTU |
+| **HoL blocking** | Channel 内で blocking 許容 | なし (= UDP-like) |
+| **MessageType 適合** | Request / Response / Event / Error | **Event** のみ (= 1 方向) |
+| **Use case** | RPC、 大規模 stream、 制御フロー | 3DCG transform 大量配信、 heartbeat、 presence |
 
-#### Unified Channel narrative との整合
+1 channel = 1 stream のメンタルモデルは backend を超えて維持される: datagram channel は
+「`channel_id` で identified された virtual stream」 として concept 上 1 stream に対応。
 
-datagram は性質上 **Request/Response パターンに乗らない** (= ack なし)、 spec/02 §3.1
-の MessageType のうち **Event のみ** 適合する。 v0.10+ で `event "X" backend="datagram"`
-KDL schema 拡張と一緒に channel API へ統合予定:
+#### KDL schema
 
 ```kdl
-channel "position" from="server" lifetime="persistent" {
-    event "Transform" backend="datagram" {
+channel "position" from="server" lifetime="persistent" backend="datagram" channel_id=1 {
+    event "Transform" {
         field "id" type="string"
         field "pos" type="json"   // [x, y, z]
         field "rot" type="json"   // [x, y, z, w]
@@ -515,19 +525,65 @@ channel "position" from="server" lifetime="persistent" {
 }
 ```
 
-それまでは connection-level API (= `QuicClient::send_datagram`) で raw bytes 直送、
-caller が channel ID 等の demux header を payload に含める。
+- `backend="datagram"` を channel block に指定 (= 全 event が datagram backend)
+- `channel_id` を author が **明示割り当て** (= proto3 field number 哲学、 1.. の正整数)
+- 1 channel = 1 backend (strict)、 stream/datagram event の mixed channel は v0.10.0 disallow
+
+#### Wire format
+
+```text
+[varint channel_id] [buffa-encoded event payload]
+```
+
+- payload 先頭 1-2 byte に varint encoded `channel_id` を埋め込み、 受信側で demux
+- 残りは buffa (protobuf) で encoded された event message
+- 1 datagram = 1 event message、 chunking / fragmentation 不可 (= MTU 超過は send 失敗)
+
+MTU 安全値 **≤1300B** (= IP MTU 1500 - IP/UDP/QUIC header)。 超過すると `SendDatagramError::TooLarge`。
+
+#### API surface
+
+**Server side**:
+- `register_channel_datagram(name, handler)` — datagram channel handler 登録
+- channel handler 内 `chan.send_event::<T>(event)` で per-connection 送信
+- `server.broadcast(channel_name, event)` で全 connected client へ broadcast
+
+**Client side**:
+- `client.open_datagram_channel(name) -> DatagramChannel<C>` — datagram channel open
+- `chan.send_event::<T>(event)` — server へ event 送信 (= from="either" / from="client" 時)
+- `chan.recv_event::<T>() -> Result<T>` — datagram event 受信
+
+型: `DatagramChannel<C>` は `UnisonChannel<C>` と別型分離、 stream channel と datagram channel は型レベルで区別される (= compile-time safety)。
 
 #### HoL blocking (§8.2 の補足)
 
-§8.2 の「チャネル内 HoL Blocking 許容」 は **stream channel** 前提。 datagram は HoL
-blocking なし (= UDP-like)、 v0.10+ で channel API 統合時に「stream channel = HoL 許容、
-datagram channel = HoL なし」 と仕様で明示する。
+§8.2 の「チャネル内 HoL Blocking 許容」 は **stream channel** 前提。 datagram channel は
+HoL blocking なし (= UDP-like)、 「stream channel = HoL 許容、 datagram channel = HoL なし」
+が spec/02 の規約。
+
+#### Migration: v0.9.0 connection-level API → v0.10.0 channel API
+
+v0.9.0 で導入された `QuicClient::send_datagram` / `recv_datagram` は **escape hatch** として
+v0.10.0 でも残存 (= channel API の制約に当てはまらない caller のための低レベル access)。
+ただし下記の理由で **新規 caller は datagram channel API を推奨**:
+
+| 観点 | connection-level (v0.9.0) | datagram channel (v0.10.0+) |
+|------|---------------------------|------------------------------|
+| Demux | caller が payload header で実装 | library が `channel_id` varint prefix で自動 |
+| 型 safety | raw `Bytes` | buffa-encoded typed `T` |
+| Server-side handler | accept loop 自前 | `register_channel_datagram` で declarative |
+| Broadcast | per-connection iterate | `server.broadcast(name, event)` 1 行 |
 
 #### benchmark baseline
 
 `benches/datagram.rs` で `payload {64, 1300} × burst {100, 1000}` の 4 ケース計測。
-`benches/RESULTS.md` 参照。
+`benches/RESULTS.md` 参照。 v0.10.0 で channel API 経由の bench 追加予定 (= demux overhead 計測)。
+
+#### v0.11+ 拡張
+
+- 同一 KDL channel 内の mixed backend (= stream + datagram event 共存) を許容化検討
+- Datagram channel に subscription model 導入 (= server-side filter)
+- buffa 以外の wire format (= MessagePack / CBOR) backend pluggable
 
 ---
 
