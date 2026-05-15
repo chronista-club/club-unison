@@ -23,8 +23,8 @@ pub use crate::codegen::{CodeGenerator, RustGenerator, TypeScriptGenerator};
 
 // ネットワーク関連
 pub use crate::network::{
-    ConnectionEvent, ConnectionEventReceiver, ProtocolClient, ProtocolServer, ServerHandle,
-    UnisonChannel,
+    ConnectionEvent, ConnectionEventReceiver, DatagramChannel, ProtocolClient, ProtocolServer,
+    ServerHandle, UnisonChannel,
 };
 
 // エラー型
