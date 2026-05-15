@@ -39,7 +39,6 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use std::hint::black_box;
 use std::net::{Ipv6Addr, SocketAddr};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 use tokio::runtime::Runtime;
 
@@ -52,10 +51,12 @@ const BURST_COUNTS: &[usize] = &[100, 1000];
 /// echo recv の timeout (= unreliable datagram で全 N 個戻る保証なし)
 const RECV_TIMEOUT: Duration = Duration::from_millis(500);
 
-static PORT_COUNTER: AtomicU16 = AtomicU16::new(0);
-
 /// raw quinn server (= datagram echo)、 v0.10+ で unison QuicServer 統合予定
-fn make_server_endpoint(port: u16) -> Endpoint {
+///
+/// v0.10.1 fix: 固定 port (= 26000+counter) は macOS で TIME_WAIT / OS reserved range と
+/// 衝突して `AddrInUse` panic が発生していた。 port 0 (= OS-assigned) で bind し、
+/// `endpoint.local_addr()` から actual port を read する pattern に切替。
+fn make_server_endpoint() -> (Endpoint, SocketAddr) {
     let cert =
         rcgen::generate_simple_self_signed(vec!["localhost".into()]).expect("rcgen self-signed");
     let cert_der = CertificateDer::from(cert.cert.der().to_vec());
@@ -71,8 +72,10 @@ fn make_server_endpoint(port: u16) -> Endpoint {
         ServerConfig::with_single_cert(vec![cert_der], key).expect("server tls config");
     server_config.transport_config(Arc::new(transport));
 
-    let addr: SocketAddr = (Ipv6Addr::LOCALHOST, port).into();
-    let endpoint = Endpoint::server(server_config, addr).expect("server endpoint bind");
+    // port 0 = OS が空き port を割り当て、 衝突を回避
+    let bind_addr: SocketAddr = (Ipv6Addr::LOCALHOST, 0).into();
+    let endpoint = Endpoint::server(server_config, bind_addr).expect("server endpoint bind");
+    let local_addr = endpoint.local_addr().expect("server local_addr");
 
     // accept + datagram echo loop
     let endpoint_clone = endpoint.clone();
@@ -88,13 +91,18 @@ fn make_server_endpoint(port: u16) -> Endpoint {
         }
     });
 
-    endpoint
+    (endpoint, local_addr)
 }
 
 fn bench_datagram_burst(c: &mut Criterion) {
     let runtime = Runtime::new().unwrap();
     let mut group = c.benchmark_group("datagram_burst_3dcg");
-    group.measurement_time(Duration::from_secs(5));
+    // v0.10.1: per-iter cold-start (= 1 connection / iter) は macOS で ephemeral port
+    // exhaustion に詰まるため、 1 connection を共有して steady-state burst を測る形に
+    // semantic 切替。 v0.9.0 baseline (= cold-start) とは直接比較不可、 RESULTS.md で
+    // semantic 変更を明示する。
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(3));
 
     for &payload_size in PAYLOAD_SIZES {
         for &burst_count in BURST_COUNTS {
@@ -103,36 +111,37 @@ fn bench_datagram_burst(c: &mut Criterion) {
                 BenchmarkId::from_parameter(&bench_id),
                 &(payload_size, burst_count),
                 |b, &(payload_size, burst_count)| {
-                    b.to_async(&runtime).iter(|| async move {
-                        let port = 26000 + PORT_COUNTER.fetch_add(1, Ordering::Relaxed);
-                        let _server = make_server_endpoint(port);
-
-                        // unison MVP API: QuicClient direct (= channel 抽象 bypass、
-                        // datagram は connection-level)
+                    b.to_async(&runtime).iter_custom(|iters| async move {
+                        // ─── Setup (= 1 connection を作って iter 全部で再利用) ───
+                        let (_server, server_addr) = make_server_endpoint();
                         let quic_client = QuicClient::new().expect("QuicClient::new");
                         quic_client
-                            .connect(&format!("[::1]:{}", port))
+                            .connect(&format!("[{}]:{}", server_addr.ip(), server_addr.port()))
                             .await
                             .expect("connect");
-
-                        // burst send (= 1 frame で N peer の transform を一斉配信)
                         let payload = bytes::Bytes::from(vec![0xab_u8; payload_size]);
-                        for _ in 0..burst_count {
-                            let _ = quic_client.send_datagram(payload.clone()).await;
-                        }
 
-                        // echo recv (= unreliable で loss あり、 timeout で打ち切り)
-                        let mut received = 0_usize;
-                        while received < burst_count {
-                            match tokio::time::timeout(RECV_TIMEOUT, quic_client.recv_datagram())
-                                .await
-                            {
-                                Ok(Ok(_)) => received += 1,
-                                _ => break,
+                        // ─── Measure: iters 回の burst (= 同 connection 上の steady-state) ───
+                        let start = std::time::Instant::now();
+                        for _ in 0..iters {
+                            for _ in 0..burst_count {
+                                let _ = quic_client.send_datagram(payload.clone()).await;
                             }
+                            let mut received = 0_usize;
+                            while received < burst_count {
+                                match tokio::time::timeout(
+                                    RECV_TIMEOUT,
+                                    quic_client.recv_datagram(),
+                                )
+                                .await
+                                {
+                                    Ok(Ok(_)) => received += 1,
+                                    _ => break,
+                                }
+                            }
+                            black_box(received);
                         }
-
-                        black_box(received)
+                        start.elapsed()
                     });
                 },
             );

@@ -7,6 +7,77 @@
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-05-16 — 「benchmark fresh baseline + datagram channel 計測強化」 patch
+
+> v0.10.1 のテーマは **「v0.9.0 buffa pivot + v0.10.0 datagram channel pivot を実測で裏付け」**。 内部実装大変更後の数字を fresh baseline として記録、 datagram channel の position sync use case + max throughput 計測を追加。 純粋 additive (= wire / caller code 互換 100%)。
+
+### 追加 — 新規 bench 3 件
+
+#### `benches/datagram_channel.rs` — channel API 経由 burst (= v0.10.0 で導入された新 path の overhead 計測)
+
+- 既存 `datagram.rs` (= raw connection-level、 v0.9.0 MVP) と同じ payload × burst パラメータで並列、 RESULTS.md 上で raw vs channel の overhead 比較可能
+- 主な発見: JSON codec で `Vec<u8>` を encode すると **wire size が ~4x 拡大** (= 1300B input → 5200B wire)、 MTU 超過で全 drop。 caller 向け推奨「JsonCodec + datagram の effective payload limit ≈ 200-300 B」 を documentation
+
+#### `benches/datagram_channel_sustained.rs` — 位置同期 use case の realistic shape (= 60Hz / 120Hz × 数秒 sustained stream)
+
+- `Arc<DatagramChannel>` で send / recv 別 task の continuous streaming pattern
+- 計測: 60Hz / 120Hz × 2 sec、 Transform struct (= peer id + pos + rot、 JSON wire 110-130B)
+- 結果 (= Mac M-series localhost): **drop 0%** at 60Hz / 120Hz、 v0.10.0 datagram channel API は realistic single-peer position sync で fully reliable
+
+#### `benches/datagram_channel_max_throughput.rs` — system ceiling 計測
+
+- rate 制限なし、 2 sec で as-fast-as-possible 送信、 上限値を露呈
+- 結果 (= Mac M-series localhost): **send ~530k msg/s、 recv ~445k msg/s、 drop ~2.7%**
+- caller の capacity planning 数字: 「60Hz × 1 peer = 60 msg/s に対し ~7,400x headroom」
+
+### 修正 — 既存 bench の OS-level 衝突回避
+
+#### `benches/datagram.rs` — 固定 port (`26000+counter`) → OS-assigned port (`port 0` + `local_addr` read) に移行
+
+- macOS 環境で AddrInUse / EAGAIN panic を回避、 安定計測可能に
+- semantic 変更: per-iter cold-start → **steady-state (= 1 connection 共有 + iter_custom)** に切替、 macOS の ephemeral port / fd 枯渇問題を回避
+- 数値も併せて変わるため、 v0.9.0 baseline (= cold-start semantic) との直接比較不可、 RESULTS.md で fresh baseline 宣言
+
+### 変更 — RESULTS.md fresh baseline 化
+
+`benches/RESULTS.md` を **v0.10.1 を新規 baseline とする** 形に rewrite。 v0.9.0 baseline (= 2026-05-15、 cold-start semantic) は git history に残し、 file 上は履歴から除外。 理由:
+
+- v0.9.0 → v0.10.0 で buffa pivot (= rkyv → buffa、 wire format 全面切替) + datagram channel API 追加 = 内部実装大変更
+- v0.10.1 で bench code 自体も rewrite (= steady-state semantic、 OS-assigned port、 shared connection)
+- 過去数字との直接比較は misleading、 fresh baseline で今後の patch / minor で diff を計測する方が honest
+
+### 計測結果 summary (= Mac M-series macOS arm64)
+
+| Bench | Case | Result |
+|---|---|---|
+| `datagram` (raw) | 64B × 100 burst | 127 µs / iter |
+| `datagram` (raw) | 64B × 1000 burst | 665 µs / iter |
+| `datagram` (raw) | 1300B × 100 burst | 31.9 ms / iter |
+| `datagram` (raw) | 1300B × 1000 burst | 507 ms / iter |
+| `datagram_channel` (JSON) | 64B × 100 burst | 620 µs / iter (= raw 比 4.7x、 JSON encode 支配) |
+| `datagram_channel` (JSON) | 64B × 1000 burst | ⚠️ 多数 drop + timeout 貼り付き |
+| `datagram_channel` (JSON) | 1300B × any | ⚠️ JSON で MTU 超過、 全 drop |
+| `datagram_channel_sustained` | 60Hz × 2sec | drop 0%、 session 2.32s |
+| `datagram_channel_sustained` | 120Hz × 2sec | drop 0%、 session 2.32s |
+| `datagram_channel_max_throughput` | unlimited × 2sec | **send 530k/s、 recv 445k/s、 drop 2.7%** |
+| `ping_pong` (stream channel) | 16/64/256/1024 B | ~155 ms / iter (= payload non-sensitive) |
+
+### v0.11+ への引き継ぎ
+
+- **cloud / WAN bench**: 上記 ceiling は localhost (= 同 machine)、 同 host container / 同 AZ / cross-AZ / cross-region の realistic deployment 数字を測る docker-compose + CI integration を v0.11+ で追加
+- **multi-peer broadcast bench**: `server.broadcast` を 10 / 100 / 1000 client に対して、 drop 始まる threshold 計測
+- **ProtoCodec vs JsonCodec 比較**: 同 Transform で codec のみ切替、 channel API overhead が JSON 支配 (= 4.7x の 95%) であることを ProtoCodec で 1x 近くまで圧縮できる仮説の検証
+- **higher rate sustained**: 240 Hz / 480 Hz position sync (= VR headset 想定)
+- **`throughput.rs` / `quic_performance.rs` rewrite**: 固定 port `8080-8084` の AddrInUse 問題、 v0.10.1 では skip、 v0.11+ で OS-assigned port + steady-state semantic に統一
+- **bench harness 独自化検討**: criterion の「time per iter」 だけでは sustained throughput / drop rate を表現しにくい、 custom harness or criterion 拡張
+- **CI 上での bench 定期実行 + RESULTS.md auto regen**: team-b dispatch で v0.11+ で自動化
+
+### Tests / lint
+
+- workspace tests: 202 passed / 0 failed (= v0.10.0 と同数、 regression なし)
+- integration tests (`--ignored`): 7 passed / 0 failed
+- clippy clean
+
 ## [0.10.0] - 2026-05-15 — 「channel API 拡張 + 対称性向上」 release
 
 > v0.10.0 のテーマは **「KDL channel narrative に datagram backend を統合 + ProtocolClient connection event hook で server 側との API 対称化」**。 v0.9.0 で発見された API 非対称 3 件 (= datagram server-side / client connection events / ClientIdentity) のうち 2 件を採用、 ClientIdentity は v0.11+ に deferred。 既存 v0.9.0 caller は 100% 無改修で動作 (= 純粋 additive release)。
