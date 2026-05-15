@@ -1,7 +1,8 @@
 use super::CodeGenerator;
 use crate::parser::{
-    Channel, ChannelEvent, ChannelMessage, ChannelRequest, DefaultValue, Enum, Field, FieldType,
-    Message, Method, MethodMessage, ParsedSchema, Protocol, Service, Stream, TypeRegistry,
+    Channel, ChannelBackend, ChannelEvent, ChannelMessage, ChannelRequest, DefaultValue, Enum,
+    Field, FieldType, Message, Method, MethodMessage, ParsedSchema, Protocol, Service, Stream,
+    TypeRegistry,
 };
 use anyhow::Result;
 use convert_case::{Case, Casing};
@@ -58,6 +59,9 @@ impl RustGenerator {
             use crate::network::{ProtocolClient, ProtocolServer};
             #[allow(unused_imports)]
             use crate::network::channel::UnisonChannel;
+            // v0.10.0: datagram channel API
+            #[allow(unused_imports)]
+            use crate::network::datagram_channel::DatagramChannel;
         }
     }
 
@@ -535,16 +539,22 @@ impl RustGenerator {
             })
             .collect();
 
-        // build()メソッドの各チャネル開設コード
+        // build() メソッドの各チャネル開設コード (= backend ごとに分岐)
         let channel_opens: Vec<_> = protocol
             .channels
             .iter()
             .map(|channel| {
                 let field_name = format_ident!("{}", channel.name.to_case(Case::Snake));
                 let channel_name = &channel.name;
-                quote! {
-                    #field_name: client.open_channel(#channel_name).await
-                        .map_err(|e| anyhow::anyhow!("Failed to open channel '{}': {}", #channel_name, e))?
+                match channel.backend() {
+                    ChannelBackend::Stream => quote! {
+                        #field_name: client.open_channel(#channel_name).await
+                            .map_err(|e| anyhow::anyhow!("Failed to open channel '{}': {}", #channel_name, e))?
+                    },
+                    ChannelBackend::Datagram => quote! {
+                        #field_name: client.open_datagram_channel(#channel_name).await
+                            .map_err(|e| anyhow::anyhow!("Failed to open datagram channel '{}': {}", #channel_name, e))?
+                    },
                 }
             })
             .collect();
@@ -584,14 +594,23 @@ impl RustGenerator {
         }
     }
 
-    /// チャネルの QUIC フィールド型を決定（全て UnisonChannel）
-    fn channel_quic_field_type(&self, _channel: &Channel) -> TokenStream {
-        quote! { UnisonChannel }
+    /// チャネルの QUIC フィールド型を決定 (= backend ごとに分岐、 v0.10.0 で datagram 対応)
+    ///
+    /// - `Stream` (default、 v0.9.0 互換) → `UnisonChannel`
+    /// - `Datagram` (v0.10.0+) → `DatagramChannel`
+    fn channel_quic_field_type(&self, channel: &Channel) -> TokenStream {
+        match channel.backend() {
+            ChannelBackend::Stream => quote! { UnisonChannel },
+            ChannelBackend::Datagram => quote! { DatagramChannel },
+        }
     }
 
-    /// チャネルのフィールド型を決定（全て UnisonChannel）
-    fn channel_field_type(&self, _channel: &Channel) -> TokenStream {
-        quote! { UnisonChannel }
+    /// チャネルのフィールド型を決定 (= backend ごとに分岐、 channel_quic_field_type と同義)
+    fn channel_field_type(&self, channel: &Channel) -> TokenStream {
+        match channel.backend() {
+            ChannelBackend::Stream => quote! { UnisonChannel },
+            ChannelBackend::Datagram => quote! { DatagramChannel },
+        }
     }
 
     fn format_code(&self, code: &str) -> String {
