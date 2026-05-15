@@ -188,7 +188,10 @@ fn test_channel_backend_default_is_stream() {
     let protocol = parser.parse(schema).unwrap().protocol.unwrap();
     let ch = &protocol.channels[0];
     assert_eq!(ch.backend(), ChannelBackend::Stream);
-    assert!(ch.backend.is_none(), "Option field is None when not specified");
+    assert!(
+        ch.backend.is_none(),
+        "Option field is None when not specified"
+    );
     assert!(ch.channel_id.is_none());
 }
 
@@ -240,7 +243,9 @@ fn test_channel_datagram_without_id_fails() {
         }
     "#;
     let parser = SchemaParser::new();
-    let err = parser.parse(schema).expect_err("datagram without channel_id must fail");
+    let err = parser
+        .parse(schema)
+        .expect_err("datagram without channel_id must fail");
     let msg = format!("{}", err);
     assert!(
         msg.contains("channel_id"),
@@ -283,7 +288,9 @@ fn test_channel_datagram_with_request_fails() {
         }
     "#;
     let parser = SchemaParser::new();
-    let err = parser.parse(schema).expect_err("datagram + request must fail");
+    let err = parser
+        .parse(schema)
+        .expect_err("datagram + request must fail");
     let msg = format!("{}", err);
     assert!(
         msg.contains("datagram") || msg.contains("request"),

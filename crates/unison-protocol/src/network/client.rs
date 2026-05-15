@@ -49,9 +49,7 @@ impl ClientConnectionEventReceiver {
     }
 
     /// 次の connection event を受信する (= `recv` raw、 Lagged は caller が判断)
-    pub async fn recv(
-        &mut self,
-    ) -> Result<ClientConnectionEvent, broadcast::error::RecvError> {
+    pub async fn recv(&mut self) -> Result<ClientConnectionEvent, broadcast::error::RecvError> {
         self.inner.recv().await
     }
 
@@ -225,7 +223,9 @@ impl ProtocolClient {
         let dispatcher = {
             let mut guard = self.datagram_dispatcher.lock().await;
             if guard.is_none() {
-                *guard = Some(Arc::new(DatagramDispatcher::spawn(Arc::clone(&connection_arc))));
+                *guard = Some(Arc::new(DatagramDispatcher::spawn(Arc::clone(
+                    &connection_arc,
+                ))));
             }
             Arc::clone(guard.as_ref().unwrap())
         };
@@ -427,13 +427,10 @@ mod tests {
                 });
         }
         // recv_skip_lagged は Lagged を skip して buffer 内最古 を返す
-        let ev = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            rx.recv_skip_lagged(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let ev = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv_skip_lagged())
+            .await
+            .unwrap()
+            .unwrap();
         assert!(matches!(ev, ClientConnectionEvent::Connected { .. }));
     }
 

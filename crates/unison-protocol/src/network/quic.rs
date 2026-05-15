@@ -798,10 +798,7 @@ async fn handle_connection(
             let datagram_channel = super::datagram_channel::DatagramChannel::<
                 crate::codec::JsonCodec,
             >::new(
-                Arc::clone(&connection_arc),
-                channel_id,
-                name.clone(),
-                rx,
+                Arc::clone(&connection_arc), channel_id, name.clone(), rx
             );
             tokio::spawn(async move {
                 handler(datagram_channel).await;

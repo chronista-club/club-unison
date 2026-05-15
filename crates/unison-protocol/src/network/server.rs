@@ -276,7 +276,11 @@ impl ProtocolServer {
     ///
     /// 戻り値は配送成功した connection 数 (= datagram は best-effort なので失敗は warn log
     /// のみで継続)。
-    pub async fn broadcast<T, C>(&self, channel_name: &str, event: &T) -> Result<usize, NetworkError>
+    pub async fn broadcast<T, C>(
+        &self,
+        channel_name: &str,
+        event: &T,
+    ) -> Result<usize, NetworkError>
     where
         T: Encodable<C>,
         C: Codec,
@@ -286,15 +290,14 @@ impl ProtocolServer {
             handlers
                 .get(channel_name)
                 .map(|entry| entry.channel_id)
-                .ok_or_else(|| {
-                    NetworkError::HandlerNotFound {
-                        method: format!("datagram channel: {}", channel_name),
-                    }
+                .ok_or_else(|| NetworkError::HandlerNotFound {
+                    method: format!("datagram channel: {}", channel_name),
                 })?
         };
 
         let encoded = event.encode().map_err(NetworkError::Codec)?;
-        let mut payload = Vec::with_capacity(super::datagram_channel::VARINT_MAX_LEN + encoded.len());
+        let mut payload =
+            Vec::with_capacity(super::datagram_channel::VARINT_MAX_LEN + encoded.len());
         encode_varint(channel_id, &mut payload);
         payload.extend_from_slice(&encoded);
 
@@ -316,7 +319,9 @@ impl ProtocolServer {
     }
 
     /// Datagram handler の snapshot を取得 (= quic.rs::handle_connection 用、 内部 API)
-    pub(crate) async fn snapshot_datagram_handlers(&self) -> Vec<(String, u64, DatagramChannelHandler)> {
+    pub(crate) async fn snapshot_datagram_handlers(
+        &self,
+    ) -> Vec<(String, u64, DatagramChannelHandler)> {
         let handlers = self.datagram_channel_handlers.read().await;
         handlers
             .iter()
@@ -330,7 +335,10 @@ impl ProtocolServer {
         remote_addr: SocketAddr,
         connection: Arc<quinn::Connection>,
     ) {
-        self.active_connections.write().await.insert(remote_addr, connection);
+        self.active_connections
+            .write()
+            .await
+            .insert(remote_addr, connection);
     }
 
     /// Active connection を解除 (= quic.rs::handle_connection 用、 内部 API)

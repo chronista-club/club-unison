@@ -207,15 +207,13 @@ impl Channel {
     pub fn validate(&self) -> Result<(), String> {
         match self.backend() {
             ChannelBackend::Datagram => {
-                let id = self
-                    .channel_id
-                    .ok_or_else(|| {
-                        format!(
-                            "channel \"{}\" has backend=\"datagram\" but no channel_id; \
+                let id = self.channel_id.ok_or_else(|| {
+                    format!(
+                        "channel \"{}\" has backend=\"datagram\" but no channel_id; \
                              explicit channel_id=N (1..) is required",
-                            self.name
-                        )
-                    })?;
+                        self.name
+                    )
+                })?;
                 if id == 0 {
                     return Err(format!(
                         "channel \"{}\" has channel_id=0 which is reserved; use 1..",

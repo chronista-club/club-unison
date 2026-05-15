@@ -221,7 +221,16 @@ mod tests {
     #[test]
     fn varint_decode_round_trip() {
         for value in [
-            0u64, 1, 42, 127, 128, 300, 16383, 16384, 1_000_000, u64::MAX,
+            0u64,
+            1,
+            42,
+            127,
+            128,
+            300,
+            16383,
+            16384,
+            1_000_000,
+            u64::MAX,
         ] {
             let mut buf = Vec::new();
             let written = encode_varint(value, &mut buf);
@@ -262,8 +271,7 @@ mod tests {
         // (= connection は実 QUIC connection が必要なので、 ここでは Mutex/Arc の
         // type-level 整合だけを確認する compile-check)
         let _phantom_check = |conn: Arc<quinn::Connection>, rx: mpsc::Receiver<Vec<u8>>| {
-            let ch: DatagramChannel<JsonCodec> =
-                DatagramChannel::new(conn, 42, "position", rx);
+            let ch: DatagramChannel<JsonCodec> = DatagramChannel::new(conn, 42, "position", rx);
             assert_eq!(ch.channel_id(), 42);
             assert_eq!(ch.name(), "position");
         };

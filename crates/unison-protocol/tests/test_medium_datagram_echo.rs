@@ -99,7 +99,8 @@ async fn test_medium_datagram_echo_round_trip() -> Result<()> {
         }
     }
 
-    let echo = received.expect("echo received within 10 attempts (= dropped 10 in a row is implausibly bad)");
+    let echo = received
+        .expect("echo received within 10 attempts (= dropped 10 in a row is implausibly bad)");
     assert_eq!(echo, transform);
 
     // ─── Cleanup ───────────────────────────────────────
@@ -174,8 +175,11 @@ async fn test_medium_datagram_multiple_channels() -> Result<()> {
     for _ in 0..15 {
         if got_pos.is_none() {
             pos_chan.send_event(&t1).await?;
-            if let Ok(Ok(e)) =
-                timeout(Duration::from_millis(80), pos_chan.recv_event::<Transform>()).await
+            if let Ok(Ok(e)) = timeout(
+                Duration::from_millis(80),
+                pos_chan.recv_event::<Transform>(),
+            )
+            .await
             {
                 got_pos = Some(e);
             }
@@ -247,7 +251,9 @@ async fn test_medium_datagram_broadcast_to_all_clients() -> Result<()> {
     let mut got_a: Option<Transform> = None;
     let mut got_b: Option<Transform> = None;
     for _ in 0..15 {
-        let n = server.broadcast::<_, club_unison::codec::JsonCodec>("position", &t).await?;
+        let n = server
+            .broadcast::<_, club_unison::codec::JsonCodec>("position", &t)
+            .await?;
         assert!(n <= 2, "broadcast can hit at most 2 connections");
         if got_a.is_none()
             && let Ok(Ok(e)) =
