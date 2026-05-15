@@ -80,20 +80,16 @@ fn bench_datagram_channel_burst(c: &mut Criterion) {
                         // ─── Setup (= 1 connection + 1 channel、 iter で再利用) ───
                         let server = Arc::new(ProtocolServer::new());
                         server
-                            .register_channel_datagram(
-                                "position",
-                                1,
-                                |chan| async move {
-                                    loop {
-                                        match chan.recv_event::<Payload>().await {
-                                            Ok(p) => {
-                                                let _ = chan.send_event(&p).await;
-                                            }
-                                            Err(_) => break,
+                            .register_channel_datagram("position", 1, |chan| async move {
+                                loop {
+                                    match chan.recv_event::<Payload>().await {
+                                        Ok(p) => {
+                                            let _ = chan.send_event(&p).await;
                                         }
+                                        Err(_) => break,
                                     }
-                                },
-                            )
+                                }
+                            })
                             .await;
                         let handle = Arc::clone(&server)
                             .spawn_listen_shared("[::1]:0")
