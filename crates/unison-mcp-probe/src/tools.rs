@@ -91,7 +91,6 @@ pub struct CallArgs {
     pub trust: TrustMode,
 }
 
-
 // ---------------------------------------------------------------------------
 // Tool implementations
 // ---------------------------------------------------------------------------
@@ -122,7 +121,9 @@ impl UnisonProbe {
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
-    #[tool(description = "任意の Unison channel を open し、method に payload を request として送信して response を取得する")]
+    #[tool(
+        description = "任意の Unison channel を open し、method に payload を request として送信して response を取得する"
+    )]
     async fn unison_call(
         &self,
         Parameters(args): Parameters<CallArgs>,
@@ -158,9 +159,10 @@ impl UnisonProbe {
             "response": response,
         });
 
-        Ok(CallToolResult::success(vec![Content::text(result.to_string())]))
+        Ok(CallToolResult::success(vec![Content::text(
+            result.to_string(),
+        )]))
     }
-
 }
 
 // ---------------------------------------------------------------------------

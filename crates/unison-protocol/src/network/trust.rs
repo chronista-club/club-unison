@@ -54,11 +54,7 @@ impl TrustAnchors {
         match self {
             Self::System => {
                 let mut roots = RootCertStore::empty();
-                roots.extend(
-                    webpki_roots::TLS_SERVER_ROOTS
-                        .iter()
-                        .cloned(),
-                );
+                roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
                 let config = rustls::ClientConfig::builder()
                     .with_root_certificates(roots)
                     .with_no_client_auth();

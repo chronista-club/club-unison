@@ -1,13 +1,13 @@
+use club_unison::network::channel::UnisonChannel;
+use club_unison::network::{MessageType, quic::QuicClient};
+use club_unison::{ProtocolClient, ProtocolServer};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use std::hint::black_box;
 use serde_json::json;
+use std::hint::black_box;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::runtime::Runtime;
-use club_unison::network::channel::UnisonChannel;
-use club_unison::network::{MessageType, quic::QuicClient};
-use club_unison::{ProtocolClient, ProtocolServer};
 
 /// バッチサイズのバリエーション
 const BATCH_SIZES: &[u64] = &[1, 10, 100, 1000];
@@ -138,7 +138,10 @@ fn bench_streaming_throughput(c: &mut Criterion) {
 
                 while start.elapsed() < Duration::from_secs(1) {
                     if channel
-                        .request::<_, serde_json::Value>("stream", &json!({"data": payload_data.clone()}))
+                        .request::<_, serde_json::Value>(
+                            "stream",
+                            &json!({"data": payload_data.clone()}),
+                        )
                         .await
                         .is_ok()
                     {
@@ -193,7 +196,11 @@ fn bench_parallel_throughput(c: &mut Criterion) {
                         let start = std::time::Instant::now();
 
                         while start.elapsed() < Duration::from_secs(1) {
-                            if channel.request::<_, serde_json::Value>("work", &json!({})).await.is_ok() {
+                            if channel
+                                .request::<_, serde_json::Value>("work", &json!({}))
+                                .await
+                                .is_ok()
+                            {
                                 local_count += 1;
                             }
                         }

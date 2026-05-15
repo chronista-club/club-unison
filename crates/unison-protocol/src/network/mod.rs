@@ -110,12 +110,7 @@ impl ProtocolMessage {
     }
 
     /// エンコード済みバイト列から ProtocolMessage を直接作成
-    pub fn new_encoded(
-        id: u64,
-        method: String,
-        msg_type: MessageType,
-        payload: Vec<u8>,
-    ) -> Self {
+    pub fn new_encoded(id: u64, method: String, msg_type: MessageType, payload: Vec<u8>) -> Self {
         Self {
             id,
             method,
@@ -131,8 +126,7 @@ impl ProtocolMessage {
         msg_type: MessageType,
         payload: serde_json::Value,
     ) -> Result<Self, NetworkError> {
-        let bytes =
-            Encodable::<JsonCodec>::encode(&payload).map_err(NetworkError::Codec)?;
+        let bytes = Encodable::<JsonCodec>::encode(&payload).map_err(NetworkError::Codec)?;
         Ok(Self::new_encoded(id, method, msg_type, bytes))
     }
 

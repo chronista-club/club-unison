@@ -285,9 +285,7 @@ impl QuicClient {
     ///
     /// v0.7.0+: operator must explicitly choose how server certs are verified.
     /// See [`crate::network::trust::TrustAnchors`] for variants.
-    pub async fn configure_client_with(
-        trust: super::trust::TrustAnchors,
-    ) -> Result<ClientConfig> {
+    pub async fn configure_client_with(trust: super::trust::TrustAnchors) -> Result<ClientConfig> {
         let rustls_client_config = trust.build_client_config()?;
         // ClientConfig is Arc<rustls::ClientConfig> — extract and rewrap for quinn
         let client_crypto_config: RustlsClientConfig = (*rustls_client_config).clone();
