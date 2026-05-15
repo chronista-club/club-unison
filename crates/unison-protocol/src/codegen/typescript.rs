@@ -1,7 +1,8 @@
 use super::CodeGenerator;
 use crate::parser::{
-    DefaultValue, Enum, Field, FieldType, Message, Method, MethodMessage, ParsedSchema, Protocol,
-    Service, Stream, TypeRegistry,
+    Channel, ChannelBackend, ChannelEvent, ChannelMessage, ChannelRequest, DefaultValue, Enum,
+    Field, FieldType, Message, Method, MethodMessage, ParsedSchema, Protocol, Service, Stream,
+    TypeRegistry,
 };
 use anyhow::Result;
 use convert_case::{Case, Casing};
@@ -83,7 +84,214 @@ export type LanguageCode = string; // ISO 639-1 format
             code.push_str("\n\n");
         }
 
+        // v0.11.0: channel block 対応 (= Unified Channel narrative の TS catch up)
+        for channel in &protocol.channels {
+            code.push_str(&self.generate_channel(channel, type_registry));
+            code.push_str("\n\n");
+        }
+
         code
+    }
+
+    /// v0.11.0: channel block を TS interface + metadata に変換
+    ///
+    /// 各 channel に対して下記を生成:
+    /// - event 型 interface (= stream / datagram 両 backend で同じ form)
+    /// - request 型 + その returns 型 (= stream backend のみ、 datagram は disallow)
+    /// - `<ChannelName>Meta` const object — channel name / backend / channel_id / from /
+    ///   lifetime / event names / request mappings を **type-narrowing** 用 const
+    ///
+    /// Phase 1 (= v0.11.0 sprint plan の Step 1) では **type 定義のみ**、 runtime SDK
+    /// 連動の "Channel client class" は Phase 2 で TS runtime SDK と一緒に追加する。
+    fn generate_channel(&self, channel: &Channel, type_registry: &TypeRegistry) -> String {
+        let mut code = String::new();
+
+        let backend = channel.backend();
+        let backend_str = match backend {
+            ChannelBackend::Stream => "stream",
+            ChannelBackend::Datagram => "datagram",
+        };
+
+        // Section header (= human-readable channel summary)
+        code.push_str(&format!(
+            "// ════════════════════════════════════════════════\n\
+             // Channel: {name} (backend={backend}{channel_id})\n\
+             // ════════════════════════════════════════════════\n\n",
+            name = channel.name,
+            backend = backend_str,
+            channel_id = match channel.channel_id {
+                Some(id) => format!(", channel_id={id}"),
+                None => String::new(),
+            },
+        ));
+
+        // Event 型 interface を生成
+        let mut event_names: Vec<String> = Vec::new();
+        for evt in &channel.events {
+            code.push_str(&self.generate_channel_event(evt, type_registry));
+            code.push_str("\n\n");
+            event_names.push(evt.name.clone());
+        }
+
+        // Request / response 型 interface を生成 (= stream channel のみ)
+        let mut request_mappings: Vec<(String, String, String)> = Vec::new(); // (request, response_or_void)
+        for req in &channel.requests {
+            // Request 型
+            code.push_str(&self.generate_channel_request(req, type_registry));
+            code.push_str("\n\n");
+
+            // returns block の response 型
+            let response_name = match &req.returns {
+                Some(returns) => {
+                    code.push_str(&self.generate_channel_message_interface(returns, type_registry));
+                    code.push_str("\n\n");
+                    returns.name.clone()
+                }
+                None => "void".to_string(),
+            };
+            request_mappings.push((req.name.clone(), req.name.clone(), response_name));
+        }
+
+        // Channel metadata const (= Phase 2 runtime SDK の type-narrowing 入力)
+        let meta_name = format!(
+            "{}ChannelMeta",
+            channel.name.to_case(Case::Pascal)
+        );
+        code.push_str(&format!("/** Channel metadata for \"{}\" (= Phase 2 runtime SDK 用 type-narrowing 入力) */\n", channel.name));
+        code.push_str(&format!("export const {} = {{\n", meta_name));
+        code.push_str(&format!("  name: {:?} as const,\n", channel.name));
+        code.push_str(&format!("  backend: {:?} as const,\n", backend_str));
+        if let Some(cid) = channel.channel_id {
+            code.push_str(&format!("  channelId: {} as const,\n", cid));
+        }
+        code.push_str(&format!(
+            "  from: {:?} as const,\n",
+            match channel.from {
+                crate::parser::ChannelFrom::Client => "client",
+                crate::parser::ChannelFrom::Server => "server",
+                crate::parser::ChannelFrom::Either => "either",
+            }
+        ));
+        code.push_str(&format!(
+            "  lifetime: {:?} as const,\n",
+            match channel.lifetime {
+                crate::parser::ChannelLifetime::Transient => "transient",
+                crate::parser::ChannelLifetime::Persistent => "persistent",
+            }
+        ));
+
+        // events 列挙
+        if !event_names.is_empty() {
+            code.push_str("  events: [");
+            for (i, n) in event_names.iter().enumerate() {
+                if i > 0 {
+                    code.push_str(", ");
+                }
+                code.push_str(&format!("{:?}", n));
+            }
+            code.push_str("] as const,\n");
+        } else {
+            code.push_str("  events: [] as const,\n");
+        }
+
+        // requests mapping (= request name → response type name)
+        if !request_mappings.is_empty() {
+            code.push_str("  requests: {\n");
+            for (req_name, _req_type, resp_type) in &request_mappings {
+                code.push_str(&format!(
+                    "    {}: {{ request: {:?} as const, response: {:?} as const }},\n",
+                    req_name, req_name, resp_type
+                ));
+            }
+            code.push_str("  } as const,\n");
+        } else {
+            code.push_str("  requests: {} as const,\n");
+        }
+
+        code.push_str("} as const;\n");
+
+        code
+    }
+
+    /// Channel 内 event を TS interface に変換
+    fn generate_channel_event(
+        &self,
+        event: &ChannelEvent,
+        type_registry: &TypeRegistry,
+    ) -> String {
+        let name = &event.name;
+        if event.fields.is_empty() {
+            format!(
+                "/** Event \"{}\" — empty payload */\nexport interface {} {{}}",
+                name, name
+            )
+        } else {
+            let fields: Vec<String> = event
+                .fields
+                .iter()
+                .map(|f| self.generate_field(f, type_registry))
+                .collect();
+            format!(
+                "/** Event \"{}\" */\nexport interface {} {{\n{}\n}}",
+                name,
+                name,
+                fields.join("\n")
+            )
+        }
+    }
+
+    /// Channel 内 request を TS interface に変換 (= stream channel のみ呼ばれる)
+    fn generate_channel_request(
+        &self,
+        req: &ChannelRequest,
+        type_registry: &TypeRegistry,
+    ) -> String {
+        let name = &req.name;
+        if req.fields.is_empty() {
+            format!(
+                "/** Request \"{}\" — empty payload */\nexport interface {} {{}}",
+                name, name
+            )
+        } else {
+            let fields: Vec<String> = req
+                .fields
+                .iter()
+                .map(|f| self.generate_field(f, type_registry))
+                .collect();
+            format!(
+                "/** Request \"{}\" */\nexport interface {} {{\n{}\n}}",
+                name,
+                name,
+                fields.join("\n")
+            )
+        }
+    }
+
+    /// Channel 内 returns ブロックの response を TS interface に変換
+    fn generate_channel_message_interface(
+        &self,
+        msg: &ChannelMessage,
+        type_registry: &TypeRegistry,
+    ) -> String {
+        let name = &msg.name;
+        if msg.fields.is_empty() {
+            format!(
+                "/** Response \"{}\" — empty payload */\nexport interface {} {{}}",
+                name, name
+            )
+        } else {
+            let fields: Vec<String> = msg
+                .fields
+                .iter()
+                .map(|f| self.generate_field(f, type_registry))
+                .collect();
+            format!(
+                "/** Response \"{}\" */\nexport interface {} {{\n{}\n}}",
+                name,
+                name,
+                fields.join("\n")
+            )
+        }
     }
 
     fn generate_enum(&self, enum_def: &Enum) -> String {
