@@ -93,12 +93,26 @@ scope を超える。
 
 ## 5. v0.10 への引き継ぎ
 
+### 5.1 wire format 系
 - [ ] `RkyvWire` 実装 + 既存 packet path の wrap
 - [ ] `BuffaWire` 実装 (= test_proto_buffa.rs を production path へ昇格)
 - [ ] `MessagePackWire` 実装 (zerompk vs rmp-serde の評価込み)
 - [ ] `ProtocolMessage` を format 非依存に redesign
 - [ ] channel negotiation の spec / KDL schema 拡張
 - [ ] migration guide (rkyv-only → pluggable)
+
+### 5.2 datagram backend (= v0.9.0 で MVP 開通、 v0.10+ で channel 統合)
+
+v0.9.0 で `QuicClient::send_datagram` / `recv_datagram` の **connection-level MVP** を
+入れた。 v0.10+ で以下を統合する:
+
+- [ ] `event "X" backend="datagram"` KDL schema 拡張 (= event ごとに stream / datagram 選択)
+- [ ] `register_channel_datagram` / `open_datagram_channel` (= channel 抽象 statement)
+- [ ] datagram payload に channel ID prefix (1-2 bytes) を付ける demux protocol
+- [ ] server side `accept_datagram_loop` (= 受信 datagram を channel ID で demux 配信)
+- [ ] `WireFormat::supports_datagram() -> bool` flag 追加 (= format 別の datagram 適性)
+- [ ] spec/02 §8.5 update (= MVP → channel 統合済みへ)
+- [ ] migration guide (= raw connection-level → channel 経由)
 
 詳細は creo-memories `unison` Atlas の `wire-format-pluggable` 系 memory を参照。
 

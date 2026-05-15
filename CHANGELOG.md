@@ -38,8 +38,12 @@
 ### 追加 (拡張準備)
 
 - **`crate::wire::WireFormat` trait** — wire format pluggable 抽象化 (v0.10+ で `RkyvWire` / `BuffaWire` / `MessagePackWire` の 3 実装拡張予定)
-- **`design/wire-format.md`** — wire format pluggable 設計 doc (= living doc)
+- **`design/wire-format.md`** — wire format pluggable 設計 doc (= living doc)、 §5.2 datagram backend 引き継ぎ含む
 - **`spec/02-unified-channel` §8.4** — wire format pluggable hook 段落
+- **`spec/02-unified-channel` §8.5** — datagram MVP section (= QUIC unreliable / unordered、 ≤MTU、 3DCG transform 大量配信想定)
+- **`QuicClient::send_datagram` / `recv_datagram`** — datagram MVP API (= connection-level thin wrapper、 channel 抽象は v0.10+ で `event "X" backend="datagram"` schema 拡張と一緒に統合予定)
+- **`benches/ping_pong.rs`** — 1 req/1 resp round-trip latency baseline (payload 16 / 64 / 256 / 1024 B、 「通常の 1 リクエスト・レスポンス」 dogfood)
+- **`benches/datagram.rs`** — 3DCG position/rotation 大量配信 baseline (payload 64 = 1 transform / 1300 = MTU max × burst 100 / 1000、 unison MVP API 経由)
 
 ### 内部 (ゴミ掃除)
 

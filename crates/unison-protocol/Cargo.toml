@@ -104,6 +104,14 @@ harness = false
 name = "throughput"
 harness = false
 
+[[bench]]
+name = "ping_pong"
+harness = false
+
+[[bench]]
+name = "datagram"
+harness = false
+
 # docs.rs build 設定: feature flag 追加時に全 feature を doc 化、
 # `#[cfg(docsrs)]` で docs.rs 限定の attribute (例: `#[doc(cfg(...))]`) を有効化。
 [package.metadata.docs.rs]

@@ -443,8 +443,8 @@ v0.7.0 以降、 TLS の cert / trust 戦略は **明示選択 API** (`CertSourc
 ### 8.4 Wire format (v0.9.0+ pluggable hook、 具体実装は v0.10+)
 
 v0.9.0 で `crate::wire::WireFormat` trait による wire format 抽象化を導入した。
-現時点の default wire format は [`crate::packet`] 経由の **rkyv 0.7 archive**
-(zero-copy)。 v0.10+ で以下の 3 実装が並ぶ予定:
+現時点の default wire format は [`crate::packet`] 経由の **rkyv archive** (zero-copy)。
+v0.10+ で以下の 3 実装が並ぶ予定:
 
 | 実装 | format | 用途 |
 |------|--------|------|
@@ -452,9 +452,51 @@ v0.9.0 で `crate::wire::WireFormat` trait による wire format 抽象化を導
 | `BuffaWire` | Protocol Buffers (Anthropic 製 [`buffa`](https://crates.io/crates/buffa)) | polyglot, schema evolution |
 | `MessagePackWire` | MessagePack ([`zerompk`](https://crates.io/crates/zerompk) 等) | polyglot, コンパクト |
 
-設計詳細は [`design/wire-format.md`](../../design/wire-format.md) 参照。 現状
-caller (= 既存 packet/Payloadable 経路) は変更なし、 v0.10+ で channel
-negotiation 込みで spec を再 update する予定。
+設計詳細は [`design/wire-format.md`](../../design/wire-format.md) 参照。
+
+### 8.5 Datagram (QUIC unreliable / unordered、 ≤MTU)
+
+v0.9.0 で `QuicClient::send_datagram` / `recv_datagram` MVP API を新設した。 これは
+**connection-level thin wrapper** (= channel 抽象を経由しない、 caller が demux
+header を payload に含める責任)。 想定用途:
+
+- **3DCG position+rotation transform 大量配信** (= 60Hz / 120Hz、 1 frame で 100-1000
+  peer broadcast、 unreliable OK で latency 優先)
+- **low-latency event push** (= ack 不要 fire-and-forget)
+- **heartbeat / presence**
+
+サイズは **MTU 安全値 ≤1300B** (= IP MTU 1500 - IP/UDP/QUIC header)。 超過すると
+`SendDatagramError::TooLarge` が返り fragment 不可。
+
+#### Unified Channel narrative との整合
+
+datagram は性質上 **Request/Response パターンに乗らない** (= ack なし)、 spec/02 §3.1
+の MessageType のうち **Event のみ** 適合する。 v0.10+ で `event "X" backend="datagram"`
+KDL schema 拡張と一緒に channel API へ統合予定:
+
+```kdl
+channel "position" from="server" lifetime="persistent" {
+    event "Transform" backend="datagram" {
+        field "id" type="string"
+        field "pos" type="json"   // [x, y, z]
+        field "rot" type="json"   // [x, y, z, w]
+    }
+}
+```
+
+それまでは connection-level API (= `QuicClient::send_datagram`) で raw bytes 直送、
+caller が channel ID 等の demux header を payload に含める。
+
+#### HoL blocking (§8.2 の補足)
+
+§8.2 の「チャネル内 HoL Blocking 許容」 は **stream channel** 前提。 datagram は HoL
+blocking なし (= UDP-like)、 v0.10+ で channel API 統合時に「stream channel = HoL 許容、
+datagram channel = HoL なし」 と仕様で明示する。
+
+#### benchmark baseline
+
+`benches/datagram.rs` で `payload {64, 1300} × burst {100, 1000}` の 4 ケース計測。
+`benches/RESULTS.md` 参照。
 
 ---
 
