@@ -51,12 +51,7 @@ pub(crate) fn encode_varint(mut value: u64, buf: &mut Vec<u8>) -> usize {
 ///
 /// `bytes` 先頭から varint を読み、 `(value, consumed_bytes)` を返す。 不正な
 /// encoding (= 10 byte 超え or premature EOF) は `Err`。
-///
-/// v0.10.0 Step 1b 時点では test と Step 1c (= demux dispatcher) からの caller が
-/// 居ないため `#[allow(dead_code)]` を付与、 Step 1c-1e で実際の caller が入った
-/// 段階で外す。
 #[inline]
-#[allow(dead_code)]
 pub(crate) fn decode_varint(bytes: &[u8]) -> Result<(u64, usize), NetworkError> {
     let mut value: u64 = 0;
     let mut shift: u32 = 0;
@@ -107,10 +102,6 @@ impl<C: Codec> DatagramChannel<C> {
     ///
     /// caller (= `ProtocolClient::open_datagram_channel` / `ProtocolServer::register_channel_datagram`)
     /// が demux dispatch table に `recv_tx` を登録した上で本 constructor を呼ぶ。
-    ///
-    /// v0.10.0 Step 1b 時点では caller (= 1d/1e の server/client API) がまだ未実装の
-    /// ため `#[allow(dead_code)]` を付与、 1d/1e で外す。
-    #[allow(dead_code)]
     pub(crate) fn new(
         connection: Arc<quinn::Connection>,
         channel_id: u64,

@@ -194,36 +194,45 @@ request/response 不適合)、 `channel_id` getter あり、 `close` semantics �
 
 ```rust
 impl ProtocolServer {
-    /// Datagram channel handler 登録
-    pub async fn register_channel_datagram<F, Fut>(&self, name: &str, handler: F)
+    /// Datagram channel handler 登録 (= name + channel_id + handler factory)
+    pub async fn register_channel_datagram<F, Fut>(&self, name: &str, channel_id: u64, handler: F)
     where
-        F: Fn(DatagramChannel<C>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send;
+        F: Fn(DatagramChannel<JsonCodec>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static;
 
     /// 全 connected client へ datagram channel event を broadcast
-    pub async fn broadcast<T: Encodable<C>, C: Codec>(
-        &self,
-        channel_name: &str,
-        event: &T,
-    ) -> Result<usize, NetworkError>;
+    pub async fn broadcast<T, C>(&self, channel_name: &str, event: &T) -> Result<usize, NetworkError>
+    where
+        T: Encodable<C>,
+        C: Codec;
 }
 ```
 
 `broadcast` の戻り値は配送成功した client 数 (= datagram は drop 許容なので best-effort)。
+`register_channel_datagram` は default codec = JsonCodec、 別 codec が必要な場合は将来
+`register_channel_datagram_with<C>` を追加予定 (v0.11+)。
 
 ### 5.3 Client-side open
 
 ```rust
 impl ProtocolClient {
-    /// Datagram channel を open
-    pub async fn open_datagram_channel<C: Codec>(
+    /// Datagram channel を open (default codec = JsonCodec)
+    pub async fn open_datagram_channel(
         &self,
         channel_name: &str,
+        channel_id: u64,
+    ) -> Result<DatagramChannel<JsonCodec>, NetworkError>;
+
+    /// Datagram channel を open (任意 codec 指定版)
+    pub async fn open_datagram_channel_with<C: Codec>(
+        &self,
+        channel_name: &str,
+        channel_id: u64,
     ) -> Result<DatagramChannel<C>, NetworkError>;
 }
 ```
 
-`open_channel` (= stream) と signature 並列、 戻り値型のみ別。
+`channel_id` は KDL schema 由来 (= author 明示割り当て)、 codegen が `open_datagram_channel(name, channel_id)` の形で生成する。 Rust の制約で method-level generic default は不可 (= `<C: Codec = JsonCodec>` 不可)、 そのため default 版と generic 版を 2 method で提供。
 
 ---
 

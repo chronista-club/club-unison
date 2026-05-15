@@ -1,8 +1,13 @@
 use anyhow::Result;
 use std::sync::Arc;
+use tokio::sync::Mutex;
+
+use crate::codec::{Codec, JsonCodec};
 
 use super::channel::UnisonChannel;
 use super::context::ConnectionContext;
+use super::datagram_channel::DatagramChannel;
+use super::datagram_dispatcher::DatagramDispatcher;
 use super::identity::ServerIdentity;
 use super::quic::{FRAME_TYPE_PROTOCOL, QuicClient, UnisonStream, write_typed_frame};
 use super::{MessageType, NetworkError, ProtocolMessage};
@@ -12,6 +17,8 @@ pub struct ProtocolClient {
     transport: Arc<QuicClient>,
     /// 接続コンテキスト（Identity情報・チャネル状態）
     context: Arc<ConnectionContext>,
+    /// Datagram dispatcher (= lazy spawn on first `open_datagram_channel`、 v0.10.0 で追加)
+    datagram_dispatcher: Mutex<Option<Arc<DatagramDispatcher>>>,
 }
 
 impl ProtocolClient {
@@ -19,6 +26,7 @@ impl ProtocolClient {
         Self {
             transport: Arc::new(transport),
             context: Arc::new(ConnectionContext::new()),
+            datagram_dispatcher: Mutex::new(None),
         }
     }
 
@@ -28,6 +36,7 @@ impl ProtocolClient {
         Ok(Self {
             transport: Arc::new(transport),
             context: Arc::new(ConnectionContext::new()),
+            datagram_dispatcher: Mutex::new(None),
         })
     }
 
@@ -95,6 +104,60 @@ impl ProtocolClient {
             .await;
 
         Ok(UnisonChannel::new(stream))
+    }
+
+    /// Datagram channel を open (v0.10.0 で追加、 default codec = JsonCodec)
+    ///
+    /// 同 connection で初回 call 時に `DatagramDispatcher` を lazy spawn、 以降は
+    /// 既存 dispatcher を再利用する。 caller は `channel_id` (= KDL schema で割り当て
+    /// た値) を明示で渡す責任を持つ (= codegen が `client.open_datagram_channel(name,
+    /// channel_id)` の形で生成する)。
+    ///
+    /// 別 codec を使いたい場合は [`Self::open_datagram_channel_with`] を使用。
+    pub async fn open_datagram_channel(
+        &self,
+        channel_name: &str,
+        channel_id: u64,
+    ) -> Result<DatagramChannel<JsonCodec>, NetworkError> {
+        self.open_datagram_channel_with::<JsonCodec>(channel_name, channel_id)
+            .await
+    }
+
+    /// Datagram channel を open する codec generic 版 (v0.10.0)
+    ///
+    /// [`Self::open_datagram_channel`] と同じだが任意 codec C を指定可能。
+    pub async fn open_datagram_channel_with<C: Codec>(
+        &self,
+        channel_name: &str,
+        channel_id: u64,
+    ) -> Result<DatagramChannel<C>, NetworkError> {
+        // 接続中の connection を取得
+        let connection_guard = self.transport.connection().read().await;
+        let connection = connection_guard
+            .as_ref()
+            .ok_or(NetworkError::NotConnected)?;
+        let connection_arc = Arc::new(connection.clone());
+        drop(connection_guard);
+
+        // Datagram dispatcher を lazy spawn
+        let dispatcher = {
+            let mut guard = self.datagram_dispatcher.lock().await;
+            if guard.is_none() {
+                *guard = Some(Arc::new(DatagramDispatcher::spawn(Arc::clone(&connection_arc))));
+            }
+            Arc::clone(guard.as_ref().unwrap())
+        };
+
+        // channel_id を dispatcher に登録、 receiver を取得
+        // buffer 256: position 等 60Hz × 数秒分のバースト吸収を想定
+        let recv_rx = dispatcher.register(channel_id, 256).await;
+
+        Ok(DatagramChannel::<C>::new(
+            connection_arc,
+            channel_id,
+            channel_name.to_string(),
+            recv_rx,
+        ))
     }
 
     /// 接続後にサーバーからIdentityを受信する

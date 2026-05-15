@@ -6,7 +6,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
+use crate::codec::{Codec, Encodable, JsonCodec};
+
 use super::NetworkError;
+use super::datagram_channel::{DatagramChannel, encode_varint};
 use super::identity::{ChannelDirection, ChannelInfo, ChannelStatus, ServerIdentity};
 
 /// 接続イベント通知
@@ -101,6 +104,22 @@ pub type ChannelHandler = Arc<
         + Sync,
 >;
 
+/// Datagram channel handler 型 (v0.10.0 で追加)
+///
+/// 接続ごとに一度だけ invoke される。 `DatagramChannel<JsonCodec>` を受け取り、
+/// 内部で `recv_event` / `send_event` の loop を回すのが典型。
+pub type DatagramChannelHandler = Arc<
+    dyn Fn(DatagramChannel<JsonCodec>) -> Pin<Box<dyn futures_util::Future<Output = ()> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Datagram channel の registry エントリ (= name に紐づく channel_id + handler)
+pub(crate) struct DatagramHandlerEntry {
+    pub(crate) channel_id: u64,
+    pub(crate) handler: DatagramChannelHandler,
+}
+
 /// サーバーのライフサイクルを管理するハンドル
 ///
 /// `spawn_listen()` が返す。shutdown シグナル送信と完了待ちを提供。
@@ -141,6 +160,10 @@ pub struct ProtocolServer {
     server_namespace: String,
     /// チャネルハンドラー（チャネル名 → ハンドラー関数）
     channel_handlers: Arc<RwLock<HashMap<String, ChannelHandler>>>,
+    /// Datagram channel handlers (v0.10.0 で追加、 name → channel_id + handler)
+    datagram_channel_handlers: Arc<RwLock<HashMap<String, DatagramHandlerEntry>>>,
+    /// Active connections (= broadcast 配信先、 remote_addr → Connection)
+    active_connections: Arc<RwLock<HashMap<SocketAddr, Arc<quinn::Connection>>>>,
     /// 接続イベント broadcast チャネル（複数サブスクライバ対応）
     connection_event_tx: tokio::sync::broadcast::Sender<ConnectionEvent>,
 }
@@ -157,6 +180,8 @@ impl ProtocolServer {
             server_version: env!("CARGO_PKG_VERSION").to_string(),
             server_namespace: "default".to_string(),
             channel_handlers: Arc::new(RwLock::new(HashMap::new())),
+            datagram_channel_handlers: Arc::new(RwLock::new(HashMap::new())),
+            active_connections: Arc::new(RwLock::new(HashMap::new())),
             connection_event_tx: tx,
         }
     }
@@ -217,6 +242,105 @@ impl ProtocolServer {
 
         let mut handlers = self.channel_handlers.write().await;
         handlers.insert(name.to_string(), handler);
+    }
+
+    /// Datagram channel handler を登録 (v0.10.0 で追加)
+    ///
+    /// `name` と `channel_id` (= KDL schema 由来) のペアで一意、 connection 毎に
+    /// handler が一度 invoke される。 handler 内で `chan.recv_event` の loop を
+    /// 回すのが典型。
+    ///
+    /// 同 name で再登録すると **古い entry を replace**。
+    pub async fn register_channel_datagram<F, Fut>(&self, name: &str, channel_id: u64, handler: F)
+    where
+        F: Fn(DatagramChannel<JsonCodec>) -> Fut + Send + Sync + 'static,
+        Fut: futures_util::Future<Output = ()> + Send + 'static,
+    {
+        let handler: DatagramChannelHandler = Arc::new(move |chan: DatagramChannel<JsonCodec>| {
+            Box::pin(handler(chan)) as Pin<Box<dyn futures_util::Future<Output = ()> + Send>>
+        });
+        let mut handlers = self.datagram_channel_handlers.write().await;
+        handlers.insert(
+            name.to_string(),
+            DatagramHandlerEntry {
+                channel_id,
+                handler,
+            },
+        );
+    }
+
+    /// 全 active connection に対して datagram channel event を broadcast (v0.10.0)
+    ///
+    /// `channel_name` から `channel_id` を解決、 event を encode して varint prefix を
+    /// 付け、 active な全 connection の `send_datagram` を呼ぶ。
+    ///
+    /// 戻り値は配送成功した connection 数 (= datagram は best-effort なので失敗は warn log
+    /// のみで継続)。
+    pub async fn broadcast<T, C>(&self, channel_name: &str, event: &T) -> Result<usize, NetworkError>
+    where
+        T: Encodable<C>,
+        C: Codec,
+    {
+        let channel_id = {
+            let handlers = self.datagram_channel_handlers.read().await;
+            handlers
+                .get(channel_name)
+                .map(|entry| entry.channel_id)
+                .ok_or_else(|| {
+                    NetworkError::HandlerNotFound {
+                        method: format!("datagram channel: {}", channel_name),
+                    }
+                })?
+        };
+
+        let encoded = event.encode().map_err(NetworkError::Codec)?;
+        let mut payload = Vec::with_capacity(super::datagram_channel::VARINT_MAX_LEN + encoded.len());
+        encode_varint(channel_id, &mut payload);
+        payload.extend_from_slice(&encoded);
+
+        let connections = self.active_connections.read().await;
+        let mut success = 0usize;
+        for connection in connections.values() {
+            match connection.send_datagram(payload.clone().into()) {
+                Ok(()) => success += 1,
+                Err(e) => {
+                    tracing::debug!(
+                        "Broadcast to {}: send_datagram failed: {} (continuing)",
+                        connection.remote_address(),
+                        e
+                    );
+                }
+            }
+        }
+        Ok(success)
+    }
+
+    /// Datagram handler の snapshot を取得 (= quic.rs::handle_connection 用、 内部 API)
+    pub(crate) async fn snapshot_datagram_handlers(&self) -> Vec<(String, u64, DatagramChannelHandler)> {
+        let handlers = self.datagram_channel_handlers.read().await;
+        handlers
+            .iter()
+            .map(|(name, entry)| (name.clone(), entry.channel_id, Arc::clone(&entry.handler)))
+            .collect()
+    }
+
+    /// Active connection を登録 (= quic.rs::handle_connection 用、 内部 API)
+    pub(crate) async fn add_active_connection(
+        &self,
+        remote_addr: SocketAddr,
+        connection: Arc<quinn::Connection>,
+    ) {
+        self.active_connections.write().await.insert(remote_addr, connection);
+    }
+
+    /// Active connection を解除 (= quic.rs::handle_connection 用、 内部 API)
+    pub(crate) async fn remove_active_connection(&self, remote_addr: SocketAddr) {
+        self.active_connections.write().await.remove(&remote_addr);
+    }
+
+    /// Active connection 数 (= 主に test / debug 用)
+    pub async fn active_connection_count(&self) -> usize {
+        self.active_connections.read().await.len()
     }
 
     /// 接続イベントを購読する
@@ -303,9 +427,21 @@ impl ProtocolServer {
     /// **注意**: self を消費するため、`subscribe_connection_events()` は
     /// このメソッドの呼び出し前に行う必要がある。
     pub async fn spawn_listen(self, addr: &str) -> Result<ServerHandle, NetworkError> {
+        Arc::new(self).spawn_listen_shared(addr).await
+    }
+
+    /// `spawn_listen` の `Arc<Self>` 版 (v0.10.0 で追加、 broadcast 用 path)
+    ///
+    /// `spawn_listen` が `self` を consume するため、 broadcast 等で server へ
+    /// outside reference を保ちたい caller は本 method を使う。 caller が `Arc::clone`
+    /// を保持してそれを通して `server.broadcast(...)` を呼べる。
+    pub async fn spawn_listen_shared(
+        self: Arc<Self>,
+        addr: &str,
+    ) -> Result<ServerHandle, NetworkError> {
         use super::quic::QuicServer;
 
-        let protocol_server = Arc::new(self);
+        let protocol_server = self;
 
         let mut quic_server = QuicServer::new(Arc::clone(&protocol_server));
         quic_server

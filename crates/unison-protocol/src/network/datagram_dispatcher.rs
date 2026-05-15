@@ -61,11 +61,13 @@ impl DispatcherInner {
     }
 
     /// `channel_id` の登録を解除
+    #[allow(dead_code)] // test / reconnect 用、 v0.10.0 runtime path では未使用
     async fn unregister(&self, channel_id: u64) {
         self.handlers.lock().await.remove(&channel_id);
     }
 
     /// 登録されている channel 数
+    #[allow(dead_code)] // test / debug 用
     async fn handler_count(&self) -> usize {
         self.handlers.lock().await.len()
     }
@@ -111,17 +113,11 @@ impl DispatcherInner {
 /// [`spawn`](Self::spawn) で background recv task を起動、 caller は
 /// [`register`](Self::register) / [`unregister`](Self::unregister) で channel_id
 /// 単位の handler を出し入れする。 drop 時に task abort。
-///
-/// v0.10.0 Step 1c 時点では caller (= [`ProtocolClient::open_datagram_channel`] /
-/// [`ProtocolServer::register_channel_datagram`]) は 1d/1e でまだ実装されないため
-/// `#[allow(dead_code)]` を付与、 1d/1e で外す。
-#[allow(dead_code)]
 pub(crate) struct DatagramDispatcher {
     inner: Arc<DispatcherInner>,
     task: Mutex<Option<JoinHandle<()>>>,
 }
 
-#[allow(dead_code)]
 impl DatagramDispatcher {
     /// QUIC connection を渡して dispatcher を起動
     ///
@@ -164,11 +160,16 @@ impl DatagramDispatcher {
     }
 
     /// `channel_id` の登録を解除 (= `DispatcherInner::unregister` 委譲)
+    ///
+    /// 現在の v0.10.0 では `DatagramChannel::close` から呼ばれない (= drop semantics で
+    /// 十分)、 reconnect / 明示 close シナリオの将来 caller 用 API として保持。
+    #[allow(dead_code)]
     pub async fn unregister(&self, channel_id: u64) {
         self.inner.unregister(channel_id).await;
     }
 
     /// 登録されている channel 数 (= test / debug 用)
+    #[allow(dead_code)]
     pub async fn handler_count(&self) -> usize {
         self.inner.handler_count().await
     }
@@ -176,6 +177,7 @@ impl DatagramDispatcher {
     /// Dispatcher を明示停止 (= task abort + handler 全 clear)
     ///
     /// drop でも task abort されるが、 明示的に停止したい場合 (= reconnect 等) に使用。
+    #[allow(dead_code)]
     pub async fn shutdown(&self) {
         if let Some(task) = self.task.lock().await.take() {
             task.abort();

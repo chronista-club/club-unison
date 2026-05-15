@@ -776,6 +776,40 @@ async fn handle_connection(
 ) -> Result<()> {
     let remote_addr = connection.remote_address();
 
+    // v0.10.0: active connection に登録 (= server.broadcast の配信先)
+    let connection_arc = Arc::new(connection.clone());
+    server
+        .add_active_connection(remote_addr, Arc::clone(&connection_arc))
+        .await;
+
+    // v0.10.0: datagram dispatcher を 1 connection に 1 個 spawn
+    // 登録された datagram channel handler 全てに対し、 channel_id を register して
+    // DatagramChannel を構築、 handler を別 task で起動
+    let datagram_handlers = server.snapshot_datagram_handlers().await;
+    let _datagram_dispatcher = if datagram_handlers.is_empty() {
+        // datagram handler が無ければ dispatcher を spawn しない (= overhead 回避)
+        None
+    } else {
+        let dispatcher = Arc::new(super::datagram_dispatcher::DatagramDispatcher::spawn(
+            Arc::clone(&connection_arc),
+        ));
+        for (name, channel_id, handler) in datagram_handlers {
+            let rx = dispatcher.register(channel_id, 256).await;
+            let datagram_channel = super::datagram_channel::DatagramChannel::<
+                crate::codec::JsonCodec,
+            >::new(
+                Arc::clone(&connection_arc),
+                channel_id,
+                name.clone(),
+                rx,
+            );
+            tokio::spawn(async move {
+                handler(datagram_channel).await;
+            });
+        }
+        Some(dispatcher)
+    };
+
     // Identity Handshake: 接続直後にServerIdentityを送信
     let identity = server.build_identity().await;
     ctx.set_identity(identity.clone()).await;
@@ -911,6 +945,11 @@ async fn handle_connection(
             }
         }
     }
+
+    // v0.10.0: connection 終了時に active_connections から remove
+    // (= broadcast 配信先から自動除外、 datagram dispatcher は _datagram_dispatcher 変数の
+    // scope-exit drop で同時に abort される)
+    server.remove_active_connection(remote_addr).await;
 
     Ok(())
 }

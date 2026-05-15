@@ -551,10 +551,14 @@ impl RustGenerator {
                         #field_name: client.open_channel(#channel_name).await
                             .map_err(|e| anyhow::anyhow!("Failed to open channel '{}': {}", #channel_name, e))?
                     },
-                    ChannelBackend::Datagram => quote! {
-                        #field_name: client.open_datagram_channel(#channel_name).await
-                            .map_err(|e| anyhow::anyhow!("Failed to open datagram channel '{}': {}", #channel_name, e))?
-                    },
+                    ChannelBackend::Datagram => {
+                        // channel.validate() で channel_id 必須が保証されている
+                        let channel_id = channel.channel_id.unwrap_or(0);
+                        quote! {
+                            #field_name: client.open_datagram_channel(#channel_name, #channel_id).await
+                                .map_err(|e| anyhow::anyhow!("Failed to open datagram channel '{}': {}", #channel_name, e))?
+                        }
+                    }
                 }
             })
             .collect();
