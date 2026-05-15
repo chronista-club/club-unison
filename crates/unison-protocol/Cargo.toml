@@ -62,7 +62,6 @@ buffa.workspace = true
 
 # Packet module dependencies
 bytes.workspace = true
-rkyv.workspace = true
 zstd.workspace = true
 crc32fast.workspace = true
 

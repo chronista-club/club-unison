@@ -64,6 +64,10 @@ pub mod wire;
 // build.rs が `proto/protocol.proto` を compile し `$OUT_DIR/protocol.{mod,rs,__view.rs,...}` を出力。
 // `.mod.rs` を include すると main types + zero-copy `*View` + `__buffa::{ext,oneof,view}` まで一括 expose。
 // caller は `crate::proto::{ProtocolMessage, MessageType, PacketHeader, ProtocolMessageView, PacketHeaderView}` で access 可能。
+//
+// 注: buffa-codegen 出力の main `.rs` には `#[allow(clippy::*)]` が無いので、 module
+// 全体で抑制する (= sub-module の `__buffa` には codegen 側で allow が付いている)。
+#[allow(clippy::derivable_impls)]
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/protocol.mod.rs"));
 }

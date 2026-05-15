@@ -1028,7 +1028,7 @@ impl UnisonStream {
 
     /// Raw bytes を typed フレームとして送信（type tag 0x01）
     ///
-    /// rkyv/zstd をバイパスし、length-prefix + type tag + raw payload のみ。
+    /// buffa/zstd をバイパスし、length-prefix + type tag + raw payload のみ。
     /// オーディオストリーミング等の最小オーバーヘッド通信に使用。
     pub async fn send_raw_frame(&self, data: &[u8]) -> Result<(), NetworkError> {
         if !self.is_active() {

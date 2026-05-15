@@ -2,7 +2,6 @@ mod common;
 
 use club_unison::network::MessageType;
 use club_unison::network::identity::*;
-use club_unison::packet::UnisonPacketHeader;
 
 #[test]
 fn test_integ_identity_to_protocol_message_round_trip() {
@@ -44,9 +43,13 @@ async fn test_integ_identity_build_and_frame() {
     assert_eq!(restored.channels[0].name, "ch1");
 
     // フレーム化してバイト列が生成できること
+    // v0.9.0 buffa pivot 後は header が variable-size なので、 fixed-size 比較ではなく
+    // 「先頭 4 byte (= header_len prefix) + header body + payload」 が乗っていることを確認
     let frame = msg.into_frame().unwrap();
     let bytes = frame.to_bytes();
-    assert!(bytes.len() > UnisonPacketHeader::SERIALIZED_SIZE); // ヘッダー + ペイロード
+    assert!(bytes.len() > 4, "packet should at least contain header_len prefix");
+    let header = frame.header().unwrap();
+    assert!(header.payload_length > 0, "identity payload should be non-empty");
 }
 
 #[test]

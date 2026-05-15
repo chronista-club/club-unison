@@ -214,7 +214,7 @@ impl<C: Codec> UnisonChannel<C> {
         self.stream.send_frame(&msg).await
     }
 
-    /// Raw bytes 送信（rkyv/zstd をバイパス、最小オーバーヘッド）
+    /// Raw bytes 送信（buffa/zstd をバイパス、最小オーバーヘッド）
     ///
     /// オーディオストリーミング等のバイナリデータに使用。
     pub async fn send_raw(&self, data: &[u8]) -> Result<(), NetworkError> {

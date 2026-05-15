@@ -52,7 +52,6 @@ buffa-build = "0.5"
 
 # Packet module dependencies
 bytes = "1.11"
-rkyv = { version = "0.7", features = ["validation", "alloc", "size_32"] }
 zstd = "0.13"
 crc32fast = "1.5"
 

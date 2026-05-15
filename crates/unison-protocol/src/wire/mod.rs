@@ -1,22 +1,19 @@
 //! Wire format abstraction (v0.9.0 で導入、 v0.10+ 拡張用 hook)
 //!
-//! v0.9.0 時点の default wire format は [`crate::packet`] module 経由の
-//! rkyv archive (zero-copy)。 v0.10+ では本 module の [`WireFormat`] trait
-//! を base に **buffa (Anthropic 製 protobuf)** や **MessagePack** 等の
-//! pluggable 実装を追加していく予定。
+//! v0.9.0 から default wire format は [`crate::packet`] module 経由の
+//! buffa (Anthropic 製 protobuf) encoding (= variable-size header + length-prefix
+//! boundary)。 v0.8 系で使われていた rkyv 56-byte fixed header は廃止された
+//! (= breaking change、 詳細は `CHANGELOG.md` と `spec/02 §8.4`)。
 //!
-//! 現時点の本 module は **拡張準備のための trait 表明** のみで、 既存の
-//! [`crate::packet::Payloadable`] 経路 (= rkyv 直結) は変更しない。 caller
-//! 視点では breaking なし。
+//! v0.10+ では本 module の [`WireFormat`] trait を base に、 **MessagePack**
+//! / **CBOR** 等の追加 pluggable 実装を並列に追加する想定。 現時点では
+//! trait 表明のみで、 既存 packet 経路 (= buffa direct) は変更しない。
 //!
 //! # Future direction
 //!
-//! - `BuffaWire` — Anthropic 製 [`buffa`](https://crates.io/crates/buffa)
-//!   経由の Protocol Buffers wire (polyglot 通信向け)
 //! - `MessagePackWire` — `zerompk` 等経由の MessagePack wire
 //!   (polyglot + コンパクト)
-//! - `RkyvWire` — 既存 [`crate::packet::Payloadable`] を本 trait に
-//!   adapt する thin wrapper (= migration path)
+//! - `CborWire` — `ciborium` 経由の CBOR wire (IETF 標準互換)
 //!
 //! 詳細は `design/wire-format.md` 参照。
 
@@ -37,6 +34,6 @@ pub trait WireFormat {
     /// この wire format の識別子。
     ///
     /// log / channel negotiation / debug 表示で使用する固定文字列。
-    /// 例: `"rkyv"`, `"buffa"`, `"msgpack"`。
+    /// 例: `"buffa"`, `"msgpack"`, `"cbor"`。
     fn name() -> &'static str;
 }
