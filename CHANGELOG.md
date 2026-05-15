@@ -5,6 +5,86 @@
 フォーマットは [Keep a Changelog](https://keepachangelog.com/ja/1.0.0/) に基づいており、
 このプロジェクトは [セマンティックバージョニング](https://semver.org/lang/ja/) に準拠しています。
 
+## [Unreleased]
+
+## [0.9.0] - 2026-05-15 — 「基盤整備」 release
+
+> v0.9.0 のテーマは **「ゴミ無し + 拡張準備 + 懸念点全解消」**。 deprecated API 削除、 全 dep の major bump、 dead code / dead dep 掃除、 wire format pluggable hook 導入、 spec/doc 同期を一括で実施。
+
+### 削除 (Breaking)
+
+- **`QuicClient::configure_client()`** — v0.7.0 で `#[deprecated]` 化していた compat wrapper を削除
+- **`QuicServer::configure_server()`** — 同上
+  - 移行先: `configure_*_with(...)` 明示 API、 もしくは v0.8.0+ Builder API
+- **`unison-mcp-probe::ChannelListArgs` / `unison_channel_list` tool** — 「未実装、 サーバ側 meta API が必要」 note のみで実装ゼロだった placeholder を削除
+- **workspace dep `bincode`** — `unison-protocol` で宣言されていたが src 内 direct use ゼロの dead dep、 削除
+
+### 変更 (Breaking)
+
+- **MSRV を Rust 1.93 → 1.95 に bump** — workspace 全体 + CI MSRV job
+- **spec/02-unified-channel** を `2.0.0-draft` から `2.0.0 / Stable` に確定
+- **dep major bump (10 件)**:
+  - `rmcp 0.16 → 1.7` (MCP SDK stable API、 `ServerInfo`/`Implementation` を builder pattern で構築)
+  - `webpki-roots 0.26 → 1.0` (Mozilla CA list stable interface)
+  - `thiserror 1.0 → 2.0` (improved error formatting)
+  - `rcgen 0.13 → 0.14` (`CertifiedKey.key_pair` → `signing_key` field rename 対応)
+  - `convert_case 0.6 → 0.11` (codegen 安定化)
+  - `buffa / buffa-build 0.2 → 0.5` (Anthropic 製 protobuf、 stable API)
+  - `cgp / cgp-component 0.4.2 → 0.7.0` (Context-Generic Programming)
+  - `criterion 0.5 → 0.8` (deprecated `criterion::black_box` → `std::hint::black_box` 対応)
+  - `kdl 6.3.4 → 6.5.0` (schema 安定化)
+- **`cargo update` で transitive dep を 30+ 件 patch / minor 更新** (tokio 1.40 → 1.52、 rustls 0.23.36 → 0.23.40 等)
+
+### 追加 (拡張準備)
+
+- **`crate::wire::WireFormat` trait** — wire format pluggable 抽象化 (v0.10+ で `RkyvWire` / `BuffaWire` / `MessagePackWire` の 3 実装拡張予定)
+- **`design/wire-format.md`** — wire format pluggable 設計 doc (= living doc)
+- **`spec/02-unified-channel` §8.4** — wire format pluggable hook 段落
+
+### 内部 (ゴミ掃除)
+
+- `unison-agent` の Cargo.toml に `description` / `publish = false` を明示 (意図しない publish 防止)
+- `club-unison` の Cargo.toml に `[package.metadata.docs.rs]` 追加 (`all-features = true` + `--cfg docsrs`)
+- `.mcp.json` を git track から外す (`.gitignore` 既設定の cache を除去)、 `.gitnexus/` を ignore 追加
+- **CI test command 整理**: `cargo test --tests --workspace -- --skip packet` → `cargo test --workspace`
+  - 旧 `--skip packet` filter は **そもそも noop** だった (= `--tests` flag が lib unit を除外していたため、 packet 名 inline test は 1 度も走っていなかった)。 撤去 + lib unit を CI に投入。
+  - CLAUDE.md / README.md も同期
+- `unison-mcp-probe` の `tool_router` field に `#[allow(dead_code)]` (rmcp 1.x macro 経由参照のため dead_code analysis 対象外)
+- `unison-agent/src/lib.rs` の docstring example で `AgentClient::new()` の不要な `.await` を削除 (claude-agent-sdk の new は sync)
+- benches (`quic_performance` / `throughput`) を `criterion::black_box` deprecated 警告から `std::hint::black_box` に移行
+- `CONTRIBUTING.md` の `Tokio 1.40 以上` → `1.52 以上` (workspace dep と整合)、 OpenSSL/BoringSSL 表現を rustls + ring に修正
+- `README.md` の `club-unison = "^0.7"` → `"^0.9"`、 v0.7.0 trust model 説明に v0.9.0 削除言及追加
+- `CHANGELOG.md` に `[Unreleased]` section 追加 (Keep a Changelog 準拠)
+
+### 移行ノート
+
+下流 (chronista-club ecosystem の caller) は以下に置き換え:
+
+```rust
+// 旧 (削除)
+let client = QuicClient::configure_client().await?;
+let server = QuicServer::configure_server().await?;
+
+// 新 (v0.7+ 明示 API)
+let client = QuicClient::configure_client_with(TrustAnchors::SkipVerification).await?;
+let server = QuicServer::configure_server_with(CertSource::dev_localhost()).await?;
+
+// もしくは v0.8+ Builder API (推奨)
+let client = QuicClient::builder()
+    .trust_anchors(TrustAnchors::System)
+    .build();
+let server = QuicServer::builder(server)
+    .cert_source(CertSource::dev_localhost())
+    .build();
+```
+
+### v0.10+ への引き継ぎ
+
+- `WireFormat` trait に `RkyvWire` / `BuffaWire` / `MessagePackWire` の具体実装追加
+- `ProtocolMessage` を format 非依存に redesign、 channel negotiation で wire format 選択
+- benchmark living doc (= `design/bench-baseline.md`) を CI で auto regen、 release CI 自動化と組み合わせ (team-b dispatch 予定)
+- packet module 内の inline test を CI で初実走 (= v0.9.0 で `--skip packet` filter 撤去で初実走、 v0.10+ で coverage 拡大)
+
 ## [0.8.2] - 2026-05-15
 
 ### 変更

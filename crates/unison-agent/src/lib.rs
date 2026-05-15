@@ -15,7 +15,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let client = AgentClient::new().await?;
+//!     let client = AgentClient::new();
 //!     let response = client.query("Hello, Claude!").await?;
 //!     println!("Response: {}", response);
 //!     Ok(())

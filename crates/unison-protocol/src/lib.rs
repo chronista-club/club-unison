@@ -56,6 +56,9 @@ pub mod packet;
 // CGPベースのコンテキストモジュール
 pub mod context;
 
+// Wire format pluggable hook (v0.9.0 で導入、 v0.10+ で具体実装拡張)
+pub mod wire;
+
 // よく使用される型と関数のprelude
 pub mod prelude;
 

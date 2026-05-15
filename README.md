@@ -9,7 +9,7 @@ KDL スキーマベースの型安全な QUIC 通信フレームワーク。
 ```toml
 [dependencies]
 # crates.io package = `club-unison`、Rust crate identifier = `club_unison`
-club-unison = "^0.7"
+club-unison = "^0.9"
 tokio = { version = "1.40", features = ["full"] }
 ```
 
@@ -30,7 +30,7 @@ let pair = InternalMeshKeypair::generate(["broker.local".into(), "*.unison.local
 // pair.client_trust_anchors → client 側
 ```
 
-詳細な trust model 設計は [CHANGELOG](https://github.com/chronista-club/club-unison/blob/main/CHANGELOG.md) の v0.7.0 entry 参照。
+詳細な trust model 設計は [CHANGELOG](https://github.com/chronista-club/club-unison/blob/main/CHANGELOG.md) の v0.7.0 (TLS 導入) と v0.9.0 (deprecated `configure_*()` 削除) entry を参照。
 
 ---
 
@@ -227,8 +227,8 @@ git clone https://github.com/chronista-club/club-unison
 cd unison
 cargo build
 
-# テスト
-RUSTFLAGS="-C symbol-mangling-version=v0" cargo test --tests --workspace -- --skip packet
+# テスト (lib unit + integration tests)
+RUSTFLAGS="-C symbol-mangling-version=v0" cargo test --workspace
 ```
 
 IPv6 専用設計。アドレスは `[::1]:port` を使う。

@@ -114,7 +114,7 @@ pub(super) fn generate_self_signed_with_der(
     let cert_key = rcgen::generate_simple_self_signed(sans)
         .context("rcgen failed to generate self-signed certificate")?;
     let cert_der_bytes = cert_key.cert.der().to_vec();
-    let key_der_bytes = cert_key.key_pair.serialize_der();
+    let key_der_bytes = cert_key.signing_key.serialize_der();
 
     let cert_der = CertificateDer::from(cert_der_bytes);
     let certs = vec![cert_der.clone()];

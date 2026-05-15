@@ -31,7 +31,6 @@ miette.workspace = true
 # Serialization
 serde.workspace = true
 serde_json.workspace = true
-bincode.workspace = true
 
 # Code generation
 proc-macro2.workspace = true
@@ -104,3 +103,9 @@ harness = false
 [[bench]]
 name = "throughput"
 harness = false
+
+# docs.rs build 設定: feature flag 追加時に全 feature を doc 化、
+# `#[cfg(docsrs)]` で docs.rs 限定の attribute (例: `#[doc(cfg(...))]`) を有効化。
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

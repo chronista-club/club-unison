@@ -306,22 +306,6 @@ impl QuicClient {
         Ok(client_config)
     }
 
-    /// Configure client with the legacy `SkipVerification` default.
-    ///
-    /// **DEPRECATED**: explicit trust selection is required from v0.9.0.
-    /// Use [`Self::configure_client_with`] with an explicit
-    /// [`crate::network::trust::TrustAnchors`] instead.
-    #[deprecated(
-        since = "0.7.0",
-        note = "Use configure_client_with(TrustAnchors::System) for prod, or \
-                configure_client_with(TrustAnchors::SkipVerification) for dev only. \
-                Will be removed in v0.9.0 (target 2026-08-15)."
-    )]
-    pub async fn configure_client() -> Result<ClientConfig> {
-        info!("QuicClient::configure_client() defaulting to TrustAnchors::SkipVerification — explicit migration required by v0.9.0");
-        Self::configure_client_with(super::trust::TrustAnchors::SkipVerification).await
-    }
-
     // 双方向ストリームを使うため、start_receive_loopは不要になりました
 
     /// QUIC接続への参照を取得（チャネル用ストリーム開設に使用）
@@ -509,7 +493,7 @@ impl QuicServer {
 
         let cert_key = rcgen::generate_simple_self_signed(subject_alt_names)?;
         let cert_der_bytes = cert_key.cert.der().to_vec();
-        let private_key_der_bytes = cert_key.key_pair.serialize_der();
+        let private_key_der_bytes = cert_key.signing_key.serialize_der();
 
         Ok((
             vec![CertificateDer::from(cert_der_bytes)],
@@ -566,21 +550,6 @@ impl QuicServer {
         server_config.transport_config(Arc::new(transport_config));
 
         Ok(server_config)
-    }
-
-    /// Configure server using a `dev_localhost()` self-signed certificate.
-    ///
-    /// **DEPRECATED**: explicit cert source selection is required from v0.9.0.
-    /// Use [`Self::configure_server_with`] with an explicit
-    /// [`crate::network::cert::CertSource`] instead.
-    #[deprecated(
-        since = "0.7.0",
-        note = "Use configure_server_with(CertSource::dev_localhost()) or pass a production-grade \
-                CertSource. Will be removed in v0.9.0 (target 2026-08-15)."
-    )]
-    pub async fn configure_server() -> Result<ServerConfig> {
-        info!("QuicServer::configure_server() defaulting to CertSource::dev_localhost() — explicit migration required by v0.9.0");
-        Self::configure_server_with(super::cert::CertSource::dev_localhost()).await
     }
 
     pub async fn bind(&mut self, addr: &str) -> Result<()> {

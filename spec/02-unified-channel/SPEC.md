@@ -1,8 +1,8 @@
 # spec/02: Unison Protocol - Unified Channel プロトコル仕様
 
-**バージョン**: 2.0.0-draft
-**最終更新**: 2026-02-16
-**ステータス**: Draft
+**バージョン**: 2.0.0
+**最終更新**: 2026-05-15
+**ステータス**: Stable (v0.9.0 で確定)
 
 ---
 
@@ -417,6 +417,8 @@ pub trait CreoSyncConnectionBuilder {
 - 証明書検証とピン留め
 - 接続暗号化と完全性
 
+v0.7.0 以降、 TLS の cert / trust 戦略は **明示選択 API** (`CertSource` / `TrustAnchors`) で表現する。 v0.8.0 で **Builder API** (`QuicServer::builder()` / `QuicClient::builder()`) が推奨形となり、 v0.9.0 で旧 `configure_server()` / `configure_client()` の暗黙 default は削除された。 詳細は [`crate::network::cert`](../../crates/unison-protocol/src/network/cert.rs) / [`crate::network::trust`](../../crates/unison-protocol/src/network/trust.rs) と [`examples/builder_api.rs`](../../crates/unison-protocol/examples/builder_api.rs) 参照。
+
 ---
 
 ## 8. パフォーマンス
@@ -437,6 +439,22 @@ pub trait CreoSyncConnectionBuilder {
 
 - チャネル間の独立性により並行処理を最大化
 - 非同期ランタイム (tokio) を通じた同時リクエストハンドリング
+
+### 8.4 Wire format (v0.9.0+ pluggable hook、 具体実装は v0.10+)
+
+v0.9.0 で `crate::wire::WireFormat` trait による wire format 抽象化を導入した。
+現時点の default wire format は [`crate::packet`] 経由の **rkyv 0.7 archive**
+(zero-copy)。 v0.10+ で以下の 3 実装が並ぶ予定:
+
+| 実装 | format | 用途 |
+|------|--------|------|
+| `RkyvWire` | rkyv archive | Rust 内 zero-copy hot path |
+| `BuffaWire` | Protocol Buffers (Anthropic 製 [`buffa`](https://crates.io/crates/buffa)) | polyglot, schema evolution |
+| `MessagePackWire` | MessagePack ([`zerompk`](https://crates.io/crates/zerompk) 等) | polyglot, コンパクト |
+
+設計詳細は [`design/wire-format.md`](../../design/wire-format.md) 参照。 現状
+caller (= 既存 packet/Payloadable 経路) は変更なし、 v0.10+ で channel
+negotiation 込みで spec を再 update する予定。
 
 ---
 

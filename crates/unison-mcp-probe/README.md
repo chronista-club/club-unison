@@ -24,9 +24,8 @@ Unison Protocol サーバを Claude Code から対話的につつくための **
 
 | Tool | 引数 | 役割 |
 |------|------|------|
-| `unison_ping` | `endpoint` | Unison サーバへの疎通確認 |
-| `unison_call` | `endpoint`, `channel_name`, `payload` | channel を open して payload 送信 (response 返却は TODO) |
-| `unison_channel_list` | `endpoint` | 登録 channel の列挙 (**サーバ側 meta API が必要、現時点未実装**) |
+| `unison_ping` | `endpoint`, `trust` | Unison サーバへの疎通確認 |
+| `unison_call` | `endpoint`, `channel_name`, `method`, `payload`, `trust` | channel を open して method を request 送信、 response を取得 |
 
 ## 設計判断
 
