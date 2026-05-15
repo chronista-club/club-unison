@@ -59,6 +59,15 @@ pub mod context;
 // Wire format pluggable hook (v0.9.0 で導入、 v0.10+ で具体実装拡張)
 pub mod wire;
 
+// buffa-generated protocol types (v0.9.0 buffa pivot)
+//
+// build.rs が `proto/protocol.proto` を compile し `$OUT_DIR/protocol.{mod,rs,__view.rs,...}` を出力。
+// `.mod.rs` を include すると main types + zero-copy `*View` + `__buffa::{ext,oneof,view}` まで一括 expose。
+// caller は `crate::proto::{ProtocolMessage, MessageType, PacketHeader, ProtocolMessageView, PacketHeaderView}` で access 可能。
+pub mod proto {
+    include!(concat!(env!("OUT_DIR"), "/protocol.mod.rs"));
+}
+
 // よく使用される型と関数のprelude
 pub mod prelude;
 
