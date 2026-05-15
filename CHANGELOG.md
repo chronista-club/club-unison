@@ -5,6 +5,19 @@
 フォーマットは [Keep a Changelog](https://keepachangelog.com/ja/1.0.0/) に基づいており、
 このプロジェクトは [セマンティックバージョニング](https://semver.org/lang/ja/) に準拠しています。
 
+## [0.8.2] - 2026-05-15
+
+### 変更
+- **GitHub repo を `chronista-club/unison` → `chronista-club/club-unison` に rename**
+  - 旧 URL は GitHub の 301 redirect で自動転送、既存参照は壊れない
+  - `Cargo.toml` の `homepage` / `repository` を新 URL に更新
+  - `README.md` / `SECURITY.md` / `CONTRIBUTING.md` の URL 更新
+- 過去の CHANGELOG entry は意図的に旧 URL のまま (歴史的記録)、redirect で機能
+
+### API 影響
+
+なし。crate 名 (`club-unison`) と repo 名が一致したことで discoverability が向上する metadata-only patch。
+
 ## [0.8.1] - 2026-05-15
 
 ### 修正

@@ -7,12 +7,12 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.8.1"
+version = "0.8.2"
 edition = "2024"
 authors = ["Mako<mito@chronista.club>"]
 license = "MIT"
-homepage = "https://github.com/chronista-club/unison"
-repository = "https://github.com/chronista-club/unison"
+homepage = "https://github.com/chronista-club/club-unison"
+repository = "https://github.com/chronista-club/club-unison"
 rust-version = "1.93"
 
 [workspace.dependencies]
