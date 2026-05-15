@@ -16,8 +16,13 @@ use super::{MessageType, NetworkError, ProtocolMessage};
 
 /// Client side connection event (v0.10.0 で追加、 [`ProtocolServer::ConnectionEvent`] と parallel)
 ///
-/// `Connected` は `connect()` 成功時に 1 回、 `Disconnected` は connection が drop
-/// された時 (= 明示 disconnect / server 側 close / 通信 error 何れか) に 1 回 fire される。
+/// `Connected` は `connect()` 成功時に 1 回 fire される。 `Disconnected` は connection が
+/// drop された時 (= 明示 disconnect / server 側 close / 通信 error 何れか) に **1 回以上**
+/// fire される (= 明示 `disconnect()` 時は explicit fire と drop detection task fire の
+/// 2 件が重なる場合がある、 詳細は [`ProtocolClient::disconnect`] を参照)。 subscriber は
+/// **冪等性を持つ**形で扱う責務がある (= 「Disconnected を連続で受けても 1 回の disconnect」
+/// として扱う、 reason 文字列を見て filter する 等)。
+///
 /// Library は auto-reconnect しない (= caller がこの event を見て自身のポリシーで
 /// 再接続を実行する責務を持つ)。
 #[derive(Debug, Clone)]
