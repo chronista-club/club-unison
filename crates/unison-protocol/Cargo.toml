@@ -111,6 +111,18 @@ harness = false
 name = "datagram"
 harness = false
 
+[[bench]]
+name = "datagram_channel"
+harness = false
+
+[[bench]]
+name = "datagram_channel_sustained"
+harness = false
+
+[[bench]]
+name = "datagram_channel_max_throughput"
+harness = false
+
 # docs.rs build 設定: feature flag 追加時に全 feature を doc 化、
 # `#[cfg(docsrs)]` で docs.rs 限定の attribute (例: `#[doc(cfg(...))]`) を有効化。
 [package.metadata.docs.rs]
