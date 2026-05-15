@@ -1,6 +1,6 @@
 use super::TypeRegistry;
-use std::collections::HashMap;
 use club_kdl::KdlDeserialize;
+use std::collections::HashMap;
 
 /// Parsed schema representation
 #[derive(Debug, Default, Clone, KdlDeserialize)]

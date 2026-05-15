@@ -37,6 +37,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install protoc (buffa-build requires it for codegen)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -71,6 +74,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install protoc (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install protoc (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -88,8 +99,8 @@ jobs:
         if: runner.os == 'macOS'
         run: echo "RUSTFLAGS=-C symbol-mangling-version=v0" >> "$GITHUB_ENV"
 
-      - name: Run tests
-        run: cargo test --tests --workspace --verbose -- --skip packet
+      - name: Run tests (lib unit + integration)
+        run: cargo test --workspace --verbose
 
   # ===========================================
   # 依存関係チェック（ライセンス・セキュリティ）
@@ -113,13 +124,16 @@ jobs:
   # MSRV確認
   # ===========================================
   msrv:
-    name: MSRV (1.93)
+    name: MSRV (1.95)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust 1.93
-        uses: dtolnay/rust-toolchain@1.93
+      - name: Install protoc (buffa-build requires it for codegen)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install Rust 1.95
+        uses: dtolnay/rust-toolchain@1.95
 
       - name: Cache cargo
         uses: actions/cache@v4

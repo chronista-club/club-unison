@@ -39,8 +39,8 @@ channel "name" from="client" lifetime="persistent" {
 ## テスト
 
 ```bash
-# 標準テスト実行
-RUSTFLAGS="-C symbol-mangling-version=v0" cargo test --tests --workspace -- --skip packet
+# 標準テスト実行 (lib unit + integration tests を全部走らせる)
+RUSTFLAGS="-C symbol-mangling-version=v0" cargo test --workspace
 
 # clippy
 cargo clippy --lib --workspace -- -D warnings

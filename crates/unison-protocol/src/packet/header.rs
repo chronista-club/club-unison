@@ -1,24 +1,24 @@
 //! フレームヘッダーの定義
 //!
-//! UnisonPacketのヘッダー構造を定義します。
-//! rkyvによるゼロコピーシリアライゼーションをサポートします。
+//! UnisonPacket のヘッダー構造。 v0.9.0 buffa pivot で rkyv 固定 56-byte header
+//! → buffa-encoded variable-size header に redesign された。 wire 上は
+//! length-prefix (= u32 BE) で boundary を明示する形に切り替わっている。
+//! 詳細は `spec/02 §8.4` と `design/wire-format.md` を参照。
 
 use super::flags::PacketFlags;
-use rkyv::{Archive, Deserialize, Serialize};
+use crate::proto;
 
 /// フレームタイプを定義する列挙型
-#[derive(Archive, Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
-#[archive(check_bytes)]
-#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PacketType {
     /// 通常のデータフレーム
-    Data = 0x00,
+    Data,
     /// 制御メッセージ
-    Control = 0x01,
+    Control,
     /// キープアライブ
-    Heartbeat = 0x02,
+    Heartbeat,
     /// ハンドシェイク
-    Handshake = 0x03,
+    Handshake,
     /// カスタムタイプ（アプリケーション定義）
     Custom(u8),
 }
@@ -47,11 +47,11 @@ impl From<PacketType> for u8 {
     }
 }
 
-/// UnisonPacketのヘッダー構造
+/// UnisonPacket のヘッダー構造
 ///
-/// 固定長56バイトのヘッダーで、パケットのメタデータを格納します。
-#[derive(Archive, Deserialize, Serialize, Debug, Clone)]
-#[archive(check_bytes)]
+/// buffa (protobuf) でシリアライズされる variable size header。
+/// wire 上の boundary は packet 全体の先頭 u32 BE prefix で明示される。
+#[derive(Debug, Clone)]
 pub struct UnisonPacketHeader {
     /// プロトコルバージョン（現在: 0x01）
     pub version: u8,
@@ -87,9 +87,6 @@ pub struct UnisonPacketHeader {
 impl UnisonPacketHeader {
     /// 現在のプロトコルバージョン
     pub const CURRENT_VERSION: u8 = 0x01;
-
-    /// rkyv シリアライズ後のヘッダーサイズ（バイト）
-    pub const SERIALIZED_SIZE: usize = 56;
 
     /// 新しいヘッダーを作成
     pub fn new(packet_type: PacketType) -> Self {
@@ -195,6 +192,39 @@ impl UnisonPacketHeader {
             .unwrap_or_default()
             .as_nanos() as u64;
     }
+
+    /// 内部 buffa-generated 型へ変換 (serialization 用)
+    pub(crate) fn to_proto(&self) -> proto::PacketHeader {
+        proto::PacketHeader {
+            version: self.version as u32,
+            packet_type: self.packet_type as u32,
+            flags: self.flags as u32,
+            payload_length: self.payload_length,
+            compressed_length: self.compressed_length,
+            sequence_number: self.sequence_number,
+            timestamp: self.timestamp,
+            stream_id: self.stream_id,
+            message_id: self.message_id,
+            response_to: self.response_to,
+            __buffa_unknown_fields: Default::default(),
+        }
+    }
+
+    /// buffa-generated 型から復元 (deserialization 用)
+    pub(crate) fn from_proto(p: &proto::PacketHeader) -> Self {
+        Self {
+            version: p.version as u8,
+            packet_type: p.packet_type as u8,
+            flags: p.flags as u16,
+            payload_length: p.payload_length,
+            compressed_length: p.compressed_length,
+            sequence_number: p.sequence_number,
+            timestamp: p.timestamp,
+            stream_id: p.stream_id,
+            message_id: p.message_id,
+            response_to: p.response_to,
+        }
+    }
 }
 
 impl Default for UnisonPacketHeader {
@@ -291,22 +321,6 @@ mod tests {
     }
 
     #[test]
-    fn test_serialized_size_matches_rkyv() {
-        // SERIALIZED_SIZE 定数が rkyv の実際のシリアライズサイズと一致することを検証
-        // フィールド追加時にこのテストが失敗し、定数の更新漏れを防ぐ
-        let header = UnisonPacketHeader::new(PacketType::Data);
-        let serialized = rkyv::to_bytes::<_, 256>(&header).expect("ヘッダーのシリアライズに失敗");
-        assert_eq!(
-            serialized.len(),
-            UnisonPacketHeader::SERIALIZED_SIZE,
-            "SERIALIZED_SIZE ({}) が rkyv シリアライズ結果のサイズ ({}) と一致しません。\
-             ヘッダー構造体にフィールドが追加された場合は SERIALIZED_SIZE 定数を更新してください。",
-            UnisonPacketHeader::SERIALIZED_SIZE,
-            serialized.len(),
-        );
-    }
-
-    #[test]
     fn test_message_type_oneway() {
         let header = UnisonPacketHeader::new(PacketType::Data)
             .with_message_id(0)
@@ -315,5 +329,33 @@ mod tests {
         assert!(!header.is_request());
         assert!(!header.is_response());
         assert!(header.is_oneway());
+    }
+
+    #[test]
+    fn test_proto_round_trip() {
+        // to_proto / from_proto で fields が完全保存されること
+        let mut header = UnisonPacketHeader::new(PacketType::Control)
+            .with_sequence(42)
+            .with_stream_id(7)
+            .with_message_id(1)
+            .with_response_to(2);
+        header.payload_length = 128;
+        header.compressed_length = 64;
+        let mut flags = PacketFlags::new();
+        flags.set(PacketFlags::COMPRESSED | PacketFlags::PRIORITY_HIGH);
+        header.set_flags(flags);
+
+        let proto = header.to_proto();
+        let restored = UnisonPacketHeader::from_proto(&proto);
+
+        assert_eq!(restored.version, header.version);
+        assert_eq!(restored.packet_type, header.packet_type);
+        assert_eq!(restored.flags, header.flags);
+        assert_eq!(restored.payload_length, header.payload_length);
+        assert_eq!(restored.compressed_length, header.compressed_length);
+        assert_eq!(restored.sequence_number, header.sequence_number);
+        assert_eq!(restored.stream_id, header.stream_id);
+        assert_eq!(restored.message_id, header.message_id);
+        assert_eq!(restored.response_to, header.response_to);
     }
 }

@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use super::cert::{generate_self_signed_with_der, CertSource};
+use super::cert::{CertSource, generate_self_signed_with_der};
 use super::trust::TrustAnchors;
 
 /// Paired server cert + client trust anchor for internal mesh communication.

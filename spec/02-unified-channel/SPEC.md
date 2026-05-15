@@ -1,8 +1,8 @@
 # spec/02: Unison Protocol - Unified Channel プロトコル仕様
 
-**バージョン**: 2.0.0-draft
-**最終更新**: 2026-02-16
-**ステータス**: Draft
+**バージョン**: 2.0.0
+**最終更新**: 2026-05-15
+**ステータス**: Stable (v0.9.0 で確定)
 
 ---
 
@@ -98,9 +98,14 @@ pub struct ProtocolMessage {
     pub id: u64,               // メッセージID（Requestは一意、Eventは0可）
     pub method: String,        // メソッド名（例: "Query", "MemoryEvent"）
     pub msg_type: MessageType, // メッセージ種別
-    pub payload: String,       // JSON 形式のペイロード
+    pub payload: Vec<u8>,      // Codec (JsonCodec / ProtoCodec 等) でエンコードされたペイロード
 }
 ```
+
+v0.9.0 buffa pivot 後、 `ProtocolMessage` は wire 上で buffa-encoded `proto::ProtocolMessage`
+(= `proto/protocol.proto` で定義) として運ばれる。 `payload` は caller が任意の
+codec で encode した raw bytes (= JsonCodec → JSON 文字列の bytes、 ProtoCodec →
+buffa-encoded bytes)。
 
 ### 3.3 Request/Response 相関
 
@@ -417,6 +422,8 @@ pub trait CreoSyncConnectionBuilder {
 - 証明書検証とピン留め
 - 接続暗号化と完全性
 
+v0.7.0 以降、 TLS の cert / trust 戦略は **明示選択 API** (`CertSource` / `TrustAnchors`) で表現する。 v0.8.0 で **Builder API** (`QuicServer::builder()` / `QuicClient::builder()`) が推奨形となり、 v0.9.0 で旧 `configure_server()` / `configure_client()` の暗黙 default は削除された。 詳細は [`crate::network::cert`](../../crates/unison-protocol/src/network/cert.rs) / [`crate::network::trust`](../../crates/unison-protocol/src/network/trust.rs) と [`examples/builder_api.rs`](../../crates/unison-protocol/examples/builder_api.rs) 参照。
+
 ---
 
 ## 8. パフォーマンス
@@ -437,6 +444,90 @@ pub trait CreoSyncConnectionBuilder {
 
 - チャネル間の独立性により並行処理を最大化
 - 非同期ランタイム (tokio) を通じた同時リクエストハンドリング
+
+### 8.4 Wire format (v0.9.0 で buffa pivot 完了、 trait 抽象は v0.10+ 拡張用 hook)
+
+v0.9.0 で wire format を **rkyv 0.7 archive** から **buffa (Anthropic 製 Protocol
+Buffers)** に切り替えた (= breaking change、 詳細は [`CHANGELOG.md`](../../CHANGELOG.md))。
+理由:
+
+- **polyglot 親和性**: rkyv は Rust 固有、 buffa は protobuf wire format で多言語 SDK 化が容易
+- **schema evolution**: protobuf の field number 互換性で前方/後方互換が取れる
+- **Anthropic ecosystem alignment**: buffa は Anthropic 製 protobuf、 club-unison が
+  Claude / Anthropic 周辺 tool との接続を取りやすい
+
+#### Wire format 概要
+
+```text
+[u32 BE header_len] [buffa-encoded PacketHeader] [payload bytes (may be zstd compressed)]
+```
+
+- 先頭 4 byte は header bytes 長 (big-endian u32)
+- header 部は [`proto::PacketHeader`](../../crates/unison-protocol/proto/protocol.proto)
+  を buffa でエンコードした可変長
+- payload 部の長さと圧縮状態は header の `payload_length` / `compressed_length` で表現
+- `compressed_length > 0` かつ `flags::COMPRESSED` 立ちで zstd 圧縮されているとみなす
+  (= 2KB 以上の payload は自動圧縮)
+
+旧 v0.8 系の rkyv 56-byte fixed header は v0.9.0 で **完全削除** された。
+
+#### `crate::wire::WireFormat` trait (拡張 hook)
+
+`crate::wire::WireFormat` trait は将来 (v0.10+) で **buffa 以外の wire format** を
+pluggable に追加する余地を確保するための表明。 v0.9.0 では具体実装は買わず、
+default の packet 経路 (= buffa direct) のみが稼働する。
+
+| 実装 | format | 想定用途 |
+|------|--------|---------|
+| (default) | buffa Protocol Buffers | v0.9.0+ の唯一の実装、 polyglot + schema evolution |
+| `MessagePackWire` (v0.10+) | MessagePack ([`zerompk`](https://crates.io/crates/zerompk) 等) | コンパクトな polyglot wire |
+| `CborWire` (v0.10+) | CBOR (`ciborium` 等) | IETF 標準互換 |
+
+設計詳細は [`design/wire-format.md`](../../design/wire-format.md) 参照。
+
+### 8.5 Datagram (QUIC unreliable / unordered、 ≤MTU)
+
+v0.9.0 で `QuicClient::send_datagram` / `recv_datagram` MVP API を新設した。 これは
+**connection-level thin wrapper** (= channel 抽象を経由しない、 caller が demux
+header を payload に含める責任)。 想定用途:
+
+- **3DCG position+rotation transform 大量配信** (= 60Hz / 120Hz、 1 frame で 100-1000
+  peer broadcast、 unreliable OK で latency 優先)
+- **low-latency event push** (= ack 不要 fire-and-forget)
+- **heartbeat / presence**
+
+サイズは **MTU 安全値 ≤1300B** (= IP MTU 1500 - IP/UDP/QUIC header)。 超過すると
+`SendDatagramError::TooLarge` が返り fragment 不可。
+
+#### Unified Channel narrative との整合
+
+datagram は性質上 **Request/Response パターンに乗らない** (= ack なし)、 spec/02 §3.1
+の MessageType のうち **Event のみ** 適合する。 v0.10+ で `event "X" backend="datagram"`
+KDL schema 拡張と一緒に channel API へ統合予定:
+
+```kdl
+channel "position" from="server" lifetime="persistent" {
+    event "Transform" backend="datagram" {
+        field "id" type="string"
+        field "pos" type="json"   // [x, y, z]
+        field "rot" type="json"   // [x, y, z, w]
+    }
+}
+```
+
+それまでは connection-level API (= `QuicClient::send_datagram`) で raw bytes 直送、
+caller が channel ID 等の demux header を payload に含める。
+
+#### HoL blocking (§8.2 の補足)
+
+§8.2 の「チャネル内 HoL Blocking 許容」 は **stream channel** 前提。 datagram は HoL
+blocking なし (= UDP-like)、 v0.10+ で channel API 統合時に「stream channel = HoL 許容、
+datagram channel = HoL なし」 と仕様で明示する。
+
+#### benchmark baseline
+
+`benches/datagram.rs` で `payload {64, 1300} × burst {100, 1000}` の 4 ケース計測。
+`benches/RESULTS.md` 参照。
 
 ---
 

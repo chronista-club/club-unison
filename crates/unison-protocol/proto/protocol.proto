@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+// Unison Protocol core wire format (v0.9.0+ buffa pivot)
+//
+// rkyv 0.7 zero-copy archive を廃止、 buffa (Anthropic 製 protobuf) 経由の
+// schema-first wire format に乗り換え。 unison KDL schema-first 哲学と整合、
+// polyglot 親和性 + Anthropic ecosystem alignment を獲得。
+//
+// 関連:
+// - spec/02-unified-channel/SPEC.md §3 (= core message types)
+// - design/wire-format.md (= 設計指針 living doc)
+// - creo-memories: wire format pivot 決定 (mem_1Cb3ya4Y2Am4M1T6NTGrab)
+
+package protocol;
+
+// === Core Message ===
+
+// プロトコルメッセージラッパー
+//
+// 全 channel で運ぶ wire-level message。 caller は payload bytes を Codec
+// (= JsonCodec / BuffaCodec etc) で encode した形で詰める。
+message ProtocolMessage {
+  // メッセージ ID (= Request は一意、 Event は 0 可)
+  uint64 id = 1;
+  // メソッド名 (= "Query" / "MemoryEvent" 等)
+  string method = 2;
+  // メッセージ種別
+  MessageType msg_type = 3;
+  // codec がエンコードしたペイロードバイト列
+  bytes payload = 4;
+}
+
+// メッセージ種別 (= spec/02 §3.1)
+enum MessageType {
+  // proto3 規則: first variant must be 0 (= default value)
+  REQUEST = 0;
+  RESPONSE = 1;
+  EVENT = 2;
+  ERROR = 3;
+}
+
+// === Packet Header ===
+
+// UnisonPacket のヘッダー (= rkyv 56 byte 固定 size から buffa variable size へ)
+//
+// v0.9.0 で wire format pivot に伴い variable size 化、 packet 全体は
+// length-prefix (= 4 byte u32 BE) で boundary を明示する形に redesign。
+message PacketHeader {
+  // プロトコルバージョン (= 現在 0x01)
+  uint32 version = 1;
+  // フレームタイプ (= PacketType enum を u8 cast、 0x00 = Data / 0x01 = Control / etc)
+  uint32 packet_type = 2;
+  // ビットフラグ (= PacketFlags、 u16 cast)
+  uint32 flags = 3;
+  // 圧縮前のペイロード長 (バイト)
+  uint32 payload_length = 4;
+  // 圧縮後のペイロード長 (= 0 なら非圧縮)
+  uint32 compressed_length = 5;
+  // シーケンス番号
+  uint64 sequence_number = 6;
+  // タイムスタンプ (= Unix timestamp ナノ秒)
+  uint64 timestamp = 7;
+  // ストリーム識別子
+  uint64 stream_id = 8;
+  // メッセージ ID (= このメッセージの一意識別子)
+  uint64 message_id = 9;
+  // 応答先メッセージ ID (= 0 = Request/Oneway, >0 = Response)
+  uint64 response_to = 10;
+}

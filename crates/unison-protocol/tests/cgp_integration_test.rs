@@ -1,13 +1,13 @@
 //! CGP統合テスト
 
-use serde_json::Value;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 use club_unison::context::{
     CgpProtocolContext, Handler, HandlerRegistry, MessageHandler, ServiceRegistry, TransportLayer,
     UnisonContextBuilder,
 };
 use club_unison::network::{MessageType, NetworkError, ProtocolMessage};
+use serde_json::Value;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 // ========================================
 // モックTransportLayer実装

@@ -233,7 +233,11 @@ async fn test_e2e_health_check() -> Result<()> {
     client.connect(&addr).await?;
     let channel = client.open_channel("ping-pong").await?;
 
-    let resp = timeout(Duration::from_secs(5), channel.request::<_, Value>("health", &json!({}))).await??;
+    let resp = timeout(
+        Duration::from_secs(5),
+        channel.request::<_, Value>("health", &json!({})),
+    )
+    .await??;
     assert_eq!(resp.get("status").and_then(|v| v.as_str()), Some("ok"));
     assert!(
         resp.get("uptime_ms").and_then(|v| v.as_u64()).is_some(),
@@ -351,7 +355,10 @@ async fn test_e2e_graceful_shutdown() -> Result<()> {
     let channel = client.open_channel("ping-pong").await?;
     let resp = timeout(
         Duration::from_secs(5),
-        channel.request::<_, Value>("ping", &json!({"message": "before shutdown", "sequence": 0})),
+        channel.request::<_, Value>(
+            "ping",
+            &json!({"message": "before shutdown", "sequence": 0}),
+        ),
     )
     .await??;
     assert_eq!(

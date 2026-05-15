@@ -285,9 +285,7 @@ impl QuicClient {
     ///
     /// v0.7.0+: operator must explicitly choose how server certs are verified.
     /// See [`crate::network::trust::TrustAnchors`] for variants.
-    pub async fn configure_client_with(
-        trust: super::trust::TrustAnchors,
-    ) -> Result<ClientConfig> {
+    pub async fn configure_client_with(trust: super::trust::TrustAnchors) -> Result<ClientConfig> {
         let rustls_client_config = trust.build_client_config()?;
         // ClientConfig is Arc<rustls::ClientConfig> — extract and rewrap for quinn
         let client_crypto_config: RustlsClientConfig = (*rustls_client_config).clone();
@@ -301,25 +299,15 @@ impl QuicClient {
         transport_config.max_concurrent_uni_streams(0u32.into());
         transport_config.max_concurrent_bidi_streams(1000u32.into());
         transport_config.initial_rtt(std::time::Duration::from_millis(100));
+        // v0.9.0: enable QUIC datagrams (= unreliable / unordered, ≤MTU). Used by
+        // [`QuicClient::send_datagram`] / [`QuicClient::recv_datagram`] for high-
+        // frequency low-overhead broadcasts (e.g. 3DCG transform sync). 1300B is
+        // the safe MTU upper bound (= 1500 - IP/UDP/QUIC header).
+        transport_config.datagram_receive_buffer_size(Some(1024 * 1024));
+        transport_config.datagram_send_buffer_size(1024 * 1024);
         client_config.transport_config(Arc::new(transport_config));
 
         Ok(client_config)
-    }
-
-    /// Configure client with the legacy `SkipVerification` default.
-    ///
-    /// **DEPRECATED**: explicit trust selection is required from v0.9.0.
-    /// Use [`Self::configure_client_with`] with an explicit
-    /// [`crate::network::trust::TrustAnchors`] instead.
-    #[deprecated(
-        since = "0.7.0",
-        note = "Use configure_client_with(TrustAnchors::System) for prod, or \
-                configure_client_with(TrustAnchors::SkipVerification) for dev only. \
-                Will be removed in v0.9.0 (target 2026-08-15)."
-    )]
-    pub async fn configure_client() -> Result<ClientConfig> {
-        info!("QuicClient::configure_client() defaulting to TrustAnchors::SkipVerification — explicit migration required by v0.9.0");
-        Self::configure_client_with(super::trust::TrustAnchors::SkipVerification).await
     }
 
     // 双方向ストリームを使うため、start_receive_loopは不要になりました
@@ -439,6 +427,59 @@ impl QuicClient {
             false
         }
     }
+
+    /// Send a single QUIC datagram (= **unreliable / unordered, ≤MTU**).
+    ///
+    /// v0.9.0 で MVP として thin wrapper を expose。 channel 抽象を経由しない
+    /// connection-level API、 caller は payload 自体に必要な header (= channel ID
+    /// 等の demux 情報) を含める責任を持つ。
+    ///
+    /// # 用途想定
+    ///
+    /// - 3DCG position+rotation transform の高頻度 broadcast (= 60Hz / 120Hz、
+    ///   1 frame で大量配信、 古いは新しいで上書き)
+    /// - low-latency event push (= ack 不要、 fire-and-forget)
+    /// - heartbeat / presence
+    ///
+    /// # Size limit
+    ///
+    /// 安全 MTU (= IP MTU 1500 - IP/UDP/QUIC header ≈ 1300B) 以下を推奨。 超過
+    /// すると `SendDatagramError::TooLarge` が返り、 sender 側 fragment 不可。
+    ///
+    /// # 信頼性
+    ///
+    /// 配送保証なし、 順序保証なし。 reliable / ordered が必要なら channel API
+    /// (= `open_channel`) を使う。
+    ///
+    /// # Channel 統合 (v0.10+)
+    ///
+    /// 現状は connection 単位 raw datagram。 v0.10+ で `event "X" backend="datagram"`
+    /// KDL schema 拡張と一緒に channel API へ統合予定 (= `design/wire-format.md`
+    /// 参照)。
+    pub async fn send_datagram(&self, data: bytes::Bytes) -> Result<()> {
+        let connection_guard = self.connection.read().await;
+        let connection = connection_guard
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("send_datagram: not connected"))?;
+        connection
+            .send_datagram(data)
+            .map_err(|e| anyhow::anyhow!("send_datagram failed: {}", e))
+    }
+
+    /// Receive the next QUIC datagram (blocks until one arrives or connection closes).
+    ///
+    /// pair API for [`Self::send_datagram`]. v0.9.0 では caller が任意の demux 戦略
+    /// を実装する (= channel ID prefix 等を payload 内に持つ)。
+    pub async fn recv_datagram(&self) -> Result<bytes::Bytes> {
+        let connection_guard = self.connection.read().await;
+        let connection = connection_guard
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("recv_datagram: not connected"))?;
+        connection
+            .read_datagram()
+            .await
+            .map_err(|e| anyhow::anyhow!("recv_datagram failed: {}", e))
+    }
 }
 
 /// QUICサーバー実装
@@ -509,7 +550,7 @@ impl QuicServer {
 
         let cert_key = rcgen::generate_simple_self_signed(subject_alt_names)?;
         let cert_der_bytes = cert_key.cert.der().to_vec();
-        let private_key_der_bytes = cert_key.key_pair.serialize_der();
+        let private_key_der_bytes = cert_key.signing_key.serialize_der();
 
         Ok((
             vec![CertificateDer::from(cert_der_bytes)],
@@ -563,24 +604,13 @@ impl QuicServer {
         transport_config.max_concurrent_uni_streams(0u32.into());
         transport_config.max_concurrent_bidi_streams(1000u32.into());
         transport_config.initial_rtt(std::time::Duration::from_millis(100));
+        // v0.9.0: enable QUIC datagrams (= same as client side、 server-initiated
+        // broadcast 用 e.g. 3DCG transform sync from server)
+        transport_config.datagram_receive_buffer_size(Some(1024 * 1024));
+        transport_config.datagram_send_buffer_size(1024 * 1024);
         server_config.transport_config(Arc::new(transport_config));
 
         Ok(server_config)
-    }
-
-    /// Configure server using a `dev_localhost()` self-signed certificate.
-    ///
-    /// **DEPRECATED**: explicit cert source selection is required from v0.9.0.
-    /// Use [`Self::configure_server_with`] with an explicit
-    /// [`crate::network::cert::CertSource`] instead.
-    #[deprecated(
-        since = "0.7.0",
-        note = "Use configure_server_with(CertSource::dev_localhost()) or pass a production-grade \
-                CertSource. Will be removed in v0.9.0 (target 2026-08-15)."
-    )]
-    pub async fn configure_server() -> Result<ServerConfig> {
-        info!("QuicServer::configure_server() defaulting to CertSource::dev_localhost() — explicit migration required by v0.9.0");
-        Self::configure_server_with(super::cert::CertSource::dev_localhost()).await
     }
 
     pub async fn bind(&mut self, addr: &str) -> Result<()> {
@@ -998,7 +1028,7 @@ impl UnisonStream {
 
     /// Raw bytes を typed フレームとして送信（type tag 0x01）
     ///
-    /// rkyv/zstd をバイパスし、length-prefix + type tag + raw payload のみ。
+    /// buffa/zstd をバイパスし、length-prefix + type tag + raw payload のみ。
     /// オーディオストリーミング等の最小オーバーヘッド通信に使用。
     pub async fn send_raw_frame(&self, data: &[u8]) -> Result<(), NetworkError> {
         if !self.is_active() {

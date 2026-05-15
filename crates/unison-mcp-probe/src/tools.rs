@@ -17,6 +17,9 @@ use serde::Deserialize;
 /// MCP server の state。現時点では stateless (毎回 client を作り直す)。
 #[derive(Clone)]
 pub struct UnisonProbe {
+    // `#[tool_router]` macro から内部参照される。 user code として直接 read しないので
+    // dead_code analysis 対象から外す。
+    #[allow(dead_code)]
     tool_router: ToolRouter<UnisonProbe>,
 }
 
@@ -88,12 +91,6 @@ pub struct CallArgs {
     pub trust: TrustMode,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct ChannelListArgs {
-    /// Unison サーバの URL
-    pub endpoint: String,
-}
-
 // ---------------------------------------------------------------------------
 // Tool implementations
 // ---------------------------------------------------------------------------
@@ -124,7 +121,9 @@ impl UnisonProbe {
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
-    #[tool(description = "任意の Unison channel を open し、method に payload を request として送信して response を取得する")]
+    #[tool(
+        description = "任意の Unison channel を open し、method に payload を request として送信して response を取得する"
+    )]
     async fn unison_call(
         &self,
         Parameters(args): Parameters<CallArgs>,
@@ -160,20 +159,9 @@ impl UnisonProbe {
             "response": response,
         });
 
-        Ok(CallToolResult::success(vec![Content::text(result.to_string())]))
-    }
-
-    #[tool(description = "サーバに登録されている channel 一覧を取得する (サーバ側 API 追加が前提)")]
-    async fn unison_channel_list(
-        &self,
-        Parameters(_args): Parameters<ChannelListArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        // TODO: Unison サーバに "__channels:list" のような meta channel を追加する必要あり。
-        // 現時点ではサーバ側で channel を列挙する API が無いので、未実装として明示する。
-        Err(McpError::internal_error(
-            "unison_channel_list: サーバ側 meta API が未実装です (将来対応)",
-            None,
-        ))
+        Ok(CallToolResult::success(vec![Content::text(
+            result.to_string(),
+        )]))
     }
 }
 
@@ -184,19 +172,13 @@ impl UnisonProbe {
 #[tool_handler]
 impl ServerHandler for UnisonProbe {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            server_info: Implementation {
-                name: "unison-mcp-probe".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                description: Some("MCP probe for Unison Protocol servers".to_string()),
-                ..Default::default()
-            },
-            instructions: Some(
-                "Unison Protocol サーバをつつくための MCP probe。開発中の Unison endpoint を指定して使う。"
-                    .to_string(),
-            ),
-        }
+        // rmcp 1.x: ServerInfo / Implementation は #[non_exhaustive]、 builder API 経由で構築。
+        // Implementation の name/version は `serve()` 時に CARGO_PKG_NAME / CARGO_PKG_VERSION から
+        // auto-fill される。 protocol_version は省略時 rmcp 1.x の default (= 現状 V_2024_11_05) が
+        // 採用される、 strict client との negotiation で問題が出たら明示 set し直す (v0.10+ で確認予定)。
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions(
+                "Unison Protocol サーバをつつくための MCP probe。開発中の Unison endpoint を指定して使う。",
+            )
     }
 }

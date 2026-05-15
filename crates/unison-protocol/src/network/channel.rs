@@ -135,11 +135,7 @@ impl<C: Codec> UnisonChannel<C> {
     /// `Req` / `Resp` は Codec `C` に対して Encodable / Decodable であれば何でも使える:
     /// - `UnisonChannel<JsonCodec>`: `serde::Serialize` / `DeserializeOwned` な型
     /// - `UnisonChannel<ProtoCodec>`: `buffa::Message` な型
-    pub async fn request<Req, Resp>(
-        &self,
-        method: &str,
-        req: &Req,
-    ) -> Result<Resp, NetworkError>
+    pub async fn request<Req, Resp>(&self, method: &str, req: &Req) -> Result<Resp, NetworkError>
     where
         Req: Encodable<C>,
         Resp: Decodable<C>,
@@ -155,12 +151,8 @@ impl<C: Codec> UnisonChannel<C> {
 
         // Request メッセージを Codec でエンコードしてフレームとして送信
         let payload = req.encode().map_err(NetworkError::Codec)?;
-        let msg = ProtocolMessage::new_encoded(
-            id,
-            method.to_string(),
-            MessageType::Request,
-            payload,
-        );
+        let msg =
+            ProtocolMessage::new_encoded(id, method.to_string(), MessageType::Request, payload);
         self.stream.send_frame(&msg).await?;
 
         // Response を待つ（タイムアウト付き）
@@ -198,12 +190,7 @@ impl<C: Codec> UnisonChannel<C> {
         payload: &T,
     ) -> Result<(), NetworkError> {
         let bytes = payload.encode().map_err(NetworkError::Codec)?;
-        let msg = ProtocolMessage::new_encoded(
-            0,
-            method.to_string(),
-            MessageType::Event,
-            bytes,
-        );
+        let msg = ProtocolMessage::new_encoded(0, method.to_string(), MessageType::Event, bytes);
         self.stream.send_frame(&msg).await
     }
 
@@ -227,7 +214,7 @@ impl<C: Codec> UnisonChannel<C> {
         self.stream.send_frame(&msg).await
     }
 
-    /// Raw bytes 送信（rkyv/zstd をバイパス、最小オーバーヘッド）
+    /// Raw bytes 送信（buffa/zstd をバイパス、最小オーバーヘッド）
     ///
     /// オーディオストリーミング等のバイナリデータに使用。
     pub async fn send_raw(&self, data: &[u8]) -> Result<(), NetworkError> {

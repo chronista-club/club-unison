@@ -1,13 +1,14 @@
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use club_unison::network::channel::UnisonChannel;
+use club_unison::network::{MessageType, quic::QuicClient};
+use club_unison::{ProtocolClient, ProtocolServer};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use hdrhistogram::Histogram;
 use serde_json::json;
+use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Runtime;
 use tokio::sync::Barrier;
-use club_unison::network::channel::UnisonChannel;
-use club_unison::network::{MessageType, quic::QuicClient};
-use club_unison::{ProtocolClient, ProtocolServer};
 
 /// メッセージサイズのバリエーション
 const MESSAGE_SIZES: &[usize] = &[64, 256, 1024, 4096, 16384];
@@ -27,7 +28,9 @@ async fn measure_latency(
         });
 
         let start = std::time::Instant::now();
-        let _ = channel.request::<_, serde_json::Value>("echo", &message).await;
+        let _ = channel
+            .request::<_, serde_json::Value>("echo", &message)
+            .await;
         histogram
             .record(start.elapsed().as_micros() as u64)
             .unwrap();
@@ -51,7 +54,11 @@ async fn measure_throughput(
             "sequence": count
         });
 
-        if channel.request::<_, serde_json::Value>("echo", &message).await.is_ok() {
+        if channel
+            .request::<_, serde_json::Value>("echo", &message)
+            .await
+            .is_ok()
+        {
             count += 1;
         }
     }

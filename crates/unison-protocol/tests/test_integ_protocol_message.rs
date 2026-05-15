@@ -421,19 +421,21 @@ fn test_integ_proto_large_payload_compression_roundtrip() {
     };
 
     let proto_bytes = msg.encode_to_vec();
-    assert!(proto_bytes.len() > 2048, "payload should exceed compression threshold");
-
-    let protocol_msg = ProtocolMessage::new_encoded(
-        1,
-        "import".to_string(),
-        MessageType::Event,
-        proto_bytes,
+    assert!(
+        proto_bytes.len() > 2048,
+        "payload should exceed compression threshold"
     );
+
+    let protocol_msg =
+        ProtocolMessage::new_encoded(1, "import".to_string(), MessageType::Event, proto_bytes);
 
     // フレーム化（圧縮される）→ バイト列 → 復元
     let frame = protocol_msg.into_frame().unwrap();
     let header = frame.header().unwrap();
-    assert!(header.is_compressed(), "large proto payload should be compressed");
+    assert!(
+        header.is_compressed(),
+        "large proto payload should be compressed"
+    );
 
     let bytes = frame.to_bytes();
     let restored_frame = UnisonPacket::from_bytes(&bytes).unwrap();
@@ -448,12 +450,8 @@ fn test_integ_proto_large_payload_compression_roundtrip() {
 /// id=0 の ProtocolMessage がフレーム往復後も id=0 で戻ること
 #[test]
 fn test_integ_zero_id_roundtrip() {
-    let msg = ProtocolMessage::new_encoded(
-        0,
-        "event".to_string(),
-        MessageType::Event,
-        b"{}".to_vec(),
-    );
+    let msg =
+        ProtocolMessage::new_encoded(0, "event".to_string(), MessageType::Event, b"{}".to_vec());
 
     let frame = msg.into_frame().unwrap();
     let bytes = frame.to_bytes();

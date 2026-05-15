@@ -114,7 +114,7 @@ pub(super) fn generate_self_signed_with_der(
     let cert_key = rcgen::generate_simple_self_signed(sans)
         .context("rcgen failed to generate self-signed certificate")?;
     let cert_der_bytes = cert_key.cert.der().to_vec();
-    let key_der_bytes = cert_key.key_pair.serialize_der();
+    let key_der_bytes = cert_key.signing_key.serialize_der();
 
     let cert_der = CertificateDer::from(cert_der_bytes);
     let certs = vec![cert_der.clone()];
@@ -130,7 +130,10 @@ fn generate_self_signed(sans: Vec<String>) -> Result<Arc<CertifiedKey>> {
     generate_self_signed_with_der(sans).map(|(key, _)| key)
 }
 
-fn load_from_files(cert_path: &std::path::Path, key_path: &std::path::Path) -> Result<Arc<CertifiedKey>> {
+fn load_from_files(
+    cert_path: &std::path::Path,
+    key_path: &std::path::Path,
+) -> Result<Arc<CertifiedKey>> {
     let cert_pem = std::fs::read_to_string(cert_path)
         .with_context(|| format!("failed to read cert file: {}", cert_path.display()))?;
     let key_pem_bytes = std::fs::read(key_path)

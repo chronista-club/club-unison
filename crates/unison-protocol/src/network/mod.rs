@@ -1,9 +1,10 @@
-use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
+use ::buffa::Message;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::codec::{CodecError, Decodable, Encodable, JsonCodec};
-use crate::packet::{RkyvPayload, SerializationError, UnisonPacket};
+use crate::packet::{SerializationError, UnisonPacket};
+use crate::proto;
 
 pub mod cert;
 pub mod channel;
@@ -83,8 +84,10 @@ impl NetworkError {
 }
 
 /// プロトコルメッセージラッパー
-#[derive(Debug, Clone, Serialize, Deserialize, Archive, RkyvSerialize, RkyvDeserialize)]
-#[archive(check_bytes)]
+///
+/// wire 上は buffa-encoded `proto::ProtocolMessage` として運ばれる。
+/// 本 struct はその等価表現 (= PascalCase enum / 直 field access) を提供。
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProtocolMessage {
     pub id: u64,
     pub method: String,
@@ -94,28 +97,32 @@ pub struct ProtocolMessage {
 }
 
 /// フレームでラップされたプロトコルメッセージの型エイリアス
-pub type ProtocolFrame = UnisonPacket<RkyvPayload<ProtocolMessage>>;
+///
+/// v0.9.0 buffa pivot 後は `UnisonPacket` 自体が非ジェネリック (= 生バイト保持)
+/// になったため、 ProtocolFrame は単なるエイリアス。
+pub type ProtocolFrame = UnisonPacket;
 
 impl ProtocolMessage {
-    /// ProtocolMessageをフレームに変換
+    /// ProtocolMessage をフレームに変換
+    ///
+    /// 内部で buffa の `proto::ProtocolMessage` にエンコードしたのち
+    /// `UnisonPacket` (= packet header + payload bytes) で包む。
     pub fn into_frame(self) -> Result<ProtocolFrame, SerializationError> {
-        let payload = RkyvPayload::new(self);
-        UnisonPacket::new(payload)
+        let proto_msg = self.into_proto();
+        let payload_bytes = proto_msg.encode_to_vec();
+        UnisonPacket::new(payload_bytes)
     }
 
-    /// フレームからProtocolMessageを復元
+    /// フレームから ProtocolMessage を復元
     pub fn from_frame(frame: &ProtocolFrame) -> Result<Self, SerializationError> {
-        let payload = frame.payload()?;
-        Ok(payload.data.clone())
+        let payload_bytes = frame.payload()?;
+        let proto_msg = proto::ProtocolMessage::decode_from_slice(&payload_bytes)
+            .map_err(|e| SerializationError::DeserializationFailed(e.to_string()))?;
+        Ok(Self::from_proto(proto_msg))
     }
 
     /// エンコード済みバイト列から ProtocolMessage を直接作成
-    pub fn new_encoded(
-        id: u64,
-        method: String,
-        msg_type: MessageType,
-        payload: Vec<u8>,
-    ) -> Self {
+    pub fn new_encoded(id: u64, method: String, msg_type: MessageType, payload: Vec<u8>) -> Self {
         Self {
             id,
             method,
@@ -131,8 +138,7 @@ impl ProtocolMessage {
         msg_type: MessageType,
         payload: serde_json::Value,
     ) -> Result<Self, NetworkError> {
-        let bytes =
-            Encodable::<JsonCodec>::encode(&payload).map_err(NetworkError::Codec)?;
+        let bytes = Encodable::<JsonCodec>::encode(&payload).map_err(NetworkError::Codec)?;
         Ok(Self::new_encoded(id, method, msg_type, bytes))
     }
 
@@ -150,22 +156,39 @@ impl ProtocolMessage {
     {
         Ok(T::decode(&self.payload)?)
     }
+
+    /// 内部: buffa `proto::ProtocolMessage` への変換 (encoding 用)
+    fn into_proto(self) -> proto::ProtocolMessage {
+        proto::ProtocolMessage {
+            id: self.id,
+            method: self.method,
+            msg_type: ::buffa::EnumValue::Known(self.msg_type.to_proto()),
+            payload: self.payload,
+            __buffa_unknown_fields: Default::default(),
+        }
+    }
+
+    /// 内部: buffa `proto::ProtocolMessage` からの復元 (decoding 用)
+    ///
+    /// 未知の MessageType 値が wire 上に乗っていた場合は `MessageType::Error`
+    /// として扱う (= caller は msg_type で分岐できる、 wire 互換性は維持)。
+    fn from_proto(p: proto::ProtocolMessage) -> Self {
+        let msg_type = p
+            .msg_type
+            .as_known()
+            .map(MessageType::from_proto)
+            .unwrap_or(MessageType::Error);
+        Self {
+            id: p.id,
+            method: p.method,
+            msg_type,
+            payload: p.payload,
+        }
+    }
 }
 
 /// メッセージ種別
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    Archive,
-    RkyvSerialize,
-    RkyvDeserialize,
-)]
-#[archive(check_bytes)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageType {
     Request,
@@ -173,6 +196,26 @@ pub enum MessageType {
     /// 一方向プッシュ（応答不要）
     Event,
     Error,
+}
+
+impl MessageType {
+    fn to_proto(self) -> proto::MessageType {
+        match self {
+            MessageType::Request => proto::MessageType::REQUEST,
+            MessageType::Response => proto::MessageType::RESPONSE,
+            MessageType::Event => proto::MessageType::EVENT,
+            MessageType::Error => proto::MessageType::ERROR,
+        }
+    }
+
+    fn from_proto(p: proto::MessageType) -> Self {
+        match p {
+            proto::MessageType::REQUEST => MessageType::Request,
+            proto::MessageType::RESPONSE => MessageType::Response,
+            proto::MessageType::EVENT => MessageType::Event,
+            proto::MessageType::ERROR => MessageType::Error,
+        }
+    }
 }
 
 /// プロトコルエラー
@@ -225,5 +268,40 @@ mod tests {
             }
             .is_normal_close()
         );
+    }
+
+    /// ProtocolMessage の buffa wire round-trip を確認
+    #[test]
+    fn protocol_message_proto_round_trip() {
+        let original = ProtocolMessage::new_encoded(
+            42,
+            "test.method".to_string(),
+            MessageType::Request,
+            b"payload".to_vec(),
+        );
+
+        let frame = original.clone().into_frame().unwrap();
+        let bytes = frame.to_bytes();
+        let restored_frame = UnisonPacket::from_bytes(&bytes).unwrap();
+        let restored = ProtocolMessage::from_frame(&restored_frame).unwrap();
+
+        assert_eq!(restored.id, original.id);
+        assert_eq!(restored.method, original.method);
+        assert_eq!(restored.msg_type, original.msg_type);
+        assert_eq!(restored.payload, original.payload);
+    }
+
+    /// 各 MessageType variant が wire を通って同じ variant で戻ること
+    #[test]
+    fn message_type_proto_round_trip_all_variants() {
+        for variant in [
+            MessageType::Request,
+            MessageType::Response,
+            MessageType::Event,
+            MessageType::Error,
+        ] {
+            let p = variant.to_proto();
+            assert_eq!(MessageType::from_proto(p), variant);
+        }
     }
 }
