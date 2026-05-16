@@ -15,6 +15,7 @@
 
 | ガイド | 説明 |
 |-------|------|
+| [integration-guide.md](integration-guide.md) | 呼び出し側プロジェクトへ Unison 統合を組み込むためのオンボーディング（ここから始める） |
 | [quickstart.md](quickstart.md) | Unison サーバ + TypeScript クライアントを end-to-end で疎通させる |
 | [migration.md](migration.md) | v1.0 までの破壊的変更と移行手順 |
 | [typescript-sdk.md](typescript-sdk.md) | TypeScript クライアント SDK の API リファレンス |
