@@ -1,8 +1,7 @@
 use super::CodeGenerator;
 use crate::parser::{
     Channel, ChannelBackend, ChannelEvent, ChannelMessage, ChannelRequest, DefaultValue, Enum,
-    Field, FieldType, Message, Method, MethodMessage, ParsedSchema, Protocol, Service, Stream,
-    TypeRegistry,
+    Field, FieldType, Message, ParsedSchema, Protocol, TypeRegistry,
 };
 use anyhow::Result;
 use convert_case::{Case, Casing};
@@ -78,9 +77,18 @@ impl RustGenerator {
             tokens.extend(self.generate_message(message, type_registry));
         }
 
-        // サービスを生成
+        // 旧 service block は legacy RPC narrative (CLAUDE.md:「RPC は廃止済み」)。
+        // Rust generator は service トレイト / *Client を emit しない。 schema に
+        // service が残っていればコメントで明示する (= silent skip しない)。
         for service in &protocol.services {
-            tokens.extend(self.generate_service(service, type_registry));
+            let note = format!(
+                " NOTE: service \"{}\" は legacy RPC narrative のため Rust codegen から除外。 channel block (request / returns / event) へ移行すること。",
+                service.name
+            );
+            tokens.extend(quote! {
+                #[doc = #note]
+                const _: () = ();
+            });
         }
 
         // チャネルのメッセージ型を生成
@@ -238,153 +246,6 @@ impl RustGenerator {
                 }
             }
             _ => TokenStream::new(),
-        }
-    }
-
-    fn generate_service(&self, service: &Service, type_registry: &TypeRegistry) -> TokenStream {
-        let service_name = format_ident!("{}Service", service.name);
-        let client_name = format_ident!("{}Client", service.name);
-
-        let methods: Vec<_> = service
-            .methods
-            .iter()
-            .map(|m| self.generate_service_method(m, type_registry))
-            .collect();
-
-        let streams: Vec<_> = service
-            .streams
-            .iter()
-            .map(|s| self.generate_service_stream(s, type_registry))
-            .collect();
-
-        let client_methods: Vec<_> = service
-            .methods
-            .iter()
-            .map(|m| self.generate_client_method(m, type_registry))
-            .collect();
-
-        let client_streams: Vec<_> = service
-            .streams
-            .iter()
-            .map(|s| self.generate_client_stream(s, type_registry))
-            .collect();
-
-        quote! {
-            // サービストレイト
-            pub trait #service_name: Send + Sync {
-                #(#methods)*
-                #(#streams)*
-            }
-
-            // クライアント実装（service 構文用）
-            pub struct #client_name {
-                inner: ProtocolClient,
-            }
-
-            impl #client_name {
-                pub fn new(client: ProtocolClient) -> Self {
-                    Self { inner: client }
-                }
-
-                #(#client_methods)*
-                #(#client_streams)*
-            }
-        }
-    }
-
-    fn generate_service_method(
-        &self,
-        method: &Method,
-        _type_registry: &TypeRegistry,
-    ) -> TokenStream {
-        let name = format_ident!("{}", method.name.to_case(Case::Snake));
-        let request_type = self.method_type_name(&method.request, "Request");
-        let response_type = self.method_type_name(&method.response, "Response");
-
-        quote! {
-            async fn #name(&self, request: #request_type) -> Result<#response_type>;
-        }
-    }
-
-    fn generate_service_stream(
-        &self,
-        stream: &Stream,
-        _type_registry: &TypeRegistry,
-    ) -> TokenStream {
-        let name = format_ident!("{}", stream.name.to_case(Case::Snake));
-        let request_type = self.method_type_name(&stream.request, "Request");
-        let response_type = self.method_type_name(&stream.response, "Response");
-
-        quote! {
-            async fn #name(
-                &self,
-                request: #request_type
-            ) -> Result<Box<dyn futures_util::Stream<Item = Result<#response_type>> + Send + Unpin>>;
-        }
-    }
-
-    fn generate_client_method(
-        &self,
-        method: &Method,
-        _type_registry: &TypeRegistry,
-    ) -> TokenStream {
-        let name = format_ident!("{}", method.name.to_case(Case::Snake));
-        let request_type = self.method_type_name(&method.request, "Request");
-        let response_type = self.method_type_name(&method.response, "Response");
-        let method_name = &method.name;
-
-        quote! {
-            pub async fn #name(&self, channel: &crate::network::channel::UnisonChannel, request: #request_type) -> Result<#response_type> {
-                // serde_json::Value を中継（インライン型生成の制約による）
-                channel.request::<serde_json::Value, #response_type>(#method_name, &serde_json::to_value(request)?).await
-            }
-        }
-    }
-
-    fn generate_client_stream(
-        &self,
-        stream: &Stream,
-        _type_registry: &TypeRegistry,
-    ) -> TokenStream {
-        let name = format_ident!("{}", stream.name.to_case(Case::Snake));
-        let request_type = self.method_type_name(&stream.request, "Request");
-        let response_type = self.method_type_name(&stream.response, "Response");
-        let stream_name = &stream.name;
-
-        quote! {
-            pub async fn #name(
-                &self,
-                request: #request_type
-            ) -> Result<Box<dyn futures_util::Stream<Item = Result<#response_type>> + Send + Unpin>> {
-                self.inner.stream(#stream_name, request).await
-            }
-        }
-    }
-
-    fn method_type_name(&self, message: &Option<MethodMessage>, suffix: &str) -> TokenStream {
-        if let Some(msg) = message {
-            // MethodMessage は常にインライン型を生成
-            let fields: Vec<_> = msg
-                .fields
-                .iter()
-                .map(|f| {
-                    let name = format_ident!("{}", f.name);
-                    let ty = self.field_type_to_rust(&f.field_type(), &TypeRegistry::new());
-                    quote! { pub #name: #ty }
-                })
-                .collect();
-
-            quote! {
-                {
-                    #[derive(Debug, Clone, Serialize, Deserialize)]
-                    struct #suffix {
-                        #(#fields),*
-                    }
-                    #suffix
-                }
-            }
-        } else {
-            quote! { () }
         }
     }
 
