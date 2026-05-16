@@ -28,10 +28,11 @@ export { WebTransportClient, WebTransportConnection, connect } from "./transport
 // === Phase 2c: channel === (= 未実装、 placeholder)
 // export type { UnisonChannel, DatagramChannel } from "./channel/types.js";
 
-// === Phase 2d: codec === (= 未実装、 placeholder)
-// export type { Codec } from "./codec/codec.js";
-// export { JsonCodec } from "./codec/json_codec.js";
-// export { ProtoCodec } from "./codec/proto_codec.js";
+// === Phase 2d: codec ===
+export type { Codec, CodecFormat } from "./codec/codec.js";
+export { CodecError } from "./codec/codec.js";
+export { JsonCodec } from "./codec/json_codec.js";
+export { ProtoCodec } from "./codec/proto_codec.js";
 
 // === Top-level API === (= 未実装、 placeholder)
 // export const unisonClient = {
