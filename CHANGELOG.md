@@ -7,15 +7,47 @@
 
 ## [Unreleased]
 
+## [1.0.0-rc.1] - 2026-05-17 — v1.0 polyglot client base (release candidate)
+
+> v1.0 sprint「polyglot client base」 の release candidate。 TypeScript client SDK を新設し、 **browser から Rust server へ実 WebTransport で接続**できる状態に到達。 dogfood 開始点 (= Vantage Point ほか chronista-club ecosystem での実利用検証)。 GA は dogfood exit criteria (3+ caller × 実運用 × critical bug 0) 達成後。
+
+### 追加 — TypeScript client SDK (`@chronista-club/unison-client`)
+
+- `transport/` — WebTransport adapter (browser native WebTransport で QUIC server に接続)
+- `channel/` — `UnisonChannel` (stream: request/response + event) / `DatagramChannel` (datagram broadcast) + varint demux dispatcher
+- `codec/` — `JsonCodec` / `ProtoCodec` (buffa proto3 互換)
+- `error/` — `ErrorCategory` (Transport / Protocol / Application / Resource)
+- `wire/` — Rust `ProtocolMessage` と byte-identical な proto3 wire codec
+- `UnisonClient` facade — `connect()` → `openChannel` / `openDatagramChannel`、 型安全 (codegen の `__types` carrier で生成 interface に narrowing)
+
+### 追加 — WebTransport server endpoint + cross-language interop
+
+- transport 抽象 `UnisonConn` trait — quinn raw QUIC と WebTransport session を同一 `handle_connection` に合流
+- Rust server に `wtransport` ベースの WebTransport endpoint (browser ingress)
+- identity handshake / channel `open_ack` (server-side accept signal)
+- 実 WebTransport E2E (TS SDK ↔ Rust server) を CI (GitHub Actions) で検証
+
+### 追加 — `unison` CLI dev tools
+
+- `ping` / `sniff` / `mock` / `schema-lint` サブコマンド
+
 ### 変更 — lib 名を bare name に (`club_unison` → `unison`)
 
-> chronista-club 命名規則 (2026-05-16) に適合。 公開 crate の `[lib].name` は bare name (prefix なし) とし、 v0.6.0 full rename policy の lib-name 条項を撤回。 club-nostos lead からの cross-project handoff (creo-memories `mem_1Cb6DxPnPzYCxqmWcy8YzZ`) を受けた適合。
+- `crates/unison-protocol/Cargo.toml` の `[lib].name`: `club_unison` → **`unison`** (chronista-club 命名規則適合)
+- 全 `use club_unison::...` → **`use unison::...`** (41 ファイル)。 crates.io package 名 `club-unison` と dep 行は不変
 
-- `crates/unison-protocol/Cargo.toml` の `[lib].name`: `club_unison` → **`unison`**
-- 全 `use club_unison::...` → **`use unison::...`** (unison-protocol / unison-agent / unison-mcp-probe の src / tests / benches / examples、 41 ファイル一括置換)
-- README / doc comment の使用例も更新
-- **source-breaking**: consumer の `use` 行が変わる (`use club_unison::` → `use unison::`)。 ただし crates.io package 名 `club-unison` と dep 行 (`club-unison = "..."`) は不変
-- 理由: `club-` prefix は crates.io global namespace の衝突回避が責務。 lib 名は registry namespace 外 (code path) なので prefix 不要、 `use club_unison::` の冗長を排す
+### 変更 — codegen を channel narrative 一本化
+
+- 旧 `service` / WebSocket codegen を Rust / TS 両 generator から除去 (CLAUDE.md「Legacy 残さない」)
+- payload 型 narrowing / `connect` 命名 / `openChannel` accept signal を整備 (beta freeze blockers)
+
+### ドキュメント
+
+- `guides/` に quickstart / migration / typescript-sdk リファレンスを追加
+
+### v1.x 送り (rc 期間中 or GA 後)
+
+- club-kdl-codegen への codegen 載せ替え (IR ベース化) / proto-descriptor codegen / datagram meta codegen / Node native WebTransport / Safari・Firefox 公式対応
 
 ## [0.10.1] - 2026-05-16 — 「benchmark fresh baseline + datagram channel 計測強化」 patch
 

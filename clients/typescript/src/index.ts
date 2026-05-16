@@ -109,4 +109,4 @@ export type { UnisonConnectOptions } from "./client.js";
 export { UnisonClient, connect } from "./client.js";
 
 // SDK version (= package.json と同期)
-export const VERSION = "1.0.0-alpha.2";
+export const VERSION = "1.0.0-rc.1";
