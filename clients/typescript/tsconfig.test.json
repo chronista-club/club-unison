@@ -9,5 +9,5 @@
     "rootDir": ".",
     "types": ["node", "vitest/globals"]
   },
-  "include": ["src/**/*", "tests/**/*", "bench/**/*"]
+  "include": ["src/**/*", "tests/**/*", "bench/**/*", "examples/**/*"]
 }

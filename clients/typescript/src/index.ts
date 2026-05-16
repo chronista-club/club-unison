@@ -49,13 +49,9 @@ export { CodecError } from "./codec/codec.js";
 export { JsonCodec } from "./codec/json_codec.js";
 export { ProtoCodec } from "./codec/proto_codec.js";
 
-// === Top-level API === (= 未実装、 placeholder)
-// export const unisonClient = {
-//   async connect(opts: ConnectOptions): Promise<UnisonClient> {
-//     // Phase 2b で実装
-//     throw new Error("not yet implemented (v1.0.0-alpha.1)");
-//   },
-// };
+// === Top-level API === (= Phase 3b、 UnisonClient facade)
+export type { UnisonConnectOptions } from "./client.js";
+export { UnisonClient, connect as connectClient } from "./client.js";
 
 // SDK version (= package.json と同期)
 export const VERSION = "1.0.0-alpha.2";

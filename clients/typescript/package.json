@@ -24,6 +24,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "bench": "vitest bench",
+    "example": "vite-node examples/vp-dashboard.ts",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "clean": "rm -rf dist coverage node_modules/.vite"
   },
