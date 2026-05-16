@@ -1,0 +1,206 @@
+// Auto-generated TypeScript definitions
+// DO NOT EDIT MANUALLY
+
+export type Timestamp = string; // ISO-8601 format
+export type UUID = string;
+export type LanguageCode = string; // ISO 639-1 format
+
+// Namespace: club.chronista.sync
+// Version: 2.0.0
+
+// ════════════════════════════════════════════════
+// Channel: control (backend=stream)
+// ════════════════════════════════════════════════
+
+/** Request "Subscribe" */
+export interface Subscribe {
+  category?: string;
+  tags?: string;
+}
+
+/** Response "Ack" */
+export interface Ack {
+  status?: string;
+  channel_ref?: string;
+}
+
+/** Event name → 生成 interface の map for "control" (= type-narrowing 用) */
+export type ControlChannelEventTypes = Record<string, never>;
+
+/** Request name → { request, response } 生成 interface の map for "control" */
+export interface ControlChannelRequestTypes {
+  Subscribe: { request: Subscribe; response: Ack };
+}
+
+/** Channel metadata for "control" (= Phase 2 runtime SDK 用 type-narrowing 入力) */
+export const ControlChannelMeta = {
+  name: "control" as const,
+  backend: "stream" as const,
+  from: "client" as const,
+  lifetime: "persistent" as const,
+  events: [] as const,
+  requests: {
+    Subscribe: { request: "Subscribe" as const, response: "Ack" as const },
+  } as const,
+  __types: undefined as unknown as { events: ControlChannelEventTypes; requests: ControlChannelRequestTypes },
+} as const;
+
+
+// ════════════════════════════════════════════════
+// Channel: events (backend=stream)
+// ════════════════════════════════════════════════
+
+/** Event "MemoryEvent" */
+export interface MemoryEvent {
+  event_type: string;
+  memory_id: string;
+  category?: string;
+  from?: string;
+  timestamp?: string;
+}
+
+/** Event name → 生成 interface の map for "events" (= type-narrowing 用) */
+export interface EventsChannelEventTypes {
+  MemoryEvent: MemoryEvent;
+}
+
+/** Request name → { request, response } 生成 interface の map for "events" */
+export type EventsChannelRequestTypes = Record<string, never>;
+
+/** Channel metadata for "events" (= Phase 2 runtime SDK 用 type-narrowing 入力) */
+export const EventsChannelMeta = {
+  name: "events" as const,
+  backend: "stream" as const,
+  from: "server" as const,
+  lifetime: "persistent" as const,
+  events: ["MemoryEvent"] as const,
+  requests: {} as const,
+  __types: undefined as unknown as { events: EventsChannelEventTypes; requests: EventsChannelRequestTypes },
+} as const;
+
+
+// ════════════════════════════════════════════════
+// Channel: query (backend=stream)
+// ════════════════════════════════════════════════
+
+/** Event "QueryError" */
+export interface QueryError {
+  code?: string;
+  message?: string;
+}
+
+/** Request "Query" */
+export interface Query {
+  method: string;
+  params?: any;
+}
+
+/** Response "Result" */
+export interface Result {
+  data?: any;
+}
+
+/** Event name → 生成 interface の map for "query" (= type-narrowing 用) */
+export interface QueryChannelEventTypes {
+  QueryError: QueryError;
+}
+
+/** Request name → { request, response } 生成 interface の map for "query" */
+export interface QueryChannelRequestTypes {
+  Query: { request: Query; response: Result };
+}
+
+/** Channel metadata for "query" (= Phase 2 runtime SDK 用 type-narrowing 入力) */
+export const QueryChannelMeta = {
+  name: "query" as const,
+  backend: "stream" as const,
+  from: "client" as const,
+  lifetime: "persistent" as const,
+  events: ["QueryError"] as const,
+  requests: {
+    Query: { request: "Query" as const, response: "Result" as const },
+  } as const,
+  __types: undefined as unknown as { events: QueryChannelEventTypes; requests: QueryChannelRequestTypes },
+} as const;
+
+
+// ════════════════════════════════════════════════
+// Channel: messaging (backend=stream)
+// ════════════════════════════════════════════════
+
+/** Event "CCMessage" */
+export interface CCMessage {
+  from: string;
+  to?: string;
+  content: string;
+  thread?: string;
+}
+
+/** Request "SendMessage" */
+export interface SendMessage {
+  from: string;
+  to?: string;
+  content: string;
+  thread?: string;
+}
+
+/** Response "MessageAck" */
+export interface MessageAck {
+  status?: string;
+}
+
+/** Event name → 生成 interface の map for "messaging" (= type-narrowing 用) */
+export interface MessagingChannelEventTypes {
+  CCMessage: CCMessage;
+}
+
+/** Request name → { request, response } 生成 interface の map for "messaging" */
+export interface MessagingChannelRequestTypes {
+  SendMessage: { request: SendMessage; response: MessageAck };
+}
+
+/** Channel metadata for "messaging" (= Phase 2 runtime SDK 用 type-narrowing 入力) */
+export const MessagingChannelMeta = {
+  name: "messaging" as const,
+  backend: "stream" as const,
+  from: "either" as const,
+  lifetime: "persistent" as const,
+  events: ["CCMessage"] as const,
+  requests: {
+    SendMessage: { request: "SendMessage" as const, response: "MessageAck" as const },
+  } as const,
+  __types: undefined as unknown as { events: MessagingChannelEventTypes; requests: MessagingChannelRequestTypes },
+} as const;
+
+
+// ════════════════════════════════════════════════
+// Channel: urgent (backend=stream)
+// ════════════════════════════════════════════════
+
+/** Event "Alert" */
+export interface Alert {
+  level: string;
+  title: string;
+  body?: string;
+}
+
+/** Event name → 生成 interface の map for "urgent" (= type-narrowing 用) */
+export interface UrgentChannelEventTypes {
+  Alert: Alert;
+}
+
+/** Request name → { request, response } 生成 interface の map for "urgent" */
+export type UrgentChannelRequestTypes = Record<string, never>;
+
+/** Channel metadata for "urgent" (= Phase 2 runtime SDK 用 type-narrowing 入力) */
+export const UrgentChannelMeta = {
+  name: "urgent" as const,
+  backend: "stream" as const,
+  from: "server" as const,
+  lifetime: "transient" as const,
+  events: ["Alert"] as const,
+  requests: {} as const,
+  __types: undefined as unknown as { events: UrgentChannelEventTypes; requests: UrgentChannelRequestTypes },
+} as const;
+
+

@@ -1,0 +1,110 @@
+use serde :: {
+    Deserialize ,
+    Serialize
+}; use anyhow :: Result; use chrono :: {
+    DateTime ,
+    Utc
+}; use uuid :: Uuid; use std :: collections :: HashMap; # [allow (unused_imports)] use crate :: network :: {
+    ProtocolClient ,
+    ProtocolServer
+}; # [allow (unused_imports)] use crate :: network :: channel :: UnisonChannel; # [allow (unused_imports)] use crate :: network :: datagram_channel :: DatagramChannel; # [derive (Debug ,
+    Clone ,
+    Serialize ,
+    Deserialize)] pub struct Subscribe {
+    # [serde (skip_serializing_if = "Option::is_none")] pub category : Option < String > ,
+    # [serde (skip_serializing_if = "Option::is_none")] pub tags : Option < String >
+} # [derive (Debug ,
+    Clone ,
+    Serialize ,
+    Deserialize)] pub struct Ack {
+    # [serde (skip_serializing_if = "Option::is_none")] pub status : Option < String > ,
+    # [serde (skip_serializing_if = "Option::is_none")] pub channel_ref : Option < String >
+} # [derive (Debug ,
+    Clone ,
+    Serialize ,
+    Deserialize)] pub struct MemoryEvent {
+    pub event_type : String ,
+    pub memory_id : String ,
+    # [serde (skip_serializing_if = "Option::is_none")] pub category : Option < String > ,
+    # [serde (skip_serializing_if = "Option::is_none")] pub from : Option < String > ,
+    # [serde (skip_serializing_if = "Option::is_none")] pub timestamp : Option < String >
+} # [derive (Debug ,
+    Clone ,
+    Serialize ,
+    Deserialize)] pub struct Query {
+    pub method : String ,
+    # [serde (skip_serializing_if = "Option::is_none")] pub params : Option < serde_json :: Value >
+} # [derive (Debug ,
+    Clone ,
+    Serialize ,
+    Deserialize)] pub struct Result {
+    # [serde (skip_serializing_if = "Option::is_none")] pub data : Option < serde_json :: Value >
+} # [derive (Debug ,
+    Clone ,
+    Serialize ,
+    Deserialize)] pub struct QueryError {
+    # [serde (skip_serializing_if = "Option::is_none")] pub code : Option < String > ,
+    # [serde (skip_serializing_if = "Option::is_none")] pub message : Option < String >
+} # [derive (Debug ,
+    Clone ,
+    Serialize ,
+    Deserialize)] pub struct SendMessage {
+    pub from : String ,
+    # [serde (skip_serializing_if = "Option::is_none")] pub to : Option < String > ,
+    pub content : String ,
+    # [serde (skip_serializing_if = "Option::is_none")] pub thread : Option < String >
+} # [derive (Debug ,
+    Clone ,
+    Serialize ,
+    Deserialize)] pub struct MessageAck {
+    # [serde (skip_serializing_if = "Option::is_none")] pub status : Option < String >
+} # [derive (Debug ,
+    Clone ,
+    Serialize ,
+    Deserialize)] pub struct CCMessage {
+    pub from : String ,
+    # [serde (skip_serializing_if = "Option::is_none")] pub to : Option < String > ,
+    pub content : String ,
+    # [serde (skip_serializing_if = "Option::is_none")] pub thread : Option < String >
+} # [derive (Debug ,
+    Clone ,
+    Serialize ,
+    Deserialize)] pub struct Alert {
+    pub level : String ,
+    pub title : String ,
+    # [serde (skip_serializing_if = "Option::is_none")] pub body : Option < String >
+} # [doc = r" インメモリチャネルベースのConnection（テスト用）"] pub struct CreoSyncConnection {
+    pub control : UnisonChannel ,
+    pub events : UnisonChannel ,
+    pub query : UnisonChannel ,
+    pub messaging : UnisonChannel ,
+    pub urgent : UnisonChannel
+} # [doc = r" QUICストリームベースのConnection（本番用）"] pub struct CreoSyncQuicConnection {
+    pub control : UnisonChannel ,
+    pub events : UnisonChannel ,
+    pub query : UnisonChannel ,
+    pub messaging : UnisonChannel ,
+    pub urgent : UnisonChannel
+} # [doc = r" ConnectionBuilderトレイト"] pub trait CreoSyncConnectionBuilder {
+    fn build (client : & crate :: network :: client :: ProtocolClient ,) -> impl std :: future :: Future < Output = Result < CreoSyncQuicConnection >> + Send;
+} impl CreoSyncConnectionBuilder for CreoSyncQuicConnection {
+    async fn build (client : & crate :: network :: client :: ProtocolClient ,) -> Result < CreoSyncQuicConnection > {
+    Ok (CreoSyncQuicConnection {
+    control : client . open_channel ("control") . await . map_err (| e | anyhow :: anyhow ! ("Failed to open channel '{}': {}" ,
+    "control" ,
+    e)) ? ,
+    events : client . open_channel ("events") . await . map_err (| e | anyhow :: anyhow ! ("Failed to open channel '{}': {}" ,
+    "events" ,
+    e)) ? ,
+    query : client . open_channel ("query") . await . map_err (| e | anyhow :: anyhow ! ("Failed to open channel '{}': {}" ,
+    "query" ,
+    e)) ? ,
+    messaging : client . open_channel ("messaging") . await . map_err (| e | anyhow :: anyhow ! ("Failed to open channel '{}': {}" ,
+    "messaging" ,
+    e)) ? ,
+    urgent : client . open_channel ("urgent") . await . map_err (| e | anyhow :: anyhow ! ("Failed to open channel '{}': {}" ,
+    "urgent" ,
+    e)) ?
+})
+}
+}
