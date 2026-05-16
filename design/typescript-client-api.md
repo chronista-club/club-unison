@@ -171,11 +171,18 @@ export const unisonClient = {
 export interface UnisonClient {
   serverIdentity(): Promise<ServerIdentity>;
   subscribeConnectionEvents(): ConnectionEventEmitter;
-  openChannel<M extends ChannelMeta>(meta: M): Promise<UnisonChannel<M>>;
-  openDatagramChannel<M extends DatagramChannelMeta>(meta: M): Promise<DatagramChannel<M>>;
+  // openChannel は open handshake (= `open` frame → server `open_ack`) を行い、
+  // server peer が bidi stream を accept したことを確認してから resolve する。
+  // `openTimeoutMs` 内に accept されなければ reject + stream tear down (= no-accept signal)。
+  openChannel<M extends ChannelMeta>(meta: M, openTimeoutMs?: number): Promise<UnisonChannel<M>>;
+  openDatagramChannel<M extends DatagramChannelMeta>(meta: M): DatagramChannel<M>;
   disconnect(): Promise<void>;
 }
 ```
+
+caller-facing の connection entry は **free function `connect`** で export する
+(= `import { connect } from "@chronista-club/unison-client"`)。 transport-level の
+低レベル connect は `connectTransport` として別 export、 facade と名前衝突しない。
 
 ### 4.2 Channel API
 
@@ -208,10 +215,18 @@ export interface DatagramChannel<M extends DatagramChannelMeta> {
 
 ### 4.3 ChannelMeta type narrowing
 
-Phase 1 で生成した `as const` channel meta を使う:
+Phase 1 で生成した `as const` channel meta を使う。 meta const は文字列 literal
+しか保持できないため、 codegen は **phantom `__types` carrier** を埋め込む:
+event/request 名 → 生成 interface の map を `__types` field に型として載せる
+(= runtime 値は `undefined`)。 `EventType<M>` / `RequestType<M,N>` /
+`ResponseType<M,N>` はこの carrier 経由で実 interface を解決する。
 
 ```typescript
 // Phase 1 generated:
+export interface MetricUpdate { name: string; value: number; unit?: string }
+export interface MetricChannelEventTypes { MetricUpdate: MetricUpdate }
+export type MetricChannelRequestTypes = Record<string, never>;
+
 export const MetricChannelMeta = {
   name: "metric" as const,
   backend: "datagram" as const,
@@ -220,18 +235,27 @@ export const MetricChannelMeta = {
   lifetime: "persistent" as const,
   events: ["MetricUpdate"] as const,
   requests: {} as const,
+  // phantom carrier — runtime undefined、 型のみ
+  __types: undefined as unknown as {
+    events: MetricChannelEventTypes;
+    requests: MetricChannelRequestTypes;
+  },
 } as const;
 
 // Phase 2 type narrowing:
 type EventName<M> = M extends { events: readonly (infer N)[] } ? N : never;
-type EventType<M> = ... // map event name → generated interface
+type EventType<M> = // __types.events 経由で生成 interface に解決
+  M extends { __types?: infer T } ? T["events"][keyof T["events"]] : ChannelPayload;
 
 // 結果: caller code で
-const chan = await client.openDatagramChannel(MetricChannelMeta);
+const chan = client.openDatagramChannel(MetricChannelMeta);
 for await (const update of chan.events()) {
-  // update: MetricUpdate (= compile-time に narrow)
+  // update: MetricUpdate (= compile-time に narrow、 手動 cast 不要)
 }
 ```
+
+`__types` を持たない raw `ChannelMeta` で開いた場合は `ChannelPayload`
+(= `Record<string, unknown>`) に degrade する (= 後方互換)。
 
 ### 4.4 Connection event API
 

@@ -18,6 +18,8 @@ import type {
   DatagramChannel,
   DatagramChannelMeta,
   EventName,
+  EventPayload,
+  EventType,
 } from "./types.js";
 import { encodeVarint } from "./varint.js";
 
@@ -68,13 +70,16 @@ export class DatagramChannelImpl<M extends DatagramChannelMeta>
     dispatcher.register(meta.channelId, sink);
   }
 
-  events(): AsyncIterableIterator<ChannelPayload> {
-    return this.#queue;
+  events(): AsyncIterableIterator<EventType<M>> {
+    return this.#queue as AsyncIterableIterator<EventType<M>>;
   }
 
-  async sendEvent(_name: EventName<M>, payload: ChannelPayload): Promise<void> {
+  async sendEvent<N extends EventName<M>>(
+    _name: N,
+    payload: EventPayload<M, N>,
+  ): Promise<void> {
     if (this.#closed) throw new Error(`datagram channel "${this.name}" is closed`);
-    const encoded = this.#codec.encode(payload);
+    const encoded = this.#codec.encode(payload as ChannelPayload);
     // [varint channelId] [codec-encoded payload] を組み立て
     const buf = new Uint8Array(this.#idPrefix.length + encoded.length);
     buf.set(this.#idPrefix, 0);

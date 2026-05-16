@@ -46,6 +46,16 @@ export class StreamServerStub {
     try {
       for await (const body of readFrames(this.stream.readable)) {
         const { header, payload } = decodeFrameBody(body);
+        if (header.type === "open") {
+          // channel open probe — accept の証拠として open_ack を返す
+          await this.#writer.write(
+            encodeFrame(
+              { id: 0, method: header.method, type: "open_ack" },
+              codec.encode({}),
+            ),
+          );
+          continue;
+        }
         const msg = codec.decode(payload) as Record<string, unknown>;
         if (header.type === "request") {
           const respHeader: FrameHeader = {

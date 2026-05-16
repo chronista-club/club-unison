@@ -19,7 +19,10 @@ import type {
   DatagramChannelMeta,
   UnisonChannel,
 } from "./channel/types.js";
-import { UnisonChannelImpl } from "./channel/unison_channel.js";
+import {
+  DEFAULT_OPEN_TIMEOUT_MS,
+  UnisonChannelImpl,
+} from "./channel/unison_channel.js";
 import type { Connection, ConnectOptions, Transport } from "./transport/types.js";
 import { WebTransportClient } from "./transport/web_transport.js";
 
@@ -56,11 +59,27 @@ export class UnisonClient {
     return this.#connection.events();
   }
 
-  /** Stream channel を開設 (= bidi stream を 1 本 open、 request/response + event) */
-  async openChannel<M extends ChannelMeta>(meta: M): Promise<UnisonChannel<M>> {
+  /**
+   * Stream channel を開設 (= bidi stream を 1 本 open、 request/response + event)。
+   *
+   * open handshake (= `open` frame → server `open_ack`) を行い、 server peer が
+   * stream を accept したことを確認してから resolve する。 `openTimeoutMs` 内に
+   * accept されなければ reject + stream を tear down する (= no-accept signal)。
+   */
+  async openChannel<M extends ChannelMeta>(
+    meta: M,
+    openTimeoutMs: number = DEFAULT_OPEN_TIMEOUT_MS,
+  ): Promise<UnisonChannel<M>> {
     if (this.#closed) throw new Error("client is closed");
     const stream = await this.#connection.openBidiStream();
-    return new UnisonChannelImpl(meta, stream, this.#codec);
+    const channel = new UnisonChannelImpl(meta, stream, this.#codec);
+    try {
+      await channel.waitAccepted(openTimeoutMs);
+    } catch (cause) {
+      await channel.close().catch(() => undefined);
+      throw cause;
+    }
+    return channel;
   }
 
   /** Datagram channel を開設 (= 共有 datagram path、 broadcast event のみ) */

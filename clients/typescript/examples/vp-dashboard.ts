@@ -13,7 +13,7 @@
  * 実行: `npm run example`
  */
 
-import { connectClient, type ChannelMeta, type DatagramChannelMeta } from "../src/index.js";
+import { connect, type ChannelMeta, type DatagramChannelMeta } from "../src/index.js";
 import { JsonCodec } from "../src/codec/json_codec.js";
 import { encodeVarint } from "../src/channel/varint.js";
 import { MockTransport, type MockConnection } from "../tests/integration/mock_transport.js";
@@ -22,7 +22,33 @@ import type { BidiStream } from "../src/transport/types.js";
 
 // ============================================================
 // Channel meta (= Phase 1 codegen 出力の代用、 vp-dashboard KDL schema 由来)
+//
+// 生成 interface + `__types` phantom carrier 込みで書く (= codegen が吐く
+// `<Channel>ChannelEventTypes` / `<Channel>ChannelRequestTypes` + meta `__types`
+// の構造を手で再現)。 これにより events() / request() が生成 interface に narrow。
 // ============================================================
+
+/** `metric` channel の MetricUpdate event payload (= codegen 出力相当) */
+interface MetricUpdate {
+  name: string;
+  value: number;
+  unit?: string;
+}
+
+/** `agent_status` channel の AgentEvent event payload (= codegen 出力相当) */
+interface AgentEvent {
+  agent_id: string;
+  status: string;
+  details?: unknown;
+}
+
+/** `control` channel の request/response payload (= codegen 出力相当) */
+interface SubscribeMetricReq {
+  names: string[];
+}
+interface Subscribed {
+  ok: boolean;
+}
 
 /** Datagram metric broadcast (= 60Hz refresh、 channel_id=1) */
 const MetricChannelMeta = {
@@ -33,6 +59,10 @@ const MetricChannelMeta = {
   lifetime: "persistent",
   events: ["MetricUpdate"],
   requests: {},
+  __types: undefined as unknown as {
+    events: { MetricUpdate: MetricUpdate };
+    requests: Record<string, never>;
+  },
 } as const satisfies DatagramChannelMeta;
 
 /** Agent status (= less frequent、 stream channel で reliable) */
@@ -43,6 +73,10 @@ const AgentStatusChannelMeta = {
   lifetime: "persistent",
   events: ["AgentEvent"],
   requests: {},
+  __types: undefined as unknown as {
+    events: { AgentEvent: AgentEvent };
+    requests: Record<string, never>;
+  },
 } as const satisfies ChannelMeta;
 
 /** Dashboard control (= client → server、 request/response) */
@@ -55,6 +89,12 @@ const ControlChannelMeta = {
   requests: {
     SubscribeMetric: { request: "SubscribeMetricReq", response: "Subscribed" },
   },
+  __types: undefined as unknown as {
+    events: Record<string, never>;
+    requests: {
+      SubscribeMetric: { request: SubscribeMetricReq; response: Subscribed };
+    };
+  },
 } as const satisfies ChannelMeta;
 
 // ============================================================
@@ -66,7 +106,7 @@ const dashboardStore = new Map<string, number>();
 
 async function runDashboard(transport: MockTransport): Promise<void> {
   // --- Connection setup ---
-  const client = await connectClient({
+  const client = await connect({
     url: "https://vp.chronista.local:8080",
     trust: "system",
     transport, // 本番では省略 (= WebTransport default)
@@ -82,18 +122,19 @@ async function runDashboard(transport: MockTransport): Promise<void> {
 
   // --- Control channel: subscribe を request/response で要求 ---
   const control = await client.openChannel(ControlChannelMeta);
+  // subscribed は Subscribed 型に narrow (= meta.__types 経由)、 .ok が typed
   const subscribed = await control.request("SubscribeMetric", {
     names: ["cpu", "memory", "build_progress"],
   });
-  console.log(`[control] SubscribeMetric -> ok=${String(subscribed["ok"])}`);
+  console.log(`[control] SubscribeMetric -> ok=${subscribed.ok}`);
 
   // --- Datagram metric channel: 60Hz の steady stream を subscribe ---
   const metricChan = client.openDatagramChannel(MetricChannelMeta);
   const metricLoop = (async () => {
     for await (const update of metricChan.events()) {
-      // FRICTION: update は ChannelPayload (= Record<string,unknown>)、 MetricUpdate に narrow されない
-      dashboardStore.set(String(update["name"]), Number(update["value"]));
-      console.log(`[metric] ${String(update["name"])} = ${String(update["value"])}`);
+      // update は MetricUpdate 型に narrow (= 手動 cast 不要、 Blocker 1 解消の証拠)
+      dashboardStore.set(update.name, update.value);
+      console.log(`[metric] ${update.name} = ${update.value}`);
     }
   })();
 
@@ -101,7 +142,8 @@ async function runDashboard(transport: MockTransport): Promise<void> {
   const agentChan = await client.openChannel(AgentStatusChannelMeta);
   const agentLoop = (async () => {
     for await (const ev of agentChan.events()) {
-      console.log(`[agent] ${String(ev["agent_id"])} -> ${String(ev["status"])}`);
+      // ev は AgentEvent 型に narrow
+      console.log(`[agent] ${ev.agent_id} -> ${ev.status}`);
     }
   })();
 
@@ -172,7 +214,7 @@ async function runServer(server: MockConnection): Promise<void> {
 
 async function main(): Promise<void> {
   const transport = new MockTransport();
-  const { server } = transport.prepare(); // client は connectClient() が払い出す
+  const { server } = transport.prepare(); // client は connect() が払い出す
   await Promise.all([runDashboard(transport), runServer(server)]);
 }
 

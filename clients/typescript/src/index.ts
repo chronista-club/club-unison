@@ -27,16 +27,27 @@ export {
   UnisonTransportError,
   WebTransportUnsupportedError,
 } from "./transport/errors.js";
-export { WebTransportClient, WebTransportConnection, connect } from "./transport/web_transport.js";
+export {
+  WebTransportClient,
+  WebTransportConnection,
+  // transport-level の低レベル connect (= URL 直結、 facade を介さない)。
+  // caller-facing entry は client.ts の `connect` (下記参照)。
+  connect as connectTransport,
+} from "./transport/web_transport.js";
 
 // === Phase 2c: channel ===
 export type {
   ChannelMeta,
   ChannelPayload,
+  ChannelTypeMap,
   DatagramChannel,
   DatagramChannelMeta,
   EventName,
+  EventPayload,
+  EventType,
   RequestName,
+  RequestType,
+  ResponseType,
   UnisonChannel,
 } from "./channel/types.js";
 export { UnisonChannelImpl } from "./channel/unison_channel.js";
@@ -50,8 +61,9 @@ export { JsonCodec } from "./codec/json_codec.js";
 export { ProtoCodec } from "./codec/proto_codec.js";
 
 // === Top-level API === (= Phase 3b、 UnisonClient facade)
+// `connect` が caller-facing の primary entry (= design §3.1/§4.1)。
 export type { UnisonConnectOptions } from "./client.js";
-export { UnisonClient, connect as connectClient } from "./client.js";
+export { UnisonClient, connect } from "./client.js";
 
 // SDK version (= package.json と同期)
 export const VERSION = "1.0.0-alpha.2";

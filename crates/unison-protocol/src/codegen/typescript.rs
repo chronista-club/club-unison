@@ -152,11 +152,53 @@ export type LanguageCode = string; // ISO 639-1 format
             request_mappings.push((req.name.clone(), req.name.clone(), response_name));
         }
 
+        let pascal = channel.name.to_case(Case::Pascal);
+
+        // Type map interfaces (= name → 生成 interface の link、 SDK の
+        // EventType<M> / RequestType<M,N> / ResponseType<M,N> がこれ経由で解決)。
+        // meta const は string literal しか持てないため、 別 type で interface を束ねる。
+        let event_types_name = format!("{}ChannelEventTypes", pascal);
+        code.push_str(&format!(
+            "/** Event name → 生成 interface の map for \"{}\" (= type-narrowing 用) */\n",
+            channel.name
+        ));
+        if event_names.is_empty() {
+            code.push_str(&format!(
+                "export type {} = Record<string, never>;\n\n",
+                event_types_name
+            ));
+        } else {
+            code.push_str(&format!("export interface {} {{\n", event_types_name));
+            for n in &event_names {
+                code.push_str(&format!("  {}: {};\n", n, n));
+            }
+            code.push_str("}\n\n");
+        }
+
+        let request_types_name = format!("{}ChannelRequestTypes", pascal);
+        code.push_str(&format!(
+            "/** Request name → {{ request, response }} 生成 interface の map for \"{}\" */\n",
+            channel.name
+        ));
+        if request_mappings.is_empty() {
+            code.push_str(&format!(
+                "export type {} = Record<string, never>;\n\n",
+                request_types_name
+            ));
+        } else {
+            code.push_str(&format!("export interface {} {{\n", request_types_name));
+            for (req_name, req_type, resp_type) in &request_mappings {
+                let resp_ts = if resp_type == "void" { "void" } else { resp_type };
+                code.push_str(&format!(
+                    "  {}: {{ request: {}; response: {} }};\n",
+                    req_name, req_type, resp_ts
+                ));
+            }
+            code.push_str("}\n\n");
+        }
+
         // Channel metadata const (= Phase 2 runtime SDK の type-narrowing 入力)
-        let meta_name = format!(
-            "{}ChannelMeta",
-            channel.name.to_case(Case::Pascal)
-        );
+        let meta_name = format!("{}ChannelMeta", pascal);
         code.push_str(&format!("/** Channel metadata for \"{}\" (= Phase 2 runtime SDK 用 type-narrowing 入力) */\n", channel.name));
         code.push_str(&format!("export const {} = {{\n", meta_name));
         code.push_str(&format!("  name: {:?} as const,\n", channel.name));
@@ -207,6 +249,14 @@ export type LanguageCode = string; // ISO 639-1 format
         } else {
             code.push_str("  requests: {} as const,\n");
         }
+
+        // Phantom type carrier (= runtime では undefined、 型のみ存在)。
+        // SDK の EventType<M> / RequestType<M,N> / ResponseType<M,N> はこの
+        // `__types` field 経由で event/request 名 → 生成 interface を解決する。
+        code.push_str(&format!(
+            "  __types: undefined as unknown as {{ events: {}; requests: {} }},\n",
+            event_types_name, request_types_name
+        ));
 
         code.push_str("} as const;\n");
 

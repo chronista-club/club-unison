@@ -14,14 +14,22 @@
  * (JSON / proto) と独立させる (= Rust 側 `ProtocolMessage` 相当の責務分離)。
  */
 
-/** frame の protocol-level header (= payload codec とは独立、 常に JSON) */
+/**
+ * frame の protocol-level header (= payload codec とは独立、 常に JSON)。
+ *
+ * `type`:
+ * - `open` — channel 開設 probe (= client → server、 stream open 直後 1 回)
+ * - `open_ack` — `open` への応答 (= server → client、 peer が accept した証拠)
+ * - `request` / `response` / `error` — request/response round-trip
+ * - `event` — 一方向 push
+ */
 export interface FrameHeader {
-  /** request/response 相関 ID (= event は 0) */
+  /** request/response 相関 ID (= event / open は 0) */
   id: number;
-  /** request / event 名 (= KDL schema 上の名前) */
+  /** request / event 名 (= KDL schema 上の名前、 open は channel 名) */
   method: string;
   /** メッセージ種別 */
-  type: "request" | "response" | "event" | "error";
+  type: "open" | "open_ack" | "request" | "response" | "event" | "error";
 }
 
 const textEncoder = new TextEncoder();

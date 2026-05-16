@@ -97,6 +97,29 @@ fn test_typescript_codegen_stream_channel() {
         code.contains("response: \"Result\""),
         "metadata response type name"
     );
+
+    // v0.11.0 beta-freeze: type-map interfaces + phantom `__types` carrier
+    // (= SDK の EventType<M> / RequestType<M,N> / ResponseType<M,N> 解決元)
+    assert!(
+        code.contains("export interface QueryChannelEventTypes {"),
+        "event type-map interface"
+    );
+    assert!(
+        code.contains("QueryError: QueryError;"),
+        "event type-map entry maps name → interface"
+    );
+    assert!(
+        code.contains("export interface QueryChannelRequestTypes {"),
+        "request type-map interface"
+    );
+    assert!(
+        code.contains("Query: { request: Query; response: Result };"),
+        "request type-map entry maps name → request/response interfaces"
+    );
+    assert!(
+        code.contains("__types: undefined as unknown as { events: QueryChannelEventTypes; requests: QueryChannelRequestTypes }"),
+        "meta carries phantom __types carrier"
+    );
 }
 
 /// Datagram channel の TS gen output が channel_id を metadata に含む、 event only
@@ -159,6 +182,24 @@ fn test_typescript_codegen_datagram_channel() {
 
     // Events list に Transform
     assert!(code.contains("events: [\"Transform\"]"), "events list");
+
+    // Type-map: event interface + 空 request map
+    assert!(
+        code.contains("export interface PositionChannelEventTypes {"),
+        "datagram event type-map interface"
+    );
+    assert!(
+        code.contains("Transform: Transform;"),
+        "datagram event type-map entry"
+    );
+    assert!(
+        code.contains("export type PositionChannelRequestTypes = Record<string, never>;"),
+        "datagram channel has empty request type-map"
+    );
+    assert!(
+        code.contains("__types: undefined as unknown as { events: PositionChannelEventTypes; requests: PositionChannelRequestTypes }"),
+        "datagram meta carries phantom __types carrier"
+    );
 }
 
 /// 混在 schema: stream + datagram channel が並列で生成される
@@ -253,4 +294,14 @@ fn test_typescript_codegen_empty_channel() {
     assert!(code.contains("export const PingChannelMeta"));
     assert!(code.contains("events: [] as const"));
     assert!(code.contains("requests: {} as const"));
+
+    // empty channel は両 type-map が Record<string, never>
+    assert!(
+        code.contains("export type PingChannelEventTypes = Record<string, never>;"),
+        "empty channel event type-map"
+    );
+    assert!(
+        code.contains("export type PingChannelRequestTypes = Record<string, never>;"),
+        "empty channel request type-map"
+    );
 }
