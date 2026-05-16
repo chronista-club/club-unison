@@ -53,5 +53,5 @@ export { ProtoCodec } from "./codec/proto_codec.js";
 //   },
 // };
 
-// Phase 2a 段階では intentional empty export、 alpha status の正直な reflection
-export const VERSION = "1.0.0-alpha.1";
+// SDK version (= package.json と同期)
+export const VERSION = "1.0.0-alpha.2";

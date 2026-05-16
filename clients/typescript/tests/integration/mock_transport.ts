@@ -127,8 +127,10 @@ export class MockConnection implements Connection {
     const { client, server } = makeBidiPair();
     // この endpoint が client view、 peer に server view を push
     this.#streams.add(client);
-    this.#peer?.#acceptQueue.push(server);
-    this.#peer?.#streams.add(server);
+    if (this.#peer) {
+      this.#peer.#acceptQueue.push(server);
+      this.#peer.#streams.add(server);
+    }
     return client;
   }
 
@@ -139,7 +141,7 @@ export class MockConnection implements Connection {
 
   async sendDatagram(payload: Uint8Array): Promise<void> {
     if (this.#closed) throw new Error("connection closed");
-    this.#peer?.#datagramsIn.push(payload.slice());
+    if (this.#peer) this.#peer.#datagramsIn.push(payload.slice());
   }
 
   datagrams(): AsyncIterable<Uint8Array> {

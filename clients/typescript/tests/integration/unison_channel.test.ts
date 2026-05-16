@@ -27,7 +27,9 @@ const ControlMeta = {
 const codec = JsonCodec.shared as JsonCodec<ChannelPayload>;
 
 /** client/server connection ペアを用意し、 server stub 付き channel を開設 */
-async function openChannelPair(handler?: Parameters<typeof StreamServerStub>[1]) {
+async function openChannelPair(
+  handler?: ConstructorParameters<typeof StreamServerStub>[1],
+) {
   const { client, server } = MockConnection.pair();
   const clientStream = await client.openBidiStream();
   const accepted = await server.acceptStream();

@@ -1,0 +1,10 @@
+{
+  // tests/ は tsconfig.json の exclude 対象 (= published package に含めない)。
+  // この config で tests/ も型検査し、 test ファイルの型エラーを CI で catch する。
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["src/**/*", "tests/**/*"]
+}
