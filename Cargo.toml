@@ -37,6 +37,8 @@ rustls-pemfile = "2.2"
 rcgen = "0.14"
 webpki-roots = "1.0"
 futures-util = "0.3"
+# 自己署名 cert の validity 期間設定用 (rcgen の date 型に合わせる)
+time = "0.3"
 
 # WebTransport (= QUIC + HTTP/3) — ブラウザ ingress 用 (Phase 6a)
 wtransport = "0.7"

@@ -52,6 +52,8 @@
     "access": "public"
   },
   "devDependencies": {
+    "@fails-components/webtransport": "^1.6.2",
+    "@fails-components/webtransport-transport-http3-quiche": "^1.6.2",
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0",
     "vite": "^6.0.0",

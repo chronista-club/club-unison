@@ -119,8 +119,12 @@ impl CertSource {
     pub fn resolve_der(&self) -> Result<(Vec<Vec<u8>>, Vec<u8>)> {
         match self {
             Self::SelfSigned { subject_alt_names } => {
-                let cert_key = rcgen::generate_simple_self_signed(subject_alt_names.clone())
-                    .context("rcgen failed to generate self-signed certificate")?;
+                // WebTransport ingress 用は **validity を短く** する必要がある。
+                // ブラウザの `serverCertificateHashes` pinning は、 pin 対象 cert の
+                // 有効期間が 2 週間以内であることを要求する仕様 (= 長寿命の
+                // self-signed cert は pin できない)。 rcgen の既定は 1975〜4096 年
+                // の超長期なので、 ここでは 13 日有効の cert を生成する。
+                let cert_key = generate_webtransport_self_signed(subject_alt_names.clone())?;
                 let cert_der = cert_key.cert.der().to_vec();
                 let key_der = cert_key.signing_key.serialize_der();
                 Ok((vec![cert_der], key_der))
@@ -188,6 +192,38 @@ pub(super) fn generate_self_signed_with_der(
 
 fn generate_self_signed(sans: Vec<String>) -> Result<Arc<CertifiedKey>> {
     generate_self_signed_with_der(sans).map(|(key, _)| key)
+}
+
+/// WebTransport `serverCertificateHashes` 互換の自己署名 cert を生成する。
+///
+/// ブラウザ (および Node polyfill) は cert hash pinning の対象 cert に対し、
+/// **有効期間が 2 週間以内**・ECDSA 鍵であることを要求する (WebTransport spec
+/// の `serverCertificateHashes` 制約)。 rcgen の既定 cert は validity が
+/// 1975〜4096 年と超長期で pin 不可なので、 ここでは:
+///
+/// - 鍵: ECDSA P-256 (`rcgen::KeyPair::generate` の既定)
+/// - validity: `now - 1h` 〜 `now + 13d` (= clock skew を見込んで前倒し、
+///   spec の 14 日上限内)
+///
+/// に明示設定した cert を作る。 dev quickstart 用 (= 短命なので定期再生成前提)。
+pub(super) fn generate_webtransport_self_signed(
+    sans: Vec<String>,
+) -> Result<rcgen::CertifiedKey<rcgen::KeyPair>> {
+    use time::{Duration, OffsetDateTime};
+
+    let mut params = rcgen::CertificateParams::new(sans)
+        .context("rcgen CertificateParams の生成に失敗")?;
+    let now = OffsetDateTime::now_utc();
+    // clock skew 対策で not_before は 1h 前倒し、 not_after は 13 日後
+    // (= spec 上限 14 日に対して余裕を持たせる)。
+    params.not_before = now - Duration::hours(1);
+    params.not_after = now + Duration::days(13);
+
+    let signing_key = rcgen::KeyPair::generate().context("rcgen 鍵ペアの生成に失敗")?;
+    let cert = params
+        .self_signed(&signing_key)
+        .context("rcgen self-signed cert の署名に失敗")?;
+    Ok(rcgen::CertifiedKey { cert, signing_key })
 }
 
 fn load_from_files(

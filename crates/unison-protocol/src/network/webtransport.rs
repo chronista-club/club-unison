@@ -144,9 +144,12 @@ pub struct WebTransportServer {
     server: Arc<ProtocolServer>,
     cert_source: CertSource,
     endpoint: Option<Endpoint<wtransport::endpoint::endpoint_side::Server>>,
-    /// leaf 証明書の SPKI ハッシュ (= SHA-256, BytesArray 形式)。
+    /// leaf 証明書の SHA-256 ハッシュ (= BytesArray 形式)。
     /// ブラウザの `serverCertificateHashes` pinning 用、 `bind` 後に確定する。
     certificate_hash: Option<String>,
+    /// leaf 証明書の SHA-256 ハッシュ (= 区切り無しの 64 文字 hex)。
+    /// TS SDK の `trust.ts` (`certHash`) はこの plain hex 形式を期待する。
+    certificate_hash_hex: Option<String>,
 }
 
 impl WebTransportServer {
@@ -160,6 +163,7 @@ impl WebTransportServer {
             cert_source,
             endpoint: None,
             certificate_hash: None,
+            certificate_hash_hex: None,
         }
     }
 
@@ -176,9 +180,15 @@ impl WebTransportServer {
         let identity = cert_source_to_identity(&self.cert_source)?;
 
         // identity は ServerConfig へ move されるため、 先に cert hash を控える。
-        let cert_hash = identity.certificate_chain().as_slice()[0]
-            .hash()
-            .fmt(wtransport::tls::Sha256DigestFmt::BytesArray);
+        let digest = identity.certificate_chain().as_slice()[0].hash();
+        let cert_hash = digest.fmt(wtransport::tls::Sha256DigestFmt::BytesArray);
+        // TS SDK 向けの区切り無し 64 文字 hex。 ブラウザの
+        // `serverCertificateHashes` は leaf 証明書 DER 全体の SHA-256 を取る。
+        let cert_hash_hex: String = digest
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
 
         let config = ServerConfig::builder()
             .with_bind_address(addr)
@@ -196,6 +206,7 @@ impl WebTransportServer {
         );
         self.endpoint = Some(endpoint);
         self.certificate_hash = Some(cert_hash);
+        self.certificate_hash_hex = Some(cert_hash_hex);
         Ok(())
     }
 
@@ -210,6 +221,15 @@ impl WebTransportServer {
     /// 自己署名証明書を pin する。 `bind` 前は `None`。
     pub fn certificate_hash(&self) -> Option<&str> {
         self.certificate_hash.as_deref()
+    }
+
+    /// leaf 証明書の SHA-256 ハッシュを区切り無しの 64 文字 hex で取得する。
+    ///
+    /// [`Self::certificate_hash`] が返す `BytesArray` 形式に対し、 こちらは
+    /// TS SDK の `trust.ts` (`{ certHash }`) がそのまま受け取れる plain hex。
+    /// `bind` 前は `None`。
+    pub fn certificate_hash_hex(&self) -> Option<&str> {
+        self.certificate_hash_hex.as_deref()
     }
 
     /// 接続の待ち受けを開始する (= 終了までブロック)。
@@ -371,6 +391,16 @@ mod tests {
         assert!(
             wt.certificate_hash().is_some_and(|h| !h.is_empty()),
             "bind 後は cert hash が確定するべき"
+        );
+
+        // plain hex 形式 (= TS SDK 向け) は区切り無しの 64 文字 hex。
+        let hex = wt
+            .certificate_hash_hex()
+            .expect("bind 後は plain hex cert hash も確定するべき");
+        assert_eq!(hex.len(), 64, "SHA-256 は 64 文字 hex であるべき");
+        assert!(
+            hex.bytes().all(|b| b.is_ascii_hexdigit()),
+            "plain hex は hex 文字のみであるべき"
         );
     }
 }
