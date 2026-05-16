@@ -60,6 +60,10 @@ export class WebTransportConnection implements Connection {
   readonly #eventSinks = new Set<(e: ConnectionEvent) => void>();
   /** 確定した終端 event (= 後発購読者へ即時 replay) */
   #terminal: ConnectionEvent | undefined;
+  /** server-opened bidi stream を 1 本ずつ取り出す reader (= lazy) */
+  #incomingReader:
+    | ReadableStreamDefaultReader<WebTransportBidirectionalStream>
+    | undefined;
 
   /** @internal `connect()` から呼ぶ。 caller は factory を使う。 */
   constructor(url: string, transport: WebTransport) {
@@ -91,6 +95,16 @@ export class WebTransportConnection implements Connection {
   async openBidiStream(): Promise<BidiStream> {
     const stream = await this.#transport.createBidirectionalStream();
     return wrapBidiStream(stream);
+  }
+
+  async acceptBidiStream(): Promise<BidiStream | undefined> {
+    if (this.#incomingReader === undefined) {
+      this.#incomingReader =
+        this.#transport.incomingBidirectionalStreams.getReader();
+    }
+    const { value, done } = await this.#incomingReader.read();
+    if (done || value === undefined) return undefined;
+    return wrapBidiStream(value);
   }
 
   async sendDatagram(payload: Uint8Array): Promise<void> {

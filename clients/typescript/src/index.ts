@@ -54,6 +54,49 @@ export { UnisonChannelImpl } from "./channel/unison_channel.js";
 export { DatagramChannelImpl } from "./channel/datagram_channel.js";
 export { DatagramDispatcher, DispatcherInner } from "./channel/dispatcher.js";
 
+// === Phase 6b: Rust-compatible wire format ===
+export {
+  FRAME_TYPE_PROTOCOL,
+  FRAME_TYPE_RAW,
+  decodeTypedFrame,
+  encodeProtocolFrame,
+  encodeRawFrame,
+} from "./channel/frame.js";
+export type { DecodedFrame } from "./channel/frame.js";
+export { decodePacket, encodePacket } from "./wire/packet.js";
+export type { DecodedPacket, PacketOptions } from "./wire/packet.js";
+export {
+  PACKET_VERSION,
+  decodePacketHeader,
+  encodePacketHeader,
+  newPacketHeader,
+} from "./wire/packet_header.js";
+export type { PacketHeader } from "./wire/packet_header.js";
+export {
+  MSG_TYPE_ERROR,
+  MSG_TYPE_EVENT,
+  MSG_TYPE_REQUEST,
+  MSG_TYPE_RESPONSE,
+  decodeProtocolMessage,
+  encodeProtocolMessage,
+  messageTypeName,
+  messageTypeValue,
+} from "./wire/protocol_message.js";
+export type { MessageTypeName, ProtocolMessage } from "./wire/protocol_message.js";
+
+// === Phase 6b: identity handshake ===
+export {
+  DEFAULT_IDENTITY_TIMEOUT_MS,
+  performIdentityHandshake,
+  readIdentity,
+} from "./channel/identity.js";
+export type {
+  ChannelDirection,
+  ChannelInfo,
+  ChannelStatus,
+  ServerIdentity,
+} from "./channel/identity.js";
+
 // === Phase 2d: codec ===
 export type { Codec, CodecFormat } from "./codec/codec.js";
 export { CodecError } from "./codec/codec.js";

@@ -1,19 +1,41 @@
 /**
- * Stream channel wrapper (= Phase 2c)。
+ * Stream channel wrapper (= Phase 2c、 Phase 6b で Rust wire 互換に再構築)。
  *
- * QUIC bidi stream 上の request/response + server-pushed event。 内部で 1 本の
- * recv loop を持ち、 受信 frame を type tag で振り分ける:
+ * QUIC / WebTransport bidi stream 上の request/response + server-pushed event。
+ * 内部で 1 本の recv loop を持ち、 受信 `ProtocolMessage` を `msgType` で振り分ける:
  * - `response` / `error` → `id` 対応の pending request を resolve/reject
- * - `event` → events() の AsyncIterable queue に流す
+ * - `event` / `request` → events() の AsyncIterable queue に流す
  *
- * Rust `network/channel.rs` の `UnisonChannel` に対応する TS port。
+ * Rust `network/channel.rs` の `UnisonChannel` に対応する TS port。 wire は
+ * `frame.ts` の typed frame (= `[4B len][0x00][UnisonPacket]`) で Rust server と
+ * byte 一致する。
+ *
+ * ## channel open
+ *
+ * stream open 直後に `ProtocolMessage { method: "__channel:{name}",
+ * msgType: request }` を 1 本送る (= Rust `client.rs::open_channel` と同形)。
+ * Rust server は現状 ack を返さない (= fire-and-forget)、 そのため `waitAccepted`
+ * は open frame の送信完了で resolve する。 明示 ack (= open_ack) は Phase 6c で
+ * server 側に入る予定。
  */
 
 import type { Codec } from "../codec/codec.js";
 import type { BidiStream } from "../transport/types.js";
 import { defaultCodec } from "./default_codec.js";
 import { AsyncQueue } from "./async_queue.js";
-import { decodeFrameBody, encodeFrame, type FrameHeader, readFrames } from "./frame.js";
+import {
+  type DecodedFrame,
+  decodeTypedFrame,
+  encodeProtocolFrame,
+  readFrames,
+} from "./frame.js";
+import {
+  MSG_TYPE_ERROR,
+  MSG_TYPE_EVENT,
+  MSG_TYPE_REQUEST,
+  MSG_TYPE_RESPONSE,
+  type ProtocolMessage,
+} from "../wire/protocol_message.js";
 import type {
   ChannelMeta,
   ChannelPayload,
@@ -29,8 +51,11 @@ import type {
 /** request() のデフォルト timeout (= Rust 側と同じ 30 秒) */
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
-/** channel open handshake のデフォルト timeout (= server accept 待ち) */
+/** channel open handshake のデフォルト timeout (= 後方互換のため引数に残す) */
 export const DEFAULT_OPEN_TIMEOUT_MS = 5_000;
+
+/** `__channel:` route prefix (= Rust `client.rs::open_channel`) */
+const CHANNEL_ROUTE_PREFIX = "__channel:";
 
 /** 応答待ち request 1 件の resolver ペア */
 interface PendingRequest {
@@ -56,10 +81,8 @@ export class UnisonChannelImpl<M extends ChannelMeta>
   readonly #events = new AsyncQueue<ChannelPayload>();
   /** recv loop の完了 promise */
   readonly #recvLoop: Promise<void>;
-  /** server が `open_ack` を返したら resolve (= peer accept の証拠) */
-  #ackResolve: (() => void) | undefined;
-  #ackReject: ((error: Error) => void) | undefined;
-  #acked = false;
+  /** open frame 送信前に stream 終端したら set される */
+  #recvEnded = false;
   #nextId = 1;
   #closed = false;
 
@@ -77,89 +100,81 @@ export class UnisonChannelImpl<M extends ChannelMeta>
   }
 
   /**
-   * @internal `openChannel` から呼ぶ。 `open` frame を送り、 server の
-   * `open_ack` を `timeoutMs` まで待つ。 timeout / stream 終端で reject
-   * (= no-accept を caller に signal、 Blocker 3)。
+   * @internal `openChannel` から呼ぶ。 `__channel:{name}` open frame を送り、
+   * stream が生きていることを確認する。
+   *
+   * Rust server は open ack を返さない (= Phase 6c で追加予定) ため、 open frame
+   * の送信完了をもって accept 扱いとする。 send が失敗 / stream が即終端した
+   * 場合は no-accept として reject する。
    */
-  async waitAccepted(timeoutMs: number): Promise<void> {
-    const ack = new Promise<void>((resolve, reject) => {
-      this.#ackResolve = resolve;
-      this.#ackReject = reject;
-    });
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        reject(
-          new Error(
-            `channel "${this.name}" was not accepted within ${timeoutMs}ms ` +
-              `(= no server peer accepted the bidi stream)`,
-          ),
-        );
-      }, timeoutMs);
-    });
+  async waitAccepted(_timeoutMs: number = DEFAULT_OPEN_TIMEOUT_MS): Promise<void> {
+    const openMsg: ProtocolMessage = {
+      id: this.#nextId++,
+      method: `${CHANNEL_ROUTE_PREFIX}${this.name}`,
+      msgType: MSG_TYPE_REQUEST,
+      payload: this.#codec.encode({}),
+    };
     try {
-      await this.#writer.write(
-        encodeFrame(
-          { id: 0, method: this.name, type: "open" },
-          this.#codec.encode({}),
-        ),
+      await this.#writer.write(encodeProtocolFrame(openMsg));
+    } catch (cause) {
+      throw new Error(
+        `channel "${this.name}" could not be opened ` +
+          `(= failed to write the __channel open frame)`,
+        { cause },
       );
-      await Promise.race([ack, timeout]);
-    } finally {
-      if (timer !== undefined) clearTimeout(timer);
+    }
+    // open frame は流せたが recv loop が既に終端しているなら peer は居ない
+    if (this.#recvEnded) {
+      throw new Error(
+        `channel "${this.name}" closed before it was accepted ` +
+          `(= no server peer accepted the bidi stream)`,
+      );
     }
   }
 
-  /** 受信 frame を type tag で振り分ける background loop */
+  /** 受信 frame を msgType で振り分ける background loop */
   async #runRecvLoop(): Promise<void> {
     try {
       for await (const body of readFrames(this.#stream.readable)) {
-        let header: FrameHeader;
-        let payload: Uint8Array;
+        let decoded: DecodedFrame;
         try {
-          ({ header, payload } = decodeFrameBody(body));
+          decoded = decodeTypedFrame(body);
         } catch {
           continue; // malformed frame は drop
         }
-        if (header.type === "open_ack") {
-          // server が accept した証拠 — waitAccepted() を resolve
-          this.#acked = true;
-          this.#ackResolve?.();
-          this.#ackResolve = undefined;
-          this.#ackReject = undefined;
-        } else if (header.type === "open") {
-          // client は open を受けない (= server 専用)、 drop
-        } else if (header.type === "response" || header.type === "error") {
-          const pending = this.#pending.get(header.id);
-          if (pending === undefined) continue;
-          this.#pending.delete(header.id);
-          if (header.type === "error") {
-            pending.reject(new Error(this.#errorText(payload)));
-          } else {
-            this.#tryResolve(pending, payload);
-          }
-        } else {
-          // event / request → events queue
-          this.#tryPushEvent(payload);
+        if (decoded.type === "raw") {
+          // raw frame は stream channel では未使用 — drop
+          continue;
         }
+        this.#dispatch(decoded.message);
       }
     } catch {
       // stream error は terminate 扱い
     } finally {
+      this.#recvEnded = true;
       this.#failAllPending("channel closed");
-      // open handshake 未完なら no-accept として reject
-      if (!this.#acked && this.#ackReject !== undefined) {
-        this.#ackReject(
-          new Error(
-            `channel "${this.name}" closed before it was accepted ` +
-              `(= no server peer accepted the bidi stream)`,
-          ),
-        );
-        this.#ackResolve = undefined;
-        this.#ackReject = undefined;
-      }
       this.#events.end();
     }
+  }
+
+  /** 1 個の `ProtocolMessage` を pending / events へ振り分ける */
+  #dispatch(message: ProtocolMessage): void {
+    if (
+      message.msgType === MSG_TYPE_RESPONSE ||
+      message.msgType === MSG_TYPE_ERROR
+    ) {
+      const pending = this.#pending.get(message.id);
+      if (pending === undefined) return;
+      this.#pending.delete(message.id);
+      if (message.msgType === MSG_TYPE_ERROR) {
+        pending.reject(new Error(this.#errorText(message.payload)));
+      } else {
+        this.#tryResolve(pending, message.payload);
+      }
+      return;
+    }
+    // event / request → events queue
+    this.#tryPushEvent(message.payload);
   }
 
   #tryResolve(pending: PendingRequest, payload: Uint8Array): void {
@@ -199,10 +214,12 @@ export class UnisonChannelImpl<M extends ChannelMeta>
   ): Promise<ResponseType<M, N>> {
     if (this.#closed) throw new Error(`channel "${this.name}" is closed`);
     const id = this.#nextId++;
-    const frame = encodeFrame(
-      { id, method: name, type: "request" },
-      this.#codec.encode(payload as ChannelPayload),
-    );
+    const frame = encodeProtocolFrame({
+      id,
+      method: name,
+      msgType: MSG_TYPE_REQUEST,
+      payload: this.#codec.encode(payload as ChannelPayload),
+    });
     const result = new Promise<ChannelPayload>((resolve, reject) => {
       this.#pending.set(id, { resolve, reject });
     });
@@ -231,10 +248,12 @@ export class UnisonChannelImpl<M extends ChannelMeta>
   ): Promise<void> {
     if (this.#closed) throw new Error(`channel "${this.name}" is closed`);
     await this.#writer.write(
-      encodeFrame(
-        { id: 0, method: name, type: "event" },
-        this.#codec.encode(payload as ChannelPayload),
-      ),
+      encodeProtocolFrame({
+        id: 0,
+        method: name,
+        msgType: MSG_TYPE_EVENT,
+        payload: this.#codec.encode(payload as ChannelPayload),
+      }),
     );
   }
 

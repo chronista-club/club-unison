@@ -7,7 +7,7 @@
  *   accept しなければ reject する
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { connect } from "../../src/client.js";
 import { DatagramChannelImpl } from "../../src/channel/datagram_channel.js";
 import { DatagramDispatcher } from "../../src/channel/dispatcher.js";
@@ -124,51 +124,60 @@ describe("Blocker 1: payload type narrowing via __types carrier", () => {
 });
 
 // ============================================================
-// Blocker 3: openChannel() no-accept signal
+// Blocker 3: openChannel() open-frame send + torn-down signal
+//
+// Phase 6b: Rust server は open ack (= open_ack) を返さない設計のため、
+// `openChannel` は `__channel:` open frame の送信完了で resolve する
+// (= optimistic、 Rust `client.rs::open_channel` と同形)。 明示 ack は
+// Phase 6c で server 側に入る予定。 ここでは「open frame を流せた」/
+// 「accept 前に stream が落ちたら reject」の 2 ケースを検証する。
+//
+// connect は identity handshake を待つ (= 本 test の mock server は identity を
+// 送らない) ため `awaitIdentity: false` で skip する。
 // ============================================================
 
-describe("Blocker 3: openChannel signals when no peer accepts", () => {
-  it("rejects when no server peer accepts the bidi stream (timeout)", async () => {
-    const transport = new MockTransport();
-    transport.prepare(); // server endpoint を accept させない
-    const client = await connect({ url: "https://x.invalid", transport });
-
-    // server が stream を accept しない → open_ack 来ない → timeout reject
-    await expect(client.openChannel(ControlMeta, 50)).rejects.toThrow(
-      /not accepted within 50ms/,
-    );
-    await client.disconnect();
-  });
-
-  it("rejects when the stream is torn down before acceptance", async () => {
+describe("Blocker 3: openChannel open-frame + torn-down signal", () => {
+  it("resolves once the __channel open frame is written", async () => {
     const transport = new MockTransport();
     const { server } = transport.prepare();
-    const client = await connect({ url: "https://x.invalid", transport });
+    const client = await connect({
+      url: "https://x.invalid",
+      transport,
+      awaitIdentity: false,
+    });
 
-    const opening = client.openChannel(ControlMeta, 5_000);
-    await server.close("server gone"); // accept 前に connection drop
-    await expect(opening).rejects.toThrow(/closed before it was accepted/);
-    await client.disconnect();
-  });
-
-  it("resolves when a server peer accepts and acks the channel", async () => {
-    const transport = new MockTransport();
-    const { server } = transport.prepare();
-    const client = await connect({ url: "https://x.invalid", transport });
-
-    // server 側: stream を accept して StreamServerStub を立てる (= open_ack を返す)
+    // server 側: stream を accept して StreamServerStub を立てる
     const serverSide = (async () => {
       const accepted = await server.acceptStream();
       if (accepted.done) throw new Error("no stream");
       return new StreamServerStub(accepted.value);
     })();
 
-    const channel = await client.openChannel(ControlMeta, 5_000);
+    const channel = await client.openChannel(ControlMeta);
     expect(channel.name).toBe("control");
 
     const stub = await serverSide;
+    // server stub は `__channel:control` open probe を観測しているはず
+    await vi.waitFor(() => expect(stub.openedChannel).toBe("control"));
+
     await channel.close();
     await stub.close();
+    await client.disconnect();
+  });
+
+  it("rejects when the stream is torn down before the open frame", async () => {
+    const transport = new MockTransport();
+    const { server } = transport.prepare();
+    const client = await connect({
+      url: "https://x.invalid",
+      transport,
+      awaitIdentity: false,
+    });
+
+    await server.close("server gone"); // open 前に connection drop
+    await expect(client.openChannel(ControlMeta)).rejects.toThrow(
+      /could not be opened|closed before it was accepted|connection closed/,
+    );
     await client.disconnect();
   });
 });

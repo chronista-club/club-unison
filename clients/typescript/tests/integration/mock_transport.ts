@@ -139,6 +139,12 @@ export class MockConnection implements Connection {
     return this.#acceptQueue.next();
   }
 
+  /** `Connection` interface 実装: peer-opened bidi stream を 1 本 accept */
+  async acceptBidiStream(): Promise<BidiStream | undefined> {
+    const { value, done } = await this.#acceptQueue.next();
+    return done ? undefined : value;
+  }
+
   async sendDatagram(payload: Uint8Array): Promise<void> {
     if (this.#closed) throw new Error("connection closed");
     if (this.#peer) this.#peer.#datagramsIn.push(payload.slice());

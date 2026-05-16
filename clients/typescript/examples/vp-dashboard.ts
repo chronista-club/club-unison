@@ -17,7 +17,7 @@ import { connect, type ChannelMeta, type DatagramChannelMeta } from "../src/inde
 import { JsonCodec } from "../src/codec/json_codec.js";
 import { encodeVarint } from "../src/channel/varint.js";
 import { MockTransport, type MockConnection } from "../tests/integration/mock_transport.js";
-import { StreamServerStub } from "../tests/integration/server_stub.js";
+import { StreamServerStub, sendIdentity } from "../tests/integration/server_stub.js";
 import type { BidiStream } from "../src/transport/types.js";
 
 // ============================================================
@@ -112,6 +112,12 @@ async function runDashboard(transport: MockTransport): Promise<void> {
     transport, // 本番では省略 (= WebTransport default)
   });
 
+  // Server identity (= connect 時の handshake で受信済み)
+  const identity = client.serverIdentity();
+  if (identity !== undefined) {
+    console.log(`[identity] connected to ${identity.name} v${identity.version}`);
+  }
+
   // Connection lifecycle を監視 (= 自前 reconnect の起点、 library は auto-reconnect しない)
   void (async () => {
     for await (const ev of client.events()) {
@@ -184,6 +190,9 @@ async function acceptStream(server: MockConnection): Promise<BidiStream> {
 }
 
 async function runServer(server: MockConnection): Promise<void> {
+  // identity handshake (= Rust server と同じく接続直後に identity stream を送る)
+  await sendIdentity(server);
+
   // control channel (request/response)、 agent_status channel (event push) を accept
   const controlStub = new StreamServerStub(await acceptStream(server), (method) => {
     if (method === "SubscribeMetric") return { ok: true };

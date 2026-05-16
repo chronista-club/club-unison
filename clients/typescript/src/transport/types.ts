@@ -47,6 +47,14 @@ export interface BidiStream {
 export interface Connection {
   /** Bidi stream を open (= request/response channel 用) */
   openBidiStream(): Promise<BidiStream>;
+  /**
+   * Peer (= server) が open した bidi stream を 1 本 accept する。
+   *
+   * Unison server は接続直後に bidi stream を 1 本 open し identity handshake
+   * を送る。 stream が来なければ resolve せず待ち続ける。 connection close で
+   * `undefined` を返す。
+   */
+  acceptBidiStream(): Promise<BidiStream | undefined>;
   /** Datagram 1 件送信 (= MTU 超過は reject) */
   sendDatagram(payload: Uint8Array): Promise<void>;
   /** 受信 datagram の連続 stream */

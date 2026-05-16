@@ -12,6 +12,11 @@ import type { Codec } from "./codec/codec.js";
 import { defaultCodec } from "./channel/default_codec.js";
 import { DatagramChannelImpl } from "./channel/datagram_channel.js";
 import { DatagramDispatcher } from "./channel/dispatcher.js";
+import {
+  DEFAULT_IDENTITY_TIMEOUT_MS,
+  performIdentityHandshake,
+  type ServerIdentity,
+} from "./channel/identity.js";
 import type {
   ChannelMeta,
   ChannelPayload,
@@ -35,6 +40,14 @@ export interface UnisonConnectOptions extends ConnectOptions {
   transport?: Transport;
   /** 全 channel 共有の payload codec (= default: JsonCodec、 design §5.1) */
   codec?: Codec<ChannelPayload>;
+  /**
+   * identity handshake を待つか (= default: true)。 Unison server は接続直後に
+   * identity stream を 1 本送る。 `false` にすると connect は handshake を待たず
+   * 即 resolve する (= identity 未対応 server / 高速接続向け)。
+   */
+  awaitIdentity?: boolean;
+  /** identity handshake の timeout ms (= default: 5000) */
+  identityTimeoutMs?: number;
 }
 
 /**
@@ -45,13 +58,29 @@ export class UnisonClient {
   readonly #connection: Connection;
   readonly #dispatcher: DatagramDispatcher;
   readonly #codec: Codec<ChannelPayload>;
+  readonly #identity: ServerIdentity | undefined;
   #closed = false;
 
   /** @internal `connect()` から呼ぶ。 */
-  constructor(connection: Connection, codec: Codec<ChannelPayload> = defaultCodec) {
+  constructor(
+    connection: Connection,
+    codec: Codec<ChannelPayload> = defaultCodec,
+    identity?: ServerIdentity,
+  ) {
     this.#connection = connection;
     this.#dispatcher = new DatagramDispatcher(connection);
     this.#codec = codec;
+    this.#identity = identity;
+  }
+
+  /**
+   * connect 時に受信した server identity (= 自己紹介)。
+   *
+   * `awaitIdentity: false` で接続した / handshake が来なかった場合は
+   * `undefined`。
+   */
+  serverIdentity(): ServerIdentity | undefined {
+    return this.#identity;
   }
 
   /** Connection lifecycle event の購読 (= connected / disconnected / error) */
@@ -106,5 +135,21 @@ export class UnisonClient {
 export async function connect(opts: UnisonConnectOptions): Promise<UnisonClient> {
   const transport = opts.transport ?? new WebTransportClient();
   const connection = await transport.connect(opts);
-  return new UnisonClient(connection, opts.codec ?? defaultCodec);
+  const codec = opts.codec ?? defaultCodec;
+
+  // identity handshake (= server-opened stream の `__identity` を読む)。
+  // default で待つが、 失敗しても connection 自体は使えるので best-effort。
+  let identity: ServerIdentity | undefined;
+  if (opts.awaitIdentity !== false) {
+    try {
+      identity = await performIdentityHandshake(
+        connection,
+        opts.identityTimeoutMs ?? DEFAULT_IDENTITY_TIMEOUT_MS,
+      );
+    } catch {
+      // identity を返さない server / timeout — connection は維持し identity なし
+      identity = undefined;
+    }
+  }
+  return new UnisonClient(connection, codec, identity);
 }
