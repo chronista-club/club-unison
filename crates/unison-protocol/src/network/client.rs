@@ -101,7 +101,14 @@ impl ProtocolClient {
         }
     }
 
-    /// Create a new client with QUIC transport
+    /// Create a new client with QUIC transport.
+    ///
+    /// **注意**: この constructor は [`QuicClient::new`] を経由し、証明書検証を
+    /// 行わない insecure な client を構築する (構築時に `tracing::warn!` が出る)。
+    /// production では [`QuicClient::builder`] + [`ProtocolClient::new`] で
+    /// 明示的に [`TrustAnchors`] を指定すること。
+    ///
+    /// [`TrustAnchors`]: crate::network::trust::TrustAnchors
     pub fn new_default() -> Result<Self> {
         let transport = QuicClient::new()?;
         let (event_tx, _) = broadcast::channel(16);

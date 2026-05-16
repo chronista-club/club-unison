@@ -17,7 +17,7 @@ import type {
 } from "./types.js";
 
 /** skip-verify (= cert pinning) を許可する loopback host */
-const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 
 /**
  * cert pinning は loopback host にのみ許可する hard gate。

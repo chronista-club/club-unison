@@ -34,6 +34,11 @@ pub enum SerializationError {
     #[error("Frame too large: {size} bytes (max: {max_size} bytes)")]
     PacketTooLarge { size: usize, max_size: usize },
 
+    #[error(
+        "Decompressed payload size mismatch: header claims {claimed} bytes but got {actual} bytes"
+    )]
+    DecompressedSizeMismatch { claimed: usize, actual: usize },
+
     #[error("Invalid header")]
     InvalidHeader,
 
@@ -160,7 +165,21 @@ impl PacketDeserializer {
     }
 
     /// パケット全体をパースし、 ヘッダーと (必要なら解凍済みの) payload を返す
+    /// （デフォルト設定）
     pub fn parse(bytes: &[u8]) -> Result<(UnisonPacketHeader, Vec<u8>), SerializationError> {
+        Self::parse_with_config(bytes, &PacketConfig::default())
+    }
+
+    /// パケット全体をパースし、 ヘッダーと (必要なら解凍済みの) payload を返す
+    /// （カスタム設定）
+    ///
+    /// 圧縮 payload の解凍時には、解凍後サイズを `config.max_payload_size` で
+    /// 上限チェックする。 これにより小さな圧縮フレームが GB 級に膨張する
+    /// zstd decompression bomb を防ぐ。
+    pub fn parse_with_config(
+        bytes: &[u8],
+        config: &PacketConfig,
+    ) -> Result<(UnisonPacketHeader, Vec<u8>), SerializationError> {
         if bytes.len() < 4 {
             return Err(SerializationError::InvalidHeader);
         }
@@ -186,8 +205,36 @@ impl PacketDeserializer {
         }
 
         let payload = if header.is_compressed() {
-            decode_all(payload_bytes)
-                .map_err(|e| SerializationError::DecompressionFailed(e.to_string()))?
+            // 解凍後サイズが膨張するのを防ぐため、まず header が主張する
+            // 非圧縮サイズ (payload_length) を上限チェックする。
+            let claimed = header.payload_length as usize;
+            if claimed > config.max_payload_size {
+                return Err(SerializationError::PacketTooLarge {
+                    size: claimed,
+                    max_size: config.max_payload_size,
+                });
+            }
+
+            let decompressed = decode_all(payload_bytes)
+                .map_err(|e| SerializationError::DecompressionFailed(e.to_string()))?;
+
+            // zstd decompression bomb 対策: 解凍後の実サイズを上限チェック。
+            if decompressed.len() > config.max_payload_size {
+                return Err(SerializationError::PacketTooLarge {
+                    size: decompressed.len(),
+                    max_size: config.max_payload_size,
+                });
+            }
+
+            // header が主張する非圧縮サイズと実サイズの一致を検証。
+            if decompressed.len() != claimed {
+                return Err(SerializationError::DecompressedSizeMismatch {
+                    claimed,
+                    actual: decompressed.len(),
+                });
+            }
+
+            decompressed
         } else {
             payload_bytes.to_vec()
         };

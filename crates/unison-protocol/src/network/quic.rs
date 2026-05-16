@@ -292,7 +292,22 @@ impl QuicClient {
         }
     }
 
+    /// 証明書検証を行わない insecure な client を構築する。
+    ///
+    /// **注意**: この constructor は [`TrustAnchors::SkipVerification`] を
+    /// 暗黙に選択するため、サーバー証明書を一切検証しない。 production では
+    /// [`QuicClient::builder`] で明示的に [`TrustAnchors`] を指定すること。
+    /// なお [`QuicClient::connect`] は SkipVerification 時の接続先を loopback に
+    /// 制限する。
+    ///
+    /// [`TrustAnchors`]: crate::network::trust::TrustAnchors
+    /// [`TrustAnchors::SkipVerification`]: crate::network::trust::TrustAnchors::SkipVerification
     pub fn new() -> Result<Self> {
+        warn!(
+            "QuicClient::new() constructs an INSECURE client (no server certificate \
+             verification). Use QuicClient::builder() with an explicit TrustAnchors for \
+             the secure path."
+        );
         let (tx, rx) = mpsc::unbounded_channel();
         Ok(Self {
             endpoint: Mutex::new(None),
@@ -381,6 +396,22 @@ impl QuicClient {
     pub async fn connect(&self, url: &str) -> Result<()> {
         // URL を解決 (IPv4 / IPv6 / DNS hostname)
         let addr = Self::parse_server_address(url).await?;
+
+        // SkipVerification は loopback 接続にのみ許可する (TS 側 `enforceTrustGate`
+        // と対称)。 任意のホストに対する証明書検証スキップを防ぐ。
+        if matches!(
+            self.trust_anchors,
+            super::trust::TrustAnchors::SkipVerification
+        ) && !addr.ip().is_loopback()
+        {
+            return Err(anyhow::anyhow!(
+                "SkipVerification is restricted to loopback; got {} (resolved from {}). \
+                 Use QuicClient::builder() with an explicit TrustAnchors to connect to \
+                 non-loopback hosts.",
+                addr,
+                url
+            ));
+        }
 
         // v0.8.0+: builder で設定された trust_anchors を使う (default = SkipVerification、
         // builder 経由で TrustAnchors::System 等に明示変更可能)
@@ -577,10 +608,10 @@ impl QuicServer {
         let cert_der_bytes = cert_key.cert.der().to_vec();
         let private_key_der_bytes = cert_key.signing_key.serialize_der();
 
-        Ok((
-            vec![CertificateDer::from(cert_der_bytes)],
-            PrivateKeyDer::try_from(private_key_der_bytes).unwrap(),
-        ))
+        let private_key = PrivateKeyDer::try_from(private_key_der_bytes)
+            .map_err(|e| anyhow::anyhow!("Failed to wrap private key: {}", e))?;
+
+        Ok((vec![CertificateDer::from(cert_der_bytes)], private_key))
     }
 
     /// 外部ファイルから証明書を読み込み（本番環境デプロイ用）
