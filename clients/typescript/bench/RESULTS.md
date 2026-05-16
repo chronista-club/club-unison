@@ -2,6 +2,11 @@
 
 **v1.0.0-alpha.2 baseline**
 
+> **構造化ログ**: 数値データは KDL で `bench/runs/<version>.kdl` に immutable 記録。
+> `bench/index.kdl` が append-only の run インデックス。 `bench/viewer.html` を
+> 静的サーバ経由で開くと run 横断の比較表（`cd clients/typescript/bench && npx serve`）。
+> 本 md は alpha.2 baseline の詳細分析（= 人間向け companion）。
+
 | 項目 | 値 |
 |------|-----|
 | 計測日 | 2026-05-16 |

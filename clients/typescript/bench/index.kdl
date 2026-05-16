@@ -1,0 +1,7 @@
+// Unison bench log — append-only index。
+// 新 run が出るたび `run` 行を 1 つ追加するだけ。 各 run の実数値は ref が
+// 指す runs/*.kdl に immutable で存在する。 viewer.html がこれを読んで比較表示。
+// = 不変エントリ (runs/) + 成長するインデックス (このファイル) の構造。
+bench-log domain="ts-sdk" {
+    run ref="runs/2026-05-16-alpha.2.kdl" version="1.0.0-alpha.2" date="2026-05-16"
+}
