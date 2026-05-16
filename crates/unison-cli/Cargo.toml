@@ -1,0 +1,36 @@
+[package]
+name = "unison-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Developer CLI for the Unison Protocol — ping / sniff / mock / schema-lint."
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+# bin 名は bare `unison` (= 開発者が叩く CLI 名)
+[[bin]]
+name = "unison"
+path = "src/main.rs"
+
+[dependencies]
+# club-unison: crates.io package、lib identifier は `unison`
+club-unison = { path = "../unison-protocol" }
+
+# CLI
+clap.workspace = true
+
+# Runtime
+tokio.workspace = true
+
+# Serialization
+serde_json.workspace = true
+
+# Error handling
+anyhow.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true

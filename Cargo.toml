@@ -3,6 +3,7 @@ members = [
     "crates/unison-protocol",
     "crates/unison-agent",
     "crates/unison-mcp-probe",
+    "crates/unison-cli",
 ]
 resolver = "2"
 
