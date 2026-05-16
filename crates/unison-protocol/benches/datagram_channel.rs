@@ -29,7 +29,7 @@
 //! 概ね「channel encode/decode + dispatcher routing + JSON cost」 の合計、 burst 1000
 //! で JSON encoding の cost が顕在化する想定。
 
-use club_unison::{ProtocolClient, ProtocolServer};
+use unison::{ProtocolClient, ProtocolServer};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use serde::{Deserialize, Serialize};
 use std::hint::black_box;

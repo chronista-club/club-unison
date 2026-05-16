@@ -41,7 +41,7 @@ impl Default for UnisonProbe {
 // Tool input schemas
 // ---------------------------------------------------------------------------
 
-/// Trust mode selector for the probe (matches `club_unison::TrustAnchors`).
+/// Trust mode selector for the probe (matches `unison::TrustAnchors`).
 ///
 /// - `"skip"`: skip cert verification (dev only, against self-signed servers)
 /// - `"system"`: use OS/webpki-roots trust store (for public servers)
@@ -59,10 +59,10 @@ impl Default for TrustMode {
 }
 
 impl TrustMode {
-    fn to_anchors(&self) -> club_unison::network::TrustAnchors {
+    fn to_anchors(&self) -> unison::network::TrustAnchors {
         match self {
-            Self::Skip => club_unison::network::TrustAnchors::SkipVerification,
-            Self::System => club_unison::network::TrustAnchors::System,
+            Self::Skip => unison::network::TrustAnchors::SkipVerification,
+            Self::System => unison::network::TrustAnchors::System,
         }
     }
 }
@@ -102,8 +102,8 @@ impl UnisonProbe {
         &self,
         Parameters(args): Parameters<PingArgs>,
     ) -> Result<CallToolResult, McpError> {
-        use club_unison::ProtocolClient;
-        use club_unison::network::quic::QuicClient;
+        use unison::ProtocolClient;
+        use unison::network::quic::QuicClient;
 
         // v0.8.0 builder で trust anchor を明示
         let quic = QuicClient::builder()
@@ -128,8 +128,8 @@ impl UnisonProbe {
         &self,
         Parameters(args): Parameters<CallArgs>,
     ) -> Result<CallToolResult, McpError> {
-        use club_unison::ProtocolClient;
-        use club_unison::network::quic::QuicClient;
+        use unison::ProtocolClient;
+        use unison::network::quic::QuicClient;
 
         // v0.8.0 builder で trust anchor を明示
         let quic = QuicClient::builder()

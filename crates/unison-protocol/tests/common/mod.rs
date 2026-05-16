@@ -1,4 +1,4 @@
-use club_unison::network::{MessageType, ProtocolMessage};
+use unison::network::{MessageType, ProtocolMessage};
 
 /// テスト用の ProtocolMessage を生成
 #[allow(dead_code)]
@@ -27,8 +27,8 @@ pub fn make_event(method: &str, payload: serde_json::Value) -> ProtocolMessage {
 pub fn make_identity(
     name: &str,
     channels: &[&str],
-) -> club_unison::network::identity::ServerIdentity {
-    use club_unison::network::identity::*;
+) -> unison::network::identity::ServerIdentity {
+    use unison::network::identity::*;
     let mut identity = ServerIdentity::new(name, "0.1.0", "test");
     for ch in channels {
         identity.add_channel(ChannelInfo {

@@ -23,7 +23,7 @@
 //! [max iters=N] sent=X server_recv=Y client_recv=Z drop=W% sent/s=A recv/s=B
 //! ```
 
-use club_unison::{ProtocolClient, ProtocolServer};
+use unison::{ProtocolClient, ProtocolServer};
 use criterion::{Criterion, criterion_group, criterion_main};
 use serde::{Deserialize, Serialize};
 use std::hint::black_box;

@@ -2,9 +2,9 @@
 //!
 //! チャネル型の生成（UnisonChannel, ConnectionBuilder）を検証。
 
-use club_unison::codegen::CodeGenerator;
-use club_unison::parser::TypeRegistry;
-use club_unison::prelude::*;
+use unison::codegen::CodeGenerator;
+use unison::parser::TypeRegistry;
+use unison::prelude::*;
 
 #[test]
 fn test_e2e_connection_builder_generation() {

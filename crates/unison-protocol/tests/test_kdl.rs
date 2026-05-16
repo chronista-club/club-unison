@@ -1,4 +1,4 @@
-use club_unison::prelude::*;
+use unison::prelude::*;
 
 #[test]
 fn test_basic_kdl_parsing() {

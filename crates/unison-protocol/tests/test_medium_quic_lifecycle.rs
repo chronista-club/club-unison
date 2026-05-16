@@ -10,9 +10,9 @@ use std::time::Duration;
 use tokio::time::timeout;
 use tracing::{Level, info};
 
-use club_unison::network::MessageType;
-use club_unison::network::channel::UnisonChannel;
-use club_unison::{ProtocolClient, ProtocolServer};
+use unison::network::MessageType;
+use unison::network::channel::UnisonChannel;
+use unison::{ProtocolClient, ProtocolServer};
 
 /// テスト用のトレーシング初期化（複数テストで呼ばれても安全）
 fn init_tracing() {

@@ -1,6 +1,6 @@
 mod common;
 
-use club_unison::network::ProtocolServer;
+use unison::network::ProtocolServer;
 
 #[tokio::test]
 async fn test_integ_register_and_get_channel_handler() {

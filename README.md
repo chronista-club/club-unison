@@ -8,14 +8,14 @@ KDL スキーマベースの型安全な QUIC 通信フレームワーク。
 
 ```toml
 [dependencies]
-# crates.io package = `club-unison`、Rust crate identifier = `club_unison`
+# crates.io package = `club-unison`、Rust crate identifier = `unison`
 club-unison = "^0.10"
 tokio = { version = "1.52", features = ["full"] }
 ```
 
 ```rust
-use club_unison::network::{CertSource, TrustAnchors};
-use club_unison::network::quic::{QuicClient, QuicServer};
+use unison::network::{CertSource, TrustAnchors};
+use unison::network::quic::{QuicClient, QuicServer};
 
 // Server: TLS cert を CertSource enum で明示選択
 let server_config = QuicServer::configure_server_with(CertSource::dev_localhost()).await?;
@@ -24,7 +24,7 @@ let server_config = QuicServer::configure_server_with(CertSource::dev_localhost(
 let client_config = QuicClient::configure_client_with(TrustAnchors::System).await?;
 
 // 内部メッシュ: 両端を 1 つの pair で生成
-use club_unison::network::InternalMeshKeypair;
+use unison::network::InternalMeshKeypair;
 let pair = InternalMeshKeypair::generate(["broker.local".into(), "*.unison.local".into()])?;
 // pair.server_cert_source → server 側
 // pair.client_trust_anchors → client 側
@@ -64,8 +64,8 @@ sequenceDiagram
 ## サーバーを書く
 
 ```rust
-use club_unison::{ProtocolServer, NetworkError};
-use club_unison::network::UnisonChannel;
+use unison::{ProtocolServer, NetworkError};
+use unison::network::UnisonChannel;
 use serde_json::json;
 
 #[tokio::main]
@@ -100,7 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## クライアントを書く
 
 ```rust
-use club_unison::ProtocolClient;
+use unison::ProtocolClient;
 use serde_json::json;
 
 #[tokio::main]
@@ -208,7 +208,7 @@ protocol "my-service" version="1.0.0" {
 
 | クレート | 説明 |
 |---------|------|
-| [`unison-protocol`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-protocol) | コアライブラリ。crates.io では `club-unison` として公開、Rust crate identifier は `club_unison`。KDL スキーマ、QUIC、チャネル、パケット |
+| [`unison-protocol`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-protocol) | コアライブラリ。crates.io では `club-unison` として公開、Rust crate identifier は `unison`。KDL スキーマ、QUIC、チャネル、パケット |
 | [`unison-agent`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-agent) | [Claude Agent SDK](https://crates.io/crates/claude-agent-sdk) 統合。AgentClient、InteractiveClient、MCP ツール公開 |
 
 ### unison-agent の例

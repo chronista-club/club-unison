@@ -26,7 +26,7 @@
 //! - recv task は session_deadline まで polling、 timeout per poll で busy-loop 回避
 //! - Transform struct (= peer id + pos + rot) JSON wire ~110-130 byte、 MTU 内
 
-use club_unison::{ProtocolClient, ProtocolServer};
+use unison::{ProtocolClient, ProtocolServer};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use serde::{Deserialize, Serialize};
 use std::hint::black_box;

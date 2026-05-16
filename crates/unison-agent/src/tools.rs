@@ -4,7 +4,7 @@
 //! 外部サービスにアクセスするためのツールを提供します。
 
 use claude_agent_sdk::mcp::{SdkMcpServer, SdkMcpTool, ToolResult};
-use club_unison::ProtocolClient;
+use unison::ProtocolClient;
 use serde_json::{Value, json};
 use tracing::{debug, info};
 

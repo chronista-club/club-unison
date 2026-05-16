@@ -11,8 +11,8 @@ use std::time::Duration;
 use tokio::time::timeout;
 use tracing::{Level, info};
 
-use club_unison::network::ClientConnectionEvent;
-use club_unison::{ProtocolClient, ProtocolServer};
+use unison::network::ClientConnectionEvent;
+use unison::{ProtocolClient, ProtocolServer};
 
 fn init_tracing() {
     let _ = tracing_subscriber::fmt()

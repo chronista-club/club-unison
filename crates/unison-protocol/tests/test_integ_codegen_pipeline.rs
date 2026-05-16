@@ -1,7 +1,7 @@
 mod common;
 
-use club_unison::codegen::{CodeGenerator, RustGenerator};
-use club_unison::parser::{SchemaParser, TypeRegistry};
+use unison::codegen::{CodeGenerator, RustGenerator};
+use unison::parser::{SchemaParser, TypeRegistry};
 
 /// schemas/ping_pong.kdl を読み込み → parse → generate Rust → 構造検証
 #[test]

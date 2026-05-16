@@ -4,9 +4,9 @@
 //! string-contains assertions で検証。 既存 test_codegen_channel.rs (= rust gen 用)
 //! と並列の TS gen 版。
 
-use club_unison::codegen::CodeGenerator;
-use club_unison::parser::TypeRegistry;
-use club_unison::prelude::*;
+use unison::codegen::CodeGenerator;
+use unison::parser::TypeRegistry;
+use unison::prelude::*;
 
 /// Stream channel (= default backend) の TS gen output が event / request / returns 型
 /// + ChannelMeta const を含む

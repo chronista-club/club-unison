@@ -26,8 +26,8 @@ async fn test_simple_quic_functionality() -> Result<()> {
 }
 
 async fn test_quic_server_config_with_dev_localhost() -> Result<()> {
-    use club_unison::network::CertSource;
-    use club_unison::network::quic::QuicServer;
+    use unison::network::CertSource;
+    use unison::network::quic::QuicServer;
 
     info!("🔧 Testing QUIC server configuration with CertSource::dev_localhost()");
     let result = QuicServer::configure_server_with(CertSource::dev_localhost()).await;
@@ -41,8 +41,8 @@ async fn test_quic_server_config_with_dev_localhost() -> Result<()> {
 }
 
 async fn test_quic_client_config_with_skip_verification() -> Result<()> {
-    use club_unison::network::TrustAnchors;
-    use club_unison::network::quic::QuicClient;
+    use unison::network::TrustAnchors;
+    use unison::network::quic::QuicClient;
 
     info!("🔧 Testing QUIC client configuration with TrustAnchors::SkipVerification");
     let result = QuicClient::configure_client_with(TrustAnchors::SkipVerification).await;
@@ -56,8 +56,8 @@ async fn test_quic_client_config_with_skip_verification() -> Result<()> {
 }
 
 async fn test_internal_mesh_pair_generates() -> Result<()> {
-    use club_unison::network::InternalMeshKeypair;
-    use club_unison::network::quic::{QuicClient, QuicServer};
+    use unison::network::InternalMeshKeypair;
+    use unison::network::quic::{QuicClient, QuicServer};
 
     info!("🔐 Testing InternalMeshKeypair pair generation");
     let pair = InternalMeshKeypair::generate(["broker.test".to_string(), "::1".to_string()])?;
@@ -84,8 +84,8 @@ async fn test_internal_mesh_pair_generates() -> Result<()> {
 /// `TrustAnchors::System` should produce a config using webpki-roots Mozilla bundle.
 #[tokio::test]
 async fn test_trust_anchors_system_builds() -> Result<()> {
-    use club_unison::network::TrustAnchors;
-    use club_unison::network::quic::QuicClient;
+    use unison::network::TrustAnchors;
+    use unison::network::quic::QuicClient;
 
     let result = QuicClient::configure_client_with(TrustAnchors::System).await;
     assert!(

@@ -32,7 +32,7 @@
 //! - burst send 後、 recv_datagram で echo 受信 count を黒箱化 (= unreliable で
 //!   loss あり、 timeout で打ち切り)
 
-use club_unison::network::quic::QuicClient;
+use unison::network::quic::QuicClient;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use quinn::{Endpoint, ServerConfig, TransportConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};

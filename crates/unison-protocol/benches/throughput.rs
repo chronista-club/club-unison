@@ -1,6 +1,6 @@
-use club_unison::network::channel::UnisonChannel;
-use club_unison::network::{MessageType, quic::QuicClient};
-use club_unison::{ProtocolClient, ProtocolServer};
+use unison::network::channel::UnisonChannel;
+use unison::network::{MessageType, quic::QuicClient};
+use unison::{ProtocolClient, ProtocolServer};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use serde_json::json;
 use std::hint::black_box;

@@ -18,7 +18,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use club_unison::network::cert::CertSource;
+//! use unison::network::cert::CertSource;
 //!
 //! // Dev quickstart
 //! let source = CertSource::dev_localhost();

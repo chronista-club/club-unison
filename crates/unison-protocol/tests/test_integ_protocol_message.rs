@@ -1,7 +1,7 @@
 mod common;
 
-use club_unison::network::{MessageType, ProtocolMessage};
-use club_unison::packet::UnisonPacket;
+use unison::network::{MessageType, ProtocolMessage};
+use unison::packet::UnisonPacket;
 
 /// Request型 ProtocolMessage の into_frame → to_bytes → from_bytes → from_frame 往復
 #[test]
@@ -213,7 +213,7 @@ fn test_integ_new_encoded() {
 /// decode_payload で JsonCodec 経由のデコード
 #[test]
 fn test_integ_decode_payload_json() {
-    use club_unison::codec::JsonCodec;
+    use unison::codec::JsonCodec;
 
     let original = serde_json::json!({"name": "test", "count": 42});
     let msg = ProtocolMessage::new_with_json(
@@ -232,8 +232,8 @@ fn test_integ_decode_payload_json() {
 #[test]
 fn test_integ_decode_payload_proto() {
     use buffa::Message;
-    use club_unison::codec::ProtoCodec;
-    use club_unison::codec::proto::creo_sync::Subscribe;
+    use unison::codec::ProtoCodec;
+    use unison::codec::proto::creo_sync::Subscribe;
 
     let subscribe = Subscribe {
         category: "design".into(),
@@ -257,8 +257,8 @@ fn test_integ_decode_payload_proto() {
 #[test]
 fn test_integ_proto_frame_roundtrip() {
     use buffa::Message;
-    use club_unison::codec::ProtoCodec;
-    use club_unison::codec::proto::creo_sync::Ack;
+    use unison::codec::ProtoCodec;
+    use unison::codec::proto::creo_sync::Ack;
 
     let ack = Ack {
         status: "ok".into(),
@@ -289,7 +289,7 @@ fn test_integ_proto_frame_roundtrip() {
 #[test]
 fn test_integ_payload_as_value_with_proto_bytes_fails() {
     use buffa::Message;
-    use club_unison::codec::proto::creo_sync::Subscribe;
+    use unison::codec::proto::creo_sync::Subscribe;
 
     let subscribe = Subscribe {
         category: "test".into(),
@@ -312,8 +312,8 @@ fn test_integ_payload_as_value_with_proto_bytes_fails() {
 /// JSON でエンコードした payload を ProtoCodec でデコードするとエラー（Codec 混用検出）
 #[test]
 fn test_integ_decode_payload_wrong_codec_json_to_proto() {
-    use club_unison::codec::ProtoCodec;
-    use club_unison::codec::proto::creo_sync::Subscribe;
+    use unison::codec::ProtoCodec;
+    use unison::codec::proto::creo_sync::Subscribe;
 
     let msg = ProtocolMessage::new_with_json(
         1,
@@ -332,8 +332,8 @@ fn test_integ_decode_payload_wrong_codec_json_to_proto() {
 #[test]
 fn test_integ_decode_payload_wrong_codec_proto_to_json() {
     use buffa::Message;
-    use club_unison::codec::JsonCodec;
-    use club_unison::codec::proto::creo_sync::Subscribe;
+    use unison::codec::JsonCodec;
+    use unison::codec::proto::creo_sync::Subscribe;
 
     let subscribe = Subscribe {
         category: "test".into(),
@@ -407,8 +407,8 @@ fn test_integ_new_with_json_encodes_valid_json() {
 #[test]
 fn test_integ_proto_large_payload_compression_roundtrip() {
     use buffa::Message;
-    use club_unison::codec::ProtoCodec;
-    use club_unison::codec::proto::creo_sync::MemoryEvent;
+    use unison::codec::ProtoCodec;
+    use unison::codec::proto::creo_sync::MemoryEvent;
 
     // 圧縮閾値 (2048B) を超える proto ペイロードを生成
     let msg = MemoryEvent {

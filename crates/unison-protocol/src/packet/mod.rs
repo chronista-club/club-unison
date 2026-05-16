@@ -16,7 +16,7 @@
 //! ## 使用例
 //!
 //! ```ignore
-//! use club_unison::packet::{UnisonPacket, PacketType};
+//! use unison::packet::{UnisonPacket, PacketType};
 //!
 //! // 任意の payload bytes (= caller が codec で encode 済み)
 //! let payload: Vec<u8> = b"Hello, World!".to_vec();
