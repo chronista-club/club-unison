@@ -4,7 +4,10 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
+    // tests/ ・ bench/ は src/ 外。 rootDir を project root へ広げて取り込む
+    // (= noEmit なので出力レイアウトには影響しない)。
+    "rootDir": ".",
     "types": ["node", "vitest/globals"]
   },
-  "include": ["src/**/*", "tests/**/*"]
+  "include": ["src/**/*", "tests/**/*", "bench/**/*"]
 }

@@ -23,6 +23,7 @@
     "dev": "vite",
     "test": "vitest run",
     "test:watch": "vitest",
+    "bench": "vitest bench",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "clean": "rm -rf dist coverage node_modules/.vite"
   },
