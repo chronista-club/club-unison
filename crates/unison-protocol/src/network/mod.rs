@@ -10,13 +10,17 @@ pub mod cert;
 pub mod channel;
 pub mod client;
 pub mod conn;
+pub mod conn_quinn;
 pub mod context;
 pub mod datagram_channel;
 pub mod datagram_dispatcher;
+pub mod dispatch;
+pub mod frame;
 pub mod identity;
 pub mod mesh;
 pub mod quic;
 pub mod server;
+pub mod stream;
 pub mod trust;
 pub mod webtransport;
 

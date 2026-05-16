@@ -38,7 +38,7 @@ use wtransport::{Endpoint, Identity, ServerConfig};
 
 use super::conn::{BiStream, BoxUnisonRecv, BoxUnisonSend, UnisonConn, UnisonRecv, UnisonSend};
 use super::context::ConnectionContext;
-use super::quic::handle_connection;
+use super::dispatch::handle_connection;
 use super::server::ProtocolServer;
 use super::{NetworkError, cert::CertSource};
 
