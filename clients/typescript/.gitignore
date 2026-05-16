@@ -4,3 +4,6 @@ coverage/
 .vite/
 *.log
 .DS_Store
+
+# npm auth — token は 1Password (Engineering vault) 管理、 ${NPM_TOKEN} で注入
+.npmrc
