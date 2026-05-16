@@ -3,7 +3,8 @@
  *
  * mock bidi stream の server 端を drain し、 受信 `ProtocolMessage` typed frame を
  * Rust server と同じ規則で処理する:
- * - `__channel:{name}` (= request) → channel open probe、 そのまま継続
+ * - `__channel:{name}` (= request) → channel open probe、 `open_ack` を返す
+ *   (= Phase 6c、 Rust `quic.rs::write_channel_ack` と同形)
  * - `request` → handler を呼んで `response` frame を返す
  * - `event` → `receivedEvents` に記録
  *
@@ -32,6 +33,18 @@ const textEncoder = new TextEncoder();
 /** `__channel:` route prefix (= Rust `client.rs::open_channel`) */
 const CHANNEL_ROUTE_PREFIX = "__channel:";
 
+/** open_ack の method 名 (= Rust `quic.rs::CHANNEL_ACK_METHOD`、 Phase 6c) */
+const CHANNEL_ACK_METHOD = "__channel_ack";
+
+/** `StreamServerStub` の挙動オプション */
+export interface StreamServerStubOptions {
+  /**
+   * open frame を受けたとき nack (= channel-not-found Error) を返すか
+   * (= default: false、 つまり accept して open_ack を返す)。
+   */
+  rejectOpen?: boolean;
+}
+
 /** request → response payload を決める handler */
 export type RequestHandler = (
   method: string,
@@ -52,11 +65,15 @@ export class StreamServerStub {
   openedChannel: string | undefined;
   readonly #loop: Promise<void>;
 
+  readonly #rejectOpen: boolean;
+
   constructor(
     private readonly stream: BidiStream,
     private readonly handler: RequestHandler = () => ({ ok: true }),
+    options: StreamServerStubOptions = {},
   ) {
     this.#writer = stream.writable.getWriter();
+    this.#rejectOpen = options.rejectOpen ?? false;
     this.#loop = this.#run();
   }
 
@@ -67,9 +84,12 @@ export class StreamServerStub {
         if (decoded.type !== "protocol") continue; // raw frame は無視
         const msg = decoded.message;
 
-        // channel open probe (= `__channel:{name}` request) — 記録して継続
+        // channel open probe (= `__channel:{name}` request) — open_ack を返す
+        // (= Phase 6c、 Rust `quic.rs::write_channel_ack` と同形)。
         if (msg.method.startsWith(CHANNEL_ROUTE_PREFIX)) {
-          this.openedChannel = msg.method.slice(CHANNEL_ROUTE_PREFIX.length);
+          const channelName = msg.method.slice(CHANNEL_ROUTE_PREFIX.length);
+          this.openedChannel = channelName;
+          await this.#writeOpenAck(msg.id, channelName);
           continue;
         }
 
@@ -91,6 +111,33 @@ export class StreamServerStub {
     } catch {
       /* stream closed */
     }
+  }
+
+  /**
+   * open frame に対する `open_ack` / nack を返す (= Phase 6c)。
+   *
+   * accept (= default) なら `__channel_ack` Response、 `rejectOpen` 指定なら
+   * `__channel_ack` Error (= channel-not-found) を open request と同 id で返す。
+   */
+  async #writeOpenAck(id: number, channelName: string): Promise<void> {
+    const frame = this.#rejectOpen
+      ? encodeProtocolFrame({
+          id,
+          method: CHANNEL_ACK_METHOD,
+          msgType: MSG_TYPE_ERROR,
+          // key 順は Rust serde_json (= BTreeMap 既定) と合わせ alphabetical
+          payload: codec.encode({
+            channel: channelName,
+            error: "channel-not-found",
+          }),
+        })
+      : encodeProtocolFrame({
+          id,
+          method: CHANNEL_ACK_METHOD,
+          msgType: MSG_TYPE_RESPONSE,
+          payload: codec.encode({}),
+        });
+    await this.#writer.write(frame);
   }
 
   /** client へ server-push event を送る */

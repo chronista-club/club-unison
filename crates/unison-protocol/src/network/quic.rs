@@ -161,6 +161,19 @@ pub async fn write_frame<W: AsyncWrite + Unpin + ?Sized>(send: &mut W, data: &[u
 pub const FRAME_TYPE_PROTOCOL: u8 = 0x00;
 pub const FRAME_TYPE_RAW: u8 = 0x01;
 
+/// Channel open ack の method 名 (= Phase 6c)。
+///
+/// クライアントが `__channel:{name}` open frame を送ると、 サーバーは登録済み
+/// channel を lookup し、 同 stream へこの method の `ProtocolMessage` を 1 本返す:
+/// - **accept**: `msg_type = Response`、 `id` = open request の id、 payload `{}`
+/// - **nack** (= channel-not-found): `msg_type = Error`、 同 `id`、
+///   payload `{"error":"channel-not-found","channel":"{name}"}`
+///
+/// `id` が open request と一致するため、 クライアントは自分の open request に
+/// 相関させられる。 `__identity` と同じ `__`-prefix の特殊 method であり、 新しい
+/// typed frame type は追加しない (= 既存 wire layout は不変、 additive)。
+pub const CHANNEL_ACK_METHOD: &str = "__channel_ack";
+
 /// Typed フレーム — type tag 付きの読み書き
 /// フォーマット: [4 bytes: length][1 byte: type tag][payload]
 /// length は type tag + payload の合計バイト数
@@ -783,6 +796,44 @@ async fn client_accept_bi_loop(
     }
 }
 
+/// Channel open ack / nack を 1 本の typed protocol frame として送信する (= Phase 6c)。
+///
+/// `accepted == true` なら [`MessageType::Response`] の `open_ack`、 `false` なら
+/// [`MessageType::Error`] の nack (= payload に `channel-not-found`) を `send`
+/// ストリームへ書き出す。 `request_id` は open request の id を引き継ぎ、
+/// クライアントが自分の open と相関できるようにする。
+async fn write_channel_ack<W: AsyncWrite + Unpin + ?Sized>(
+    send: &mut W,
+    request_id: u64,
+    accepted: bool,
+    channel_name: &str,
+) -> Result<()> {
+    use super::MessageType;
+
+    let (msg_type, payload) = if accepted {
+        (MessageType::Response, serde_json::json!({}))
+    } else {
+        (
+            MessageType::Error,
+            serde_json::json!({
+                "error": "channel-not-found",
+                "channel": channel_name,
+            }),
+        )
+    };
+    let msg = ProtocolMessage::new_with_json(
+        request_id,
+        CHANNEL_ACK_METHOD.to_string(),
+        msg_type,
+        payload,
+    )
+    .map_err(|e| anyhow::anyhow!("Failed to build open_ack message: {}", e))?;
+    let frame = msg
+        .into_frame()
+        .map_err(|e| anyhow::anyhow!("Failed to encode open_ack frame: {}", e))?;
+    write_typed_frame(send, FRAME_TYPE_PROTOCOL, &frame.to_bytes()).await
+}
+
 /// transport 非依存の接続ハンドラー。
 ///
 /// raw QUIC と WebTransport の両 ingress がこの関数へ収束する。 `connection` は
@@ -891,6 +942,7 @@ pub(crate) async fn handle_connection(
                             // チャネルルーティング: __channel: プレフィックスをチェック
                             if let Some(channel_name) = request.method.strip_prefix("__channel:") {
                                 let channel_name = channel_name.to_string();
+                                let mut send_stream = send_stream;
                                 if let Some(handler) =
                                     server.get_channel_handler(&channel_name).await
                                 {
@@ -901,6 +953,24 @@ pub(crate) async fn handle_connection(
                                     // open/close される設計 (= 1 request/response = 1 channel)
                                     // なので info noise になりがち。
                                     debug!("Channel '{}' opened", channel_name);
+
+                                    // Phase 6c: open frame と同 stream へ open_ack
+                                    // (= Response) を 1 本返す。 id は open request の
+                                    // id を引き継ぎ、 クライアントが相関できるようにする。
+                                    if let Err(e) = write_channel_ack(
+                                        &mut send_stream,
+                                        request.id,
+                                        true,
+                                        &channel_name,
+                                    )
+                                    .await
+                                    {
+                                        warn!(
+                                            "Failed to send open_ack for '{}': {}",
+                                            channel_name, e
+                                        );
+                                        return;
+                                    }
 
                                     // チャネル用のUnisonStreamを作成（ストリームは生きたまま）
                                     let stream = UnisonStream::from_streams(
@@ -928,7 +998,26 @@ pub(crate) async fn handle_connection(
                                         }
                                     }
                                 } else {
+                                    // Phase 6c: 未登録 channel への open は nack
+                                    // (= Error frame) を返してから stream を畳む。
+                                    // これによりクライアントの open は silent に
+                                    // hang せず channel-not-found で即 reject する。
                                     warn!("No channel handler for: {}", channel_name);
+                                    if let Err(e) = write_channel_ack(
+                                        &mut send_stream,
+                                        request.id,
+                                        false,
+                                        &channel_name,
+                                    )
+                                    .await
+                                    {
+                                        warn!(
+                                            "Failed to send open nack for '{}': {}",
+                                            channel_name, e
+                                        );
+                                    } else {
+                                        let _ = send_stream.finish().await;
+                                    }
                                 }
                                 return;
                             }

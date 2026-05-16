@@ -140,6 +140,49 @@ fn emit_identity_frame_fixture() {
     assert!(frame.len() > 4 + 1 + 4);
 }
 
+/// fixture: channel `open_ack` (= accept) frame の reference bytes を書き出す。
+///
+/// Phase 6c: server が登録済み channel の open frame に対し返す ack。
+/// method `__channel_ack`、 msg_type Response、 payload `{}`、 id は open
+/// request の id を引き継ぐ (= ここでは 42)。
+#[test]
+fn emit_open_ack_frame_fixture() {
+    let msg = ProtocolMessage::new_encoded(
+        42,
+        "__channel_ack".to_string(),
+        MessageType::Response,
+        b"{}".to_vec(),
+    );
+    let frame = encode_protocol_frame(msg);
+
+    let dir = fixture_dir();
+    fs::create_dir_all(&dir).expect("create fixture dir");
+    fs::write(dir.join("open_ack_frame.hex"), to_hex(&frame)).expect("write fixture");
+
+    assert!(frame.len() > 4 + 1 + 4);
+    assert_eq!(frame[4], FRAME_TYPE_PROTOCOL);
+}
+
+/// fixture: channel open `nack` (= channel-not-found) frame の reference bytes。
+///
+/// Phase 6c: server が未登録 channel の open frame に対し返す Error frame。
+#[test]
+fn emit_open_nack_frame_fixture() {
+    let msg = ProtocolMessage::new_encoded(
+        42,
+        "__channel_ack".to_string(),
+        MessageType::Error,
+        br#"{"channel":"ghost","error":"channel-not-found"}"#.to_vec(),
+    );
+    let frame = encode_protocol_frame(msg);
+
+    let dir = fixture_dir();
+    fs::create_dir_all(&dir).expect("create fixture dir");
+    fs::write(dir.join("open_nack_frame.hex"), to_hex(&frame)).expect("write fixture");
+
+    assert!(frame.len() > 4 + 1 + 4);
+}
+
 /// Rust 側の round-trip 健全性: encode した frame を Rust decoder で復元できる。
 #[test]
 fn rust_frame_round_trips() {

@@ -18,8 +18,10 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { encodeProtocolFrame, decodeTypedFrame } from "../../src/channel/frame.js";
 import {
+  MSG_TYPE_ERROR,
   MSG_TYPE_EVENT,
   MSG_TYPE_REQUEST,
+  MSG_TYPE_RESPONSE,
   type ProtocolMessage,
 } from "../../src/wire/protocol_message.js";
 
@@ -84,6 +86,36 @@ describe("wire byte-compat: TS frame == Rust fixture", () => {
     };
     const tsFrame = encodeProtocolFrame(msg);
     const rustFrame = loadFixture("identity_frame.hex");
+    expect(toHex(tsFrame)).toBe(toHex(rustFrame));
+  });
+
+  it("produces byte-identical bytes for an open_ack frame (Phase 6c)", () => {
+    // server が登録済み channel の open frame に返す accept ack。
+    // method __channel_ack / Response / payload {} / id は open request 由来 (42)。
+    const msg: ProtocolMessage = {
+      id: 42,
+      method: "__channel_ack",
+      msgType: MSG_TYPE_RESPONSE,
+      payload: textEncoder.encode("{}"),
+    };
+    const tsFrame = encodeProtocolFrame(msg);
+    const rustFrame = loadFixture("open_ack_frame.hex");
+    expect(toHex(tsFrame)).toBe(toHex(rustFrame));
+  });
+
+  it("produces byte-identical bytes for an open nack frame (Phase 6c)", () => {
+    // server が未登録 channel の open frame に返す channel-not-found Error。
+    // payload の key は alphabetical (= Rust serde_json BTreeMap 既定順)。
+    const msg: ProtocolMessage = {
+      id: 42,
+      method: "__channel_ack",
+      msgType: MSG_TYPE_ERROR,
+      payload: textEncoder.encode(
+        '{"channel":"ghost","error":"channel-not-found"}',
+      ),
+    };
+    const tsFrame = encodeProtocolFrame(msg);
+    const rustFrame = loadFixture("open_nack_frame.hex");
     expect(toHex(tsFrame)).toBe(toHex(rustFrame));
   });
 

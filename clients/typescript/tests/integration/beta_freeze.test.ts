@@ -124,20 +124,21 @@ describe("Blocker 1: payload type narrowing via __types carrier", () => {
 });
 
 // ============================================================
-// Blocker 3: openChannel() open-frame send + torn-down signal
+// Blocker 3: openChannel() の real accept signal (= Phase 6c)
 //
-// Phase 6b: Rust server は open ack (= open_ack) を返さない設計のため、
-// `openChannel` は `__channel:` open frame の送信完了で resolve する
-// (= optimistic、 Rust `client.rs::open_channel` と同形)。 明示 ack は
-// Phase 6c で server 側に入る予定。 ここでは「open frame を流せた」/
-// 「accept 前に stream が落ちたら reject」の 2 ケースを検証する。
+// Phase 6c: Rust server は open frame に対し同 stream へ `open_ack`
+// (= method `__channel_ack`、 open request と同 id) を返す。 `openChannel` は
+// この ack を await する (= optimistic-resolve 廃止):
+//   - Response の open_ack → resolve
+//   - Error の nack (= channel-not-found) → reject
+//   - ack が来ない (= peer 不在 / stream tear-down / timeout) → reject
 //
 // connect は identity handshake を待つ (= 本 test の mock server は identity を
 // 送らない) ため `awaitIdentity: false` で skip する。
 // ============================================================
 
-describe("Blocker 3: openChannel open-frame + torn-down signal", () => {
-  it("resolves once the __channel open frame is written", async () => {
+describe("Blocker 3: openChannel real accept signal (open_ack)", () => {
+  it("resolves once the server replies with an open_ack", async () => {
     const transport = new MockTransport();
     const { server } = transport.prepare();
     const client = await connect({
@@ -147,21 +148,47 @@ describe("Blocker 3: openChannel open-frame + torn-down signal", () => {
     });
 
     // server 側: stream を accept して StreamServerStub を立てる
+    // (= stub の constructor が open frame を受けて open_ack を返す)
     const serverSide = (async () => {
       const accepted = await server.acceptStream();
       if (accepted.done) throw new Error("no stream");
       return new StreamServerStub(accepted.value);
     })();
 
-    const channel = await client.openChannel(ControlMeta);
+    const [channel, stub] = await Promise.all([
+      client.openChannel(ControlMeta),
+      serverSide,
+    ]);
     expect(channel.name).toBe("control");
-
-    const stub = await serverSide;
     // server stub は `__channel:control` open probe を観測しているはず
     await vi.waitFor(() => expect(stub.openedChannel).toBe("control"));
 
     await channel.close();
     await stub.close();
+    await client.disconnect();
+  });
+
+  it("rejects when the server sends a channel-not-found nack", async () => {
+    const transport = new MockTransport();
+    const { server } = transport.prepare();
+    const client = await connect({
+      url: "https://x.invalid",
+      transport,
+      awaitIdentity: false,
+    });
+
+    // server stub は open frame に対し nack (= Error) を返す
+    const serverSide = (async () => {
+      const accepted = await server.acceptStream();
+      if (accepted.done) throw new Error("no stream");
+      return new StreamServerStub(accepted.value, undefined, {
+        rejectOpen: true,
+      });
+    })();
+
+    await expect(
+      Promise.all([client.openChannel(ControlMeta), serverSide]),
+    ).rejects.toThrow(/channel-not-found/);
     await client.disconnect();
   });
 
@@ -177,6 +204,22 @@ describe("Blocker 3: openChannel open-frame + torn-down signal", () => {
     await server.close("server gone"); // open 前に connection drop
     await expect(client.openChannel(ControlMeta)).rejects.toThrow(
       /could not be opened|closed before it was accepted|connection closed/,
+    );
+    await client.disconnect();
+  });
+
+  it("rejects on timeout when no server peer ever accepts", async () => {
+    const transport = new MockTransport();
+    transport.prepare(); // server 側 stream を誰も accept しない
+    const client = await connect({
+      url: "https://x.invalid",
+      transport,
+      awaitIdentity: false,
+    });
+
+    // open frame は流せるが open_ack が来ない → timeout で reject
+    await expect(client.openChannel(ControlMeta, 100)).rejects.toThrow(
+      /was not accepted within/,
     );
     await client.disconnect();
   });
