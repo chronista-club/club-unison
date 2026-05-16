@@ -147,3 +147,78 @@ jobs:
 
       - name: Check MSRV
         run: cargo check --workspace
+
+  # ===========================================
+  # TS SDK 型チェック
+  # ===========================================
+  ts-typecheck:
+    name: TS Typecheck
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/typescript
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: clients/typescript/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+  # ===========================================
+  # クロス言語 E2E（TS SDK ↔ Rust server）
+  # ===========================================
+  # npm test は webtransport_echo_server 例を `cargo run` で spawn するため、
+  # Rust toolchain + ビルド済み workspace が必須。
+  # E2E 実行前に example を明示ビルドし、cold build による timeout を回避する。
+  cross-lang-e2e:
+    name: Cross-Language E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install protoc (buffa-build requires it for codegen)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: e2e-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: e2e-
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: clients/typescript/package-lock.json
+
+      # E2E の `cargo run --example` が cold build にならないよう事前ビルド。
+      - name: Build Rust workspace + echo server example
+        run: cargo build --workspace --example webtransport_echo_server -p club-unison
+
+      - name: Install TS dependencies
+        working-directory: clients/typescript
+        run: npm ci
+
+      # webtransport_e2e.test.ts を含む全 TS テストを実行。
+      # E2E は build 済み example を spawn して実 WebTransport ラウンドトリップを行う。
+      - name: Run TS test suite (incl. cross-lang E2E)
+        working-directory: clients/typescript
+        run: npm test

@@ -29,13 +29,13 @@
 //! 概ね「channel encode/decode + dispatcher routing + JSON cost」 の合計、 burst 1000
 //! で JSON encoding の cost が顕在化する想定。
 
-use club_unison::{ProtocolClient, ProtocolServer};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use serde::{Deserialize, Serialize};
 use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Runtime;
+use unison::{ProtocolClient, ProtocolServer};
 
 /// payload size 2 ケース (= 1 transform / MTU max 想定、 datagram.rs と統一)
 const PAYLOAD_SIZES: &[usize] = &[64, 1300];

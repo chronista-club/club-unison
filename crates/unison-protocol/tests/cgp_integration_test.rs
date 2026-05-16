@@ -1,13 +1,13 @@
 //! CGP統合テスト
 
-use club_unison::context::{
-    CgpProtocolContext, Handler, HandlerRegistry, MessageHandler, ServiceRegistry, TransportLayer,
-    UnisonContextBuilder,
-};
-use club_unison::network::{MessageType, NetworkError, ProtocolMessage};
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use unison::context::{
+    CgpProtocolContext, Handler, HandlerRegistry, MessageHandler, ServiceRegistry, TransportLayer,
+    UnisonContextBuilder,
+};
+use unison::network::{MessageType, NetworkError, ProtocolMessage};
 
 // ========================================
 // モックTransportLayer実装
@@ -241,7 +241,7 @@ async fn test_message_handler() {
 
 #[tokio::test]
 async fn test_handler_registry() {
-    use club_unison::context::MessageDispatcher;
+    use unison::context::MessageDispatcher;
 
     let registry = HandlerRegistry::new();
 
@@ -286,7 +286,7 @@ async fn test_handler_registry() {
 
 #[tokio::test]
 async fn test_handler_not_found() {
-    use club_unison::context::MessageDispatcher;
+    use unison::context::MessageDispatcher;
 
     let registry = HandlerRegistry::new();
 

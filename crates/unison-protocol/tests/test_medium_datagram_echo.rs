@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::time::timeout;
 use tracing::{Level, info};
 
-use club_unison::{ProtocolClient, ProtocolServer};
+use unison::{ProtocolClient, ProtocolServer};
 
 fn init_tracing() {
     let _ = tracing_subscriber::fmt()
@@ -252,7 +252,7 @@ async fn test_medium_datagram_broadcast_to_all_clients() -> Result<()> {
     let mut got_b: Option<Transform> = None;
     for _ in 0..15 {
         let n = server
-            .broadcast::<_, club_unison::codec::JsonCodec>("position", &t)
+            .broadcast::<_, unison::codec::JsonCodec>("position", &t)
             .await?;
         assert!(n <= 2, "broadcast can hit at most 2 connections");
         if got_a.is_none()

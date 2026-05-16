@@ -17,7 +17,7 @@
 //! # use anyhow::Result;
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
-//! use club_unison::{UnisonProtocol, NetworkError};
+//! use unison::{UnisonProtocol, NetworkError};
 //!
 //! // プロトコルスキーマを読み込み
 //! let mut protocol = UnisonProtocol::new();
@@ -81,8 +81,8 @@ use parser::{ParseError as UnisonParseError, ParsedSchema, SchemaParser};
 
 // よく使用されるトレイトとクライアント/サーバーの再エクスポート
 pub use network::{
-    ConnectionEvent, ConnectionEventReceiver, NetworkError, ProtocolClient, ProtocolServer,
-    ServerHandle, UnisonChannel,
+    ConnectionEvent, ConnectionEventReceiver, ErrorCategory, NetworkError, ProtocolClient,
+    ProtocolServer, ServerHandle, UnisonChannel,
 };
 
 /// Unison Protocolのメインエントリポイント

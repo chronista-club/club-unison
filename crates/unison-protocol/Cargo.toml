@@ -18,11 +18,12 @@ exclude = [
 ]
 rust-version.workspace = true
 
-# lib name も `club_unison` に統一 (full rename policy、v0.6.0 で確定):
-# crates.io package = `club-unison`、Rust crate identifier = `club_unison`。
-# 詳細: creo-memories `mem_1Cb2haX6ZicuCweEpxAvj4` + annotations
+# lib name は bare name `unison` (chronista-club 命名規則、2026-05-16):
+# crates.io package = `club-unison` (= namespace 衝突回避)、lib identifier
+# = `unison` (= code path namespace、prefix 不要)。v0.6.0 の full rename
+# policy の lib-name 条項を撤回。詳細: chronista-club CONVENTIONS.md
 [lib]
-name = "club_unison"
+name = "unison"
 path = "src/lib.rs"
 
 [dependencies]
@@ -48,6 +49,10 @@ rustls-pemfile.workspace = true
 rcgen.workspace = true
 webpki-roots.workspace = true
 futures-util.workspace = true
+time.workspace = true
+
+# WebTransport (= QUIC + HTTP/3) — ブラウザ ingress 用 (Phase 6a)
+wtransport.workspace = true
 
 # Error handling
 thiserror.workspace = true

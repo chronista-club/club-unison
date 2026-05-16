@@ -1,0 +1,40 @@
+{
+  "compilerOptions": {
+    // Type-checking strictness (= v1.0 で stable 化する API surface の質を担保)
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noPropertyAccessFromIndexSignature": true,
+
+    // Module / target (= modern web + Node 20+)
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["DOM", "DOM.AsyncIterable", "DOM.Iterable", "ES2022"],
+    "types": ["node"],
+
+    // Emit (= vite が JS、 tsc が .d.ts 生成、 dual responsibility)
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "dist",
+
+    // Interop (= bundler-friendly、 ESM-only stance に整合)
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+
+    // Path / root
+    "rootDir": "src",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "tests", "vite.config.ts", "vitest.config.ts"]
+}

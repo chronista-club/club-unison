@@ -15,7 +15,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use club_unison::network::mesh::InternalMeshKeypair;
+//! use unison::network::mesh::InternalMeshKeypair;
 //!
 //! let pair = InternalMeshKeypair::generate(
 //!     ["broker.local".into(), "*.unison.svc.cluster.local".into()],

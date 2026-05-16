@@ -1,0 +1,130 @@
+# @chronista-club/unison-client
+
+> TypeScript client SDK for the [Unison protocol](https://github.com/chronista-club/club-unison).
+> Part of the **v1.0 polyglot client base** (= server stays Rust, client polyglot for adoption surface).
+
+**Status**: `1.0.0-alpha.2` — v1.0 sprint feature-complete. The SDK genuinely talks to the Rust server over **real WebTransport** (verified by `tests/integration/webtransport_e2e.test.ts`). See [design/typescript-client-api.md](../../design/typescript-client-api.md) for the SDK design contract.
+
+---
+
+## What this is
+
+Unison is a KDL schema-driven, QUIC-based protocol with both **stream channels** (request/response + event) and **datagram channels** (broadcast event). The Rust crate `club-unison` ships the server and Rust client. This package is the **TypeScript client SDK** that lets:
+
+- **Browsers** (via [WebTransport](https://www.w3.org/TR/webtransport/)) speak unison directly to a Rust server (= no REST gateway)
+- **Node.js** clients connect server-to-server in TypeScript (= optional, v1.x)
+
+The asymmetric design — **fat Rust server, thin polyglot clients** — keeps complexity (TLS, accept loops, connection management) in one language while broadening the adoption surface.
+
+## v1.0 status (= what shipped)
+
+The v1.0 sprint is feature-complete. All phases are done:
+
+- **Phase 1** ✅ — KDL-driven TypeScript code generation (type interfaces + channel metadata)
+- **Phase 2a-e** ✅ — Package skeleton, WebTransport transport adapter, channel wrappers
+  (`UnisonChannel<M>` / `DatagramChannel<M>`), codecs (`JsonCodec` + `ProtoCodec`), tests + bundle build
+- **Phase 3** ✅ — `connect()` facade + Vantage Point dashboard proof point demo
+- **Phase 4-5** ✅ — `unison` developer CLI (ping / sniff / mock / schema-lint), `ErrorCategory` framework
+- **Phase 6** ✅ — Rust-compatible wire format + **real WebTransport E2E** (TS SDK ↔ Rust server)
+- **Phase 7** ✅ — Cross-language E2E integration tests in CI
+- **Phase 8** ✅ — User-facing docs (this file + the guides below)
+
+What is **v1.x deferred** (honest gaps):
+
+- TypeScript codegen for datagram channels (Rust codegen has it; TS handwrites the meta for now)
+- proto-descriptor codegen (`ProtoCodec` works, but KDL → descriptor generation is not automated)
+- Node native WebTransport (Node needs the `@fails-components/webtransport` polyfill)
+- Safari / Firefox WebTransport (Chromium-based browsers are the official support matrix)
+- per-channel codec override, auto-reconnect helper
+
+See [`design/typescript-client-api.md`](../../design/typescript-client-api.md) for the full API design contract.
+
+## Quickstart
+
+For the full end-to-end walkthrough (KDL schema → Rust server → TS client), see
+[`guides/quickstart.md`](../../guides/quickstart.md). API reference:
+[`guides/typescript-sdk.md`](../../guides/typescript-sdk.md).
+
+```typescript
+import { connect, type ChannelMeta } from "@chronista-club/unison-client";
+
+const EchoMeta = {
+  name: "echo",
+  backend: "stream",
+  from: "client",
+  lifetime: "persistent",
+  events: [],
+  requests: { Echo: { request: "EchoReq", response: "EchoResp" } },
+} as const satisfies ChannelMeta;
+
+// Connect — cert pinning for a dev self-signed server (loopback only).
+const client = await connect({
+  url: "https://127.0.0.1:4439",
+  trust: { certHash: "<CERT_HASH printed by the server>" },
+  awaitIdentity: false,
+});
+
+const echo = await client.openChannel(EchoMeta);
+const reply = await echo.request("Echo", { text: "hello-unison" });
+console.log(reply); // { text: "hello-unison" }
+
+await echo.close();
+await client.disconnect();
+```
+
+## Architecture
+
+```
+clients/typescript/
+├── src/
+│   ├── index.ts           ← public entry (= re-exports the surface below)
+│   ├── client.ts          ← connect() + UnisonClient facade
+│   ├── transport/         ← WebTransport adapter
+│   ├── channel/           ← UnisonChannel / DatagramChannel + dispatcher + frame
+│   ├── codec/             ← JsonCodec + ProtoCodec
+│   ├── wire/              ← Rust-compatible packet / protocol-message encode/decode
+│   └── error/             ← ErrorCategory framework
+├── examples/              ← vp-dashboard.ts (Vantage Point proof point demo)
+├── tests/                 ← vitest unit + integration tests (incl. real WebTransport E2E)
+├── package.json
+├── tsconfig.json
+├── vite.config.ts
+└── vitest.config.ts
+```
+
+## Building from source
+
+```bash
+cd clients/typescript
+npm install            # install dev deps (typescript / vite / vitest)
+npm run build          # vite build → dist/index.js + tsc → dist/index.d.ts
+npm test               # vitest run
+npm run typecheck      # tsc --noEmit (= type safety verification)
+```
+
+## Versioning policy
+
+- TS package version is kept in **major.minor sync** with the Rust crate `club-unison`
+- `1.0.0-alpha.x` — implementation phases, breaking changes allowed (current)
+- `1.0.0-rc.x` — feature complete, dogfood phase with the chronista-club ecosystem
+- `1.0.0` — stability commitment, breaking changes require v2.0
+  (dogfood exit criteria: 3+ caller × 3+ months × critical bug 0)
+
+## Compatibility
+
+| Component | Required |
+|---|---|
+| Browser | Chromium-based 95+ (= WebTransport native) |
+| Node.js | 20+ (= ESM + modern features) |
+| TypeScript | 5.7+ (= consumer's tsconfig.json target) |
+| Rust server | `club-unison` major.minor 一致 |
+
+Safari / Firefox WebTransport support: tracked in v1.x roadmap, polyfill via WebSocket fallback is deferred to caller demand.
+
+## License
+
+MIT — see [LICENSE](../../LICENSE-MIT) in the repository root.
+
+## Contributing
+
+This SDK is part of the `chronista-club/club-unison` monorepo. Issues + PRs at https://github.com/chronista-club/club-unison.

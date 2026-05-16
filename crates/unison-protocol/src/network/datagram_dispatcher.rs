@@ -119,28 +119,23 @@ pub(crate) struct DatagramDispatcher {
 }
 
 impl DatagramDispatcher {
-    /// QUIC connection を渡して dispatcher を起動
+    /// 接続を渡して dispatcher を起動
     ///
-    /// background task が `connection.read_datagram()` を繰り返し呼び、 受信した
+    /// background task が `connection.recv_datagram()` を繰り返し呼び、 受信した
     /// datagram を `DispatcherInner::dispatch` に流す。 connection close まで loop
-    /// 続行、 close で task 自然終了。
-    pub fn spawn(connection: Arc<quinn::Connection>) -> Self {
+    /// 続行、 close で task 自然終了。 `connection` は transport 非依存の
+    /// [`UnisonConn`](super::conn::UnisonConn) trait object。
+    pub fn spawn(connection: Arc<dyn super::conn::UnisonConn>) -> Self {
         let inner = Arc::new(DispatcherInner::new());
         let inner_clone = Arc::clone(&inner);
         let task = tokio::spawn(async move {
             loop {
-                let datagram = match connection.read_datagram().await {
+                // recv_datagram の Err = 接続終了 (= 正常な close も含む)。 datagram
+                // ループは transport を問わずここで終える。
+                let datagram = match connection.recv_datagram().await {
                     Ok(d) => d,
-                    Err(quinn::ConnectionError::ApplicationClosed(_)) => {
-                        debug!("Datagram dispatcher: connection closed by application");
-                        break;
-                    }
-                    Err(quinn::ConnectionError::ConnectionClosed(_)) => {
-                        debug!("Datagram dispatcher: connection closed");
-                        break;
-                    }
                     Err(e) => {
-                        warn!("Datagram dispatcher: read_datagram error: {}", e);
+                        debug!("Datagram dispatcher: connection closed ({})", e);
                         break;
                     }
                 };

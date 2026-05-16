@@ -16,7 +16,7 @@
 //! ## 使用例
 //!
 //! ```ignore
-//! use club_unison::packet::{UnisonPacket, PacketType};
+//! use unison::packet::{UnisonPacket, PacketType};
 //!
 //! // 任意の payload bytes (= caller が codec で encode 済み)
 //! let payload: Vec<u8> = b"Hello, World!".to_vec();
@@ -175,6 +175,20 @@ impl UnisonPacketBuilder {
     /// 応答先メッセージIDを設定（Response の場合）
     pub fn with_response_to(mut self, id: u64) -> Self {
         self.header.response_to = id;
+        self
+    }
+
+    /// 相関IDを設定（リクエスト追跡用、UUID v7）
+    pub fn with_correlation_id(mut self, id: uuid::Uuid) -> Self {
+        self.header.correlation_id = Some(id);
+        self
+    }
+
+    /// 新しい相関ID（UUID v7）を生成して設定
+    ///
+    /// クライアントが request 起点で呼び、packet flow に伝播させる。
+    pub fn with_new_correlation_id(mut self) -> Self {
+        self.header = self.header.with_new_correlation_id();
         self
     }
 

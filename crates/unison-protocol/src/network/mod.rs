@@ -9,6 +9,7 @@ use crate::proto;
 pub mod cert;
 pub mod channel;
 pub mod client;
+pub mod conn;
 pub mod context;
 pub mod datagram_channel;
 pub mod datagram_dispatcher;
@@ -17,21 +18,60 @@ pub mod mesh;
 pub mod quic;
 pub mod server;
 pub mod trust;
+pub mod webtransport;
 
 pub use cert::CertSource;
 pub use channel::UnisonChannel;
 pub use client::{ClientConnectionEvent, ClientConnectionEventReceiver, ProtocolClient};
+pub use conn::UnisonConn;
 pub use datagram_channel::DatagramChannel;
 pub use mesh::InternalMeshKeypair;
 pub use quic::{QuicClient, QuicServer, TypedFrame, UnisonStream};
 pub use server::{ConnectionEvent, ConnectionEventReceiver, ProtocolServer, ServerHandle};
 pub use trust::TrustAnchors;
+pub use webtransport::WebTransportServer;
 
 /// グローバルなリクエストID生成（モジュール間で一意）
 pub(crate) fn generate_request_id() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(1);
     COUNTER.fetch_add(1, Ordering::SeqCst)
+}
+
+/// エラーの分類
+///
+/// boundary error を programmatic に判定可能にする (Phase 5 / UNS-15)。
+/// caller は category で分岐し、retry 可否やログレベルを決められる。
+/// TS SDK 側の `ErrorCategory` と value (snake_case 文字列) を一致させること。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorCategory {
+    /// トランスポート層 (QUIC / TLS / DNS)
+    Transport,
+    /// プロトコル層 (不正パケット / スキーマ不整合 / チャネル状態)
+    Protocol,
+    /// アプリケーション層 (caller / handler が返したエラー)
+    Application,
+    /// リソース層 (quota / rate-limit / timeout)
+    Resource,
+}
+
+impl ErrorCategory {
+    /// snake_case の文字列表現 (TS SDK の値と一致)
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ErrorCategory::Transport => "transport",
+            ErrorCategory::Protocol => "protocol",
+            ErrorCategory::Application => "application",
+            ErrorCategory::Resource => "resource",
+        }
+    }
+}
+
+impl std::fmt::Display for ErrorCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Unison Protocolのネットワークエラー
@@ -83,6 +123,29 @@ impl NetworkError {
                 || msg == "Raw channel closed"
                 || msg == "Request cancelled: channel closed"
         )
+    }
+
+    /// この error の分類を返す (Phase 5 / UNS-15)。
+    ///
+    /// 各 variant を `ErrorCategory` の 4 区分に写像する。caller は category で
+    /// retry 可否やログレベルを決められる。
+    pub fn category(&self) -> ErrorCategory {
+        match self {
+            // トランスポート層: QUIC / 接続 / トランスポート種別
+            NetworkError::Connection(_)
+            | NetworkError::Quic(_)
+            | NetworkError::NotConnected
+            | NetworkError::UnsupportedTransport(_) => ErrorCategory::Transport,
+            // プロトコル層: 不正パケット / スキーマ不整合 / チャネル状態 / シリアライズ
+            NetworkError::Protocol(_)
+            | NetworkError::Serialization(_)
+            | NetworkError::Codec(_)
+            | NetworkError::FrameSerialization(_) => ErrorCategory::Protocol,
+            // アプリケーション層: handler が見つからない (caller 指定ミス)
+            NetworkError::HandlerNotFound { .. } => ErrorCategory::Application,
+            // リソース層: timeout (quota / rate-limit もここに将来追加)
+            NetworkError::Timeout => ErrorCategory::Resource,
+        }
     }
 }
 
@@ -292,6 +355,40 @@ mod tests {
         assert_eq!(restored.method, original.method);
         assert_eq!(restored.msg_type, original.msg_type);
         assert_eq!(restored.payload, original.payload);
+    }
+
+    /// 全 NetworkError variant が想定どおりの ErrorCategory に写像されること
+    #[test]
+    fn network_error_category_mapping() {
+        use ErrorCategory::*;
+        let cases: &[(NetworkError, ErrorCategory)] = &[
+            (NetworkError::Connection("x".into()), Transport),
+            (NetworkError::Quic("x".into()), Transport),
+            (NetworkError::NotConnected, Transport),
+            (NetworkError::UnsupportedTransport("x".into()), Transport),
+            (NetworkError::Protocol("x".into()), Protocol),
+            (
+                NetworkError::FrameSerialization(SerializationError::InvalidHeader),
+                Protocol,
+            ),
+            (
+                NetworkError::HandlerNotFound { method: "x".into() },
+                Application,
+            ),
+            (NetworkError::Timeout, Resource),
+        ];
+        for (err, expected) in cases {
+            assert_eq!(err.category(), *expected, "{err:?}");
+        }
+    }
+
+    /// ErrorCategory の文字列表現が TS SDK の値と一致すること
+    #[test]
+    fn error_category_str_values() {
+        assert_eq!(ErrorCategory::Transport.as_str(), "transport");
+        assert_eq!(ErrorCategory::Protocol.as_str(), "protocol");
+        assert_eq!(ErrorCategory::Application.as_str(), "application");
+        assert_eq!(ErrorCategory::Resource.as_str(), "resource");
     }
 
     /// 各 MessageType variant が wire を通って同じ variant で戻ること

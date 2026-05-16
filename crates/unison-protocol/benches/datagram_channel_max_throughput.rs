@@ -23,7 +23,6 @@
 //! [max iters=N] sent=X server_recv=Y client_recv=Z drop=W% sent/s=A recv/s=B
 //! ```
 
-use club_unison::{ProtocolClient, ProtocolServer};
 use criterion::{Criterion, criterion_group, criterion_main};
 use serde::{Deserialize, Serialize};
 use std::hint::black_box;
@@ -31,6 +30,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::runtime::Runtime;
+use unison::{ProtocolClient, ProtocolServer};
 
 /// 1 session の stream 持続時間 (= sustained と同じ、 比較しやすい)
 const STREAM_DURATION: Duration = Duration::from_secs(2);

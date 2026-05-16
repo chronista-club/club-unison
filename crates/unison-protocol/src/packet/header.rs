@@ -5,6 +5,8 @@
 //! length-prefix (= u32 BE) で boundary を明示する形に切り替わっている。
 //! 詳細は `spec/02 §8.4` と `design/wire-format.md` を参照。
 
+use uuid::Uuid;
+
 use super::flags::PacketFlags;
 use crate::proto;
 
@@ -82,6 +84,10 @@ pub struct UnisonPacketHeader {
 
     /// 応答先メッセージID（0=Request/Oneway, >0=Response）
     pub response_to: u64,
+
+    /// 相関ID（UUID v7）。リクエスト追跡用にクライアントが生成し、
+    /// packet flow を通じて伝播する。`None` なら未設定。
+    pub correlation_id: Option<Uuid>,
 }
 
 impl UnisonPacketHeader {
@@ -104,6 +110,7 @@ impl UnisonPacketHeader {
             stream_id: 0,
             message_id: 0,
             response_to: 0,
+            correlation_id: None,
         }
     }
 
@@ -170,6 +177,20 @@ impl UnisonPacketHeader {
         self
     }
 
+    /// 相関IDを設定
+    pub fn with_correlation_id(mut self, id: Uuid) -> Self {
+        self.correlation_id = Some(id);
+        self
+    }
+
+    /// 新しい相関ID（UUID v7）を生成して設定
+    ///
+    /// クライアントが request 起点で呼び、以降の packet flow に伝播させる。
+    pub fn with_new_correlation_id(mut self) -> Self {
+        self.correlation_id = Some(Uuid::now_v7());
+        self
+    }
+
     /// このメッセージがRequestかチェック
     pub fn is_request(&self) -> bool {
         self.response_to == 0 && self.message_id != 0
@@ -206,6 +227,11 @@ impl UnisonPacketHeader {
             stream_id: self.stream_id,
             message_id: self.message_id,
             response_to: self.response_to,
+            // 未設定なら空 byte 列 (= proto3 default)、設定済みなら 16 byte raw
+            correlation_id: self
+                .correlation_id
+                .map(|id| id.as_bytes().to_vec())
+                .unwrap_or_default(),
             __buffa_unknown_fields: Default::default(),
         }
     }
@@ -223,6 +249,10 @@ impl UnisonPacketHeader {
             stream_id: p.stream_id,
             message_id: p.message_id,
             response_to: p.response_to,
+            // 16 byte ちょうどのときだけ Uuid として復元 (= 空 / 不正長は None)
+            correlation_id: <[u8; 16]>::try_from(p.correlation_id.as_slice())
+                .ok()
+                .map(Uuid::from_bytes),
         }
     }
 }
@@ -338,7 +368,8 @@ mod tests {
             .with_sequence(42)
             .with_stream_id(7)
             .with_message_id(1)
-            .with_response_to(2);
+            .with_response_to(2)
+            .with_new_correlation_id();
         header.payload_length = 128;
         header.compressed_length = 64;
         let mut flags = PacketFlags::new();
@@ -357,5 +388,21 @@ mod tests {
         assert_eq!(restored.stream_id, header.stream_id);
         assert_eq!(restored.message_id, header.message_id);
         assert_eq!(restored.response_to, header.response_to);
+        assert_eq!(restored.correlation_id, header.correlation_id);
+    }
+
+    #[test]
+    fn test_correlation_id_proto_round_trip() {
+        // 未設定 (None) は wire を通っても None のまま
+        let header = UnisonPacketHeader::new(PacketType::Data);
+        assert_eq!(header.correlation_id, None);
+        let restored = UnisonPacketHeader::from_proto(&header.to_proto());
+        assert_eq!(restored.correlation_id, None);
+
+        // 設定済み UUID v7 は完全保存される
+        let id = uuid::Uuid::now_v7();
+        let header = UnisonPacketHeader::new(PacketType::Data).with_correlation_id(id);
+        let restored = UnisonPacketHeader::from_proto(&header.to_proto());
+        assert_eq!(restored.correlation_id, Some(id));
     }
 }

@@ -66,4 +66,8 @@ message PacketHeader {
   uint64 message_id = 9;
   // 応答先メッセージ ID (= 0 = Request/Oneway, >0 = Response)
   uint64 response_to = 10;
+  // 相関 ID (= UUID v7、 16 byte raw bytes)。 request 追跡用に client が生成し、
+  // packet flow を通じて伝播。 error 時に log へ添付して trace できる。
+  // 空 (= 0 byte) なら未設定。 v0.11.0 (Phase 5 / UNS-15) で追加された新 field。
+  bytes correlation_id = 11;
 }

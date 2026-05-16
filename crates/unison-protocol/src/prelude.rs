@@ -6,7 +6,7 @@
 //! # 使用例
 //!
 //! ```rust
-//! use club_unison::prelude::*;
+//! use unison::prelude::*;
 //! ```
 
 // パーサー関連
@@ -30,6 +30,7 @@ pub use crate::network::{
 pub use crate::network::client::{ClientConnectionEvent, ClientConnectionEventReceiver};
 
 // エラー型
+pub use crate::network::ErrorCategory;
 pub use crate::network::NetworkError as UnisonNetworkError;
 pub use crate::parser::ParseError as UnisonParseError;
 

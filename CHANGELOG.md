@@ -7,6 +7,16 @@
 
 ## [Unreleased]
 
+### 変更 — lib 名を bare name に (`club_unison` → `unison`)
+
+> chronista-club 命名規則 (2026-05-16) に適合。 公開 crate の `[lib].name` は bare name (prefix なし) とし、 v0.6.0 full rename policy の lib-name 条項を撤回。 club-nostos lead からの cross-project handoff (creo-memories `mem_1Cb6DxPnPzYCxqmWcy8YzZ`) を受けた適合。
+
+- `crates/unison-protocol/Cargo.toml` の `[lib].name`: `club_unison` → **`unison`**
+- 全 `use club_unison::...` → **`use unison::...`** (unison-protocol / unison-agent / unison-mcp-probe の src / tests / benches / examples、 41 ファイル一括置換)
+- README / doc comment の使用例も更新
+- **source-breaking**: consumer の `use` 行が変わる (`use club_unison::` → `use unison::`)。 ただし crates.io package 名 `club-unison` と dep 行 (`club-unison = "..."`) は不変
+- 理由: `club-` prefix は crates.io global namespace の衝突回避が責務。 lib 名は registry namespace 外 (code path) なので prefix 不要、 `use club_unison::` の冗長を排す
+
 ## [0.10.1] - 2026-05-16 — 「benchmark fresh baseline + datagram channel 計測強化」 patch
 
 > v0.10.1 のテーマは **「v0.9.0 buffa pivot + v0.10.0 datagram channel pivot を実測で裏付け」**。 内部実装大変更後の数字を fresh baseline として記録、 datagram channel の position sync use case + max throughput 計測を追加。 純粋 additive (= wire / caller code 互換 100%)。

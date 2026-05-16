@@ -16,8 +16,8 @@
 use anyhow::Result;
 use std::sync::Arc;
 
-use club_unison::network::quic::{QuicClient, QuicServer};
-use club_unison::network::{CertSource, InternalMeshKeypair, ProtocolServer, TrustAnchors};
+use unison::network::quic::{QuicClient, QuicServer};
+use unison::network::{CertSource, InternalMeshKeypair, ProtocolServer, TrustAnchors};
 
 #[tokio::main]
 async fn main() -> Result<()> {

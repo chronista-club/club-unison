@@ -1,12 +1,12 @@
 mod common;
 
 use bytes::Bytes;
-use club_unison::context::{HandlerRegistry, MessageDispatcher};
-use club_unison::network::{MessageType, NetworkError, ProtocolMessage};
-use club_unison::packet::config::{CompressionConfig, PacketConfig};
-use club_unison::packet::header::{PacketType, UnisonPacketHeader};
-use club_unison::packet::serialization::PacketSerializer;
-use club_unison::packet::{SerializationError, UnisonPacket};
+use unison::context::{HandlerRegistry, MessageDispatcher};
+use unison::network::{MessageType, NetworkError, ProtocolMessage};
+use unison::packet::config::{CompressionConfig, PacketConfig};
+use unison::packet::header::{PacketType, UnisonPacketHeader};
+use unison::packet::serialization::PacketSerializer;
+use unison::packet::{SerializationError, UnisonPacket};
 
 /// 短すぎるバイト列 → from_bytes が InvalidHeader を返す
 #[test]
@@ -112,8 +112,8 @@ fn test_integ_max_payload_size_exceeded() {
 //
 // `network::ProtocolMessage` は private な `into_proto()` を持つが、 test crate からは
 // 触れないので、 ここで等価な変換を再現する (= 同じ wire format で encode するため)。
-fn proto_message_from(msg: ProtocolMessage) -> club_unison::proto::ProtocolMessage {
-    use club_unison::proto;
+fn proto_message_from(msg: ProtocolMessage) -> unison::proto::ProtocolMessage {
+    use unison::proto;
     let msg_type = match msg.msg_type {
         MessageType::Request => proto::MessageType::REQUEST,
         MessageType::Response => proto::MessageType::RESPONSE,

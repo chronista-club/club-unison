@@ -1,6 +1,3 @@
-use club_unison::network::channel::UnisonChannel;
-use club_unison::network::{MessageType, quic::QuicClient};
-use club_unison::{ProtocolClient, ProtocolServer};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use hdrhistogram::Histogram;
 use serde_json::json;
@@ -9,6 +6,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Runtime;
 use tokio::sync::Barrier;
+use unison::network::channel::UnisonChannel;
+use unison::network::{MessageType, quic::QuicClient};
+use unison::{ProtocolClient, ProtocolServer};
 
 /// メッセージサイズのバリエーション
 const MESSAGE_SIZES: &[usize] = &[64, 256, 1024, 4096, 16384];

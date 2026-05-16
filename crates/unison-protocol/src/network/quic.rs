@@ -3,13 +3,16 @@ use quinn::{ClientConfig, Connection, Endpoint, RecvStream, SendStream, ServerCo
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::{ClientConfig as RustlsClientConfig, ServerConfig as RustlsServerConfig};
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
+use super::conn::{BiStream, BoxUnisonRecv, BoxUnisonSend, UnisonConn, UnisonRecv, UnisonSend};
 use super::{
     NetworkError, ProtocolFrame, ProtocolMessage, context::ConnectionContext,
     server::ProtocolServer,
@@ -123,7 +126,10 @@ fn has_port(addr: &str) -> bool {
 
 /// Length-prefixed フレームの読み取り（4バイトBE長 + データ）
 /// ストリームを消費せずに1フレームだけ読む
-pub async fn read_frame(recv: &mut RecvStream) -> Result<bytes::Bytes> {
+///
+/// `quinn::RecvStream` のみならず WebTransport のストリームでも使えるよう、
+/// `AsyncRead` でジェネリック化されている (= transport 非依存)。
+pub async fn read_frame<R: AsyncRead + Unpin + ?Sized>(recv: &mut R) -> Result<bytes::Bytes> {
     let mut len_buf = [0u8; 4];
     recv.read_exact(&mut len_buf)
         .await
@@ -140,7 +146,7 @@ pub async fn read_frame(recv: &mut RecvStream) -> Result<bytes::Bytes> {
 }
 
 /// Length-prefixed フレームの書き込み
-pub async fn write_frame(send: &mut SendStream, data: &[u8]) -> Result<()> {
+pub async fn write_frame<W: AsyncWrite + Unpin + ?Sized>(send: &mut W, data: &[u8]) -> Result<()> {
     let len = (data.len() as u32).to_be_bytes();
     send.write_all(&len)
         .await
@@ -155,12 +161,27 @@ pub async fn write_frame(send: &mut SendStream, data: &[u8]) -> Result<()> {
 pub const FRAME_TYPE_PROTOCOL: u8 = 0x00;
 pub const FRAME_TYPE_RAW: u8 = 0x01;
 
+/// Channel open ack の method 名 (= Phase 6c)。
+///
+/// クライアントが `__channel:{name}` open frame を送ると、 サーバーは登録済み
+/// channel を lookup し、 同 stream へこの method の `ProtocolMessage` を 1 本返す:
+/// - **accept**: `msg_type = Response`、 `id` = open request の id、 payload `{}`
+/// - **nack** (= channel-not-found): `msg_type = Error`、 同 `id`、
+///   payload `{"error":"channel-not-found","channel":"{name}"}`
+///
+/// `id` が open request と一致するため、 クライアントは自分の open request に
+/// 相関させられる。 `__identity` と同じ `__`-prefix の特殊 method であり、 新しい
+/// typed frame type は追加しない (= 既存 wire layout は不変、 additive)。
+pub const CHANNEL_ACK_METHOD: &str = "__channel_ack";
+
 /// Typed フレーム — type tag 付きの読み書き
 /// フォーマット: [4 bytes: length][1 byte: type tag][payload]
 /// length は type tag + payload の合計バイト数
 ///
 /// Typed フレームの読み取り — type tag とペイロードを返す
-pub async fn read_typed_frame(recv: &mut RecvStream) -> Result<(u8, bytes::Bytes)> {
+pub async fn read_typed_frame<R: AsyncRead + Unpin + ?Sized>(
+    recv: &mut R,
+) -> Result<(u8, bytes::Bytes)> {
     let mut len_buf = [0u8; 4];
     recv.read_exact(&mut len_buf)
         .await
@@ -190,7 +211,11 @@ pub async fn read_typed_frame(recv: &mut RecvStream) -> Result<(u8, bytes::Bytes
 }
 
 /// Typed フレームの書き込み
-pub async fn write_typed_frame(send: &mut SendStream, frame_type: u8, data: &[u8]) -> Result<()> {
+pub async fn write_typed_frame<W: AsyncWrite + Unpin + ?Sized>(
+    send: &mut W,
+    frame_type: u8,
+    data: &[u8],
+) -> Result<()> {
     let total_len = (1 + data.len()) as u32;
     send.write_all(&total_len.to_be_bytes())
         .await
@@ -267,7 +292,22 @@ impl QuicClient {
         }
     }
 
+    /// 証明書検証を行わない insecure な client を構築する。
+    ///
+    /// **注意**: この constructor は [`TrustAnchors::SkipVerification`] を
+    /// 暗黙に選択するため、サーバー証明書を一切検証しない。 production では
+    /// [`QuicClient::builder`] で明示的に [`TrustAnchors`] を指定すること。
+    /// なお [`QuicClient::connect`] は SkipVerification 時の接続先を loopback に
+    /// 制限する。
+    ///
+    /// [`TrustAnchors`]: crate::network::trust::TrustAnchors
+    /// [`TrustAnchors::SkipVerification`]: crate::network::trust::TrustAnchors::SkipVerification
     pub fn new() -> Result<Self> {
+        warn!(
+            "QuicClient::new() constructs an INSECURE client (no server certificate \
+             verification). Use QuicClient::builder() with an explicit TrustAnchors for \
+             the secure path."
+        );
         let (tx, rx) = mpsc::unbounded_channel();
         Ok(Self {
             endpoint: Mutex::new(None),
@@ -356,6 +396,22 @@ impl QuicClient {
     pub async fn connect(&self, url: &str) -> Result<()> {
         // URL を解決 (IPv4 / IPv6 / DNS hostname)
         let addr = Self::parse_server_address(url).await?;
+
+        // SkipVerification は loopback 接続にのみ許可する (TS 側 `enforceTrustGate`
+        // と対称)。 任意のホストに対する証明書検証スキップを防ぐ。
+        if matches!(
+            self.trust_anchors,
+            super::trust::TrustAnchors::SkipVerification
+        ) && !addr.ip().is_loopback()
+        {
+            return Err(anyhow::anyhow!(
+                "SkipVerification is restricted to loopback; got {} (resolved from {}). \
+                 Use QuicClient::builder() with an explicit TrustAnchors to connect to \
+                 non-loopback hosts.",
+                addr,
+                url
+            ));
+        }
 
         // v0.8.0+: builder で設定された trust_anchors を使う (default = SkipVerification、
         // builder 経由で TrustAnchors::System 等に明示変更可能)
@@ -552,10 +608,10 @@ impl QuicServer {
         let cert_der_bytes = cert_key.cert.der().to_vec();
         let private_key_der_bytes = cert_key.signing_key.serialize_der();
 
-        Ok((
-            vec![CertificateDer::from(cert_der_bytes)],
-            PrivateKeyDer::try_from(private_key_der_bytes).unwrap(),
-        ))
+        let private_key = PrivateKeyDer::try_from(private_key_der_bytes)
+            .map_err(|e| anyhow::anyhow!("Failed to wrap private key: {}", e))?;
+
+        Ok((vec![CertificateDer::from(cert_der_bytes)], private_key))
     }
 
     /// 外部ファイルから証明書を読み込み（本番環境デプロイ用）
@@ -652,8 +708,9 @@ impl QuicServer {
 
             let server = Arc::clone(&self.server);
             let ctx = Arc::new(ConnectionContext::new());
+            let conn: Arc<dyn UnisonConn> = Arc::new(connection);
             tokio::spawn(async move {
-                if let Err(e) = handle_connection(connection, server, ctx).await {
+                if let Err(e) = handle_connection(conn, server, ctx).await {
                     error!("Connection error: {}", e);
                 }
             });
@@ -685,8 +742,9 @@ impl QuicServer {
 
                             let server = Arc::clone(&self.server);
                             let ctx = Arc::new(ConnectionContext::new());
+                            let conn: Arc<dyn UnisonConn> = Arc::new(connection);
                             tokio::spawn(async move {
-                                if let Err(e) = handle_connection(connection, server, ctx).await {
+                                if let Err(e) = handle_connection(conn, server, ctx).await {
                                     error!("Connection error: {}", e);
                                 }
                             });
@@ -769,15 +827,57 @@ async fn client_accept_bi_loop(
     }
 }
 
-async fn handle_connection(
-    connection: Connection,
+/// Channel open ack / nack を 1 本の typed protocol frame として送信する (= Phase 6c)。
+///
+/// `accepted == true` なら [`MessageType::Response`] の `open_ack`、 `false` なら
+/// [`MessageType::Error`] の nack (= payload に `channel-not-found`) を `send`
+/// ストリームへ書き出す。 `request_id` は open request の id を引き継ぎ、
+/// クライアントが自分の open と相関できるようにする。
+async fn write_channel_ack<W: AsyncWrite + Unpin + ?Sized>(
+    send: &mut W,
+    request_id: u64,
+    accepted: bool,
+    channel_name: &str,
+) -> Result<()> {
+    use super::MessageType;
+
+    let (msg_type, payload) = if accepted {
+        (MessageType::Response, serde_json::json!({}))
+    } else {
+        (
+            MessageType::Error,
+            serde_json::json!({
+                "error": "channel-not-found",
+                "channel": channel_name,
+            }),
+        )
+    };
+    let msg = ProtocolMessage::new_with_json(
+        request_id,
+        CHANNEL_ACK_METHOD.to_string(),
+        msg_type,
+        payload,
+    )
+    .map_err(|e| anyhow::anyhow!("Failed to build open_ack message: {}", e))?;
+    let frame = msg
+        .into_frame()
+        .map_err(|e| anyhow::anyhow!("Failed to encode open_ack frame: {}", e))?;
+    write_typed_frame(send, FRAME_TYPE_PROTOCOL, &frame.to_bytes()).await
+}
+
+/// transport 非依存の接続ハンドラー。
+///
+/// raw QUIC と WebTransport の両 ingress がこの関数へ収束する。 `connection` は
+/// [`UnisonConn`] の trait object であり、 この関数は transport の種類を知らない。
+pub(crate) async fn handle_connection(
+    connection: Arc<dyn UnisonConn>,
     server: Arc<ProtocolServer>,
     ctx: Arc<ConnectionContext>,
 ) -> Result<()> {
     let remote_addr = connection.remote_address();
 
     // v0.10.0: active connection に登録 (= server.broadcast の配信先)
-    let connection_arc = Arc::new(connection.clone());
+    let connection_arc = Arc::clone(&connection);
     server
         .add_active_connection(remote_addr, Arc::clone(&connection_arc))
         .await;
@@ -822,7 +922,7 @@ async fn handle_connection(
                     {
                         warn!("Failed to send identity: {}", e);
                     } else {
-                        let _ = send_stream.finish();
+                        let _ = send_stream.finish().await;
                         info!("Identity sent to client");
                     }
                 }
@@ -830,6 +930,7 @@ async fn handle_connection(
                     warn!("Failed to open identity stream: {}", e);
                 }
             }
+            // 注: WebTransport セッションにも同一フローが適用される。
         }
         Err(e) => {
             warn!("Failed to serialize identity frame: {}", e);
@@ -843,7 +944,7 @@ async fn handle_connection(
     });
 
     loop {
-        let connection_clone = connection.clone();
+        let connection_clone = Arc::clone(&connection);
         match connection.accept_bi().await {
             Ok((send_stream, mut recv_stream)) => {
                 let server = Arc::clone(&server);
@@ -872,6 +973,7 @@ async fn handle_connection(
                             // チャネルルーティング: __channel: プレフィックスをチェック
                             if let Some(channel_name) = request.method.strip_prefix("__channel:") {
                                 let channel_name = channel_name.to_string();
+                                let mut send_stream = send_stream;
                                 if let Some(handler) =
                                     server.get_channel_handler(&channel_name).await
                                 {
@@ -883,11 +985,29 @@ async fn handle_connection(
                                     // なので info noise になりがち。
                                     debug!("Channel '{}' opened", channel_name);
 
+                                    // Phase 6c: open frame と同 stream へ open_ack
+                                    // (= Response) を 1 本返す。 id は open request の
+                                    // id を引き継ぎ、 クライアントが相関できるようにする。
+                                    if let Err(e) = write_channel_ack(
+                                        &mut send_stream,
+                                        request.id,
+                                        true,
+                                        &channel_name,
+                                    )
+                                    .await
+                                    {
+                                        warn!(
+                                            "Failed to send open_ack for '{}': {}",
+                                            channel_name, e
+                                        );
+                                        return;
+                                    }
+
                                     // チャネル用のUnisonStreamを作成（ストリームは生きたまま）
                                     let stream = UnisonStream::from_streams(
                                         request.id,
                                         request.method.clone(),
-                                        Arc::new(connection),
+                                        connection,
                                         send_stream,
                                         recv_stream,
                                     );
@@ -909,7 +1029,26 @@ async fn handle_connection(
                                         }
                                     }
                                 } else {
+                                    // Phase 6c: 未登録 channel への open は nack
+                                    // (= Error frame) を返してから stream を畳む。
+                                    // これによりクライアントの open は silent に
+                                    // hang せず channel-not-found で即 reject する。
                                     warn!("No channel handler for: {}", channel_name);
+                                    if let Err(e) = write_channel_ack(
+                                        &mut send_stream,
+                                        request.id,
+                                        false,
+                                        &channel_name,
+                                    )
+                                    .await
+                                    {
+                                        warn!(
+                                            "Failed to send open nack for '{}': {}",
+                                            channel_name, e
+                                        );
+                                    } else {
+                                        let _ = send_stream.finish().await;
+                                    }
                                 }
                                 return;
                             }
@@ -926,15 +1065,10 @@ async fn handle_connection(
                     }
                 });
             }
-            Err(quinn::ConnectionError::ApplicationClosed(_)) => {
-                info!("Client disconnected");
-                server.emit_connection_event(super::server::ConnectionEvent::Disconnected {
-                    remote_addr,
-                });
-                break;
-            }
             Err(e) => {
-                error!("Failed to accept stream: {}", e);
+                // accept_bi の Err = 接続終了 (= 正常な切断もエラー扱いで来る)。
+                // transport を問わず接続ループを抜ける。
+                info!("Connection closed ({}), client disconnected", e);
                 server.emit_connection_event(super::server::ConnectionEvent::Disconnected {
                     remote_addr,
                 });
@@ -949,6 +1083,91 @@ async fn handle_connection(
     server.remove_active_connection(remote_addr).await;
 
     Ok(())
+}
+
+// ─────────────────────────────────────────
+// UnisonConn 実装 — quinn::Connection
+// ─────────────────────────────────────────
+
+/// `quinn::SendStream` を [`UnisonSend`] として扱う。
+///
+/// `quinn::SendStream` は `tokio::io::AsyncWrite` を実装済みなので、 `finish`
+/// だけ橋渡しすればよい。
+impl UnisonSend for SendStream {
+    fn finish(
+        &mut self,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<(), NetworkError>> + Send + '_>> {
+        // quinn の finish は同期。 trait の async シグネチャに合わせて即解決する
+        // future で包む。 二重 finish (= ClosedStream) は正常終了扱い (= 冪等)。
+        let result = match SendStream::finish(self) {
+            Ok(()) | Err(quinn::ClosedStream { .. }) => Ok(()),
+        };
+        Box::pin(async move { result })
+    }
+}
+
+/// `quinn::RecvStream` を [`UnisonRecv`] として扱う。
+impl UnisonRecv for RecvStream {
+    fn stop(&mut self) -> Result<(), NetworkError> {
+        match RecvStream::stop(self, quinn::VarInt::from_u32(0)) {
+            Ok(()) | Err(quinn::ClosedStream { .. }) => Ok(()),
+        }
+    }
+}
+
+/// `quinn::Connection` を transport-agnostic な [`UnisonConn`] として公開する。
+impl UnisonConn for Connection {
+    fn accept_bi(
+        &self,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<BiStream, NetworkError>> + Send + '_>>
+    {
+        Box::pin(async move {
+            let (send, recv) = Connection::accept_bi(self)
+                .await
+                .map_err(|e| NetworkError::Quic(format!("accept_bi failed: {}", e)))?;
+            let send: BoxUnisonSend = Box::new(send);
+            let recv: BoxUnisonRecv = Box::new(recv);
+            Ok((send, recv))
+        })
+    }
+
+    fn open_bi(
+        &self,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<BiStream, NetworkError>> + Send + '_>>
+    {
+        Box::pin(async move {
+            let (send, recv) = Connection::open_bi(self)
+                .await
+                .map_err(|e| NetworkError::Quic(format!("open_bi failed: {}", e)))?;
+            let send: BoxUnisonSend = Box::new(send);
+            let recv: BoxUnisonRecv = Box::new(recv);
+            Ok((send, recv))
+        })
+    }
+
+    fn send_datagram(&self, data: bytes::Bytes) -> Result<(), NetworkError> {
+        Connection::send_datagram(self, data)
+            .map_err(|e| NetworkError::Quic(format!("send_datagram failed: {}", e)))
+    }
+
+    fn recv_datagram(
+        &self,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<bytes::Bytes, NetworkError>> + Send + '_>>
+    {
+        Box::pin(async move {
+            Connection::read_datagram(self)
+                .await
+                .map_err(|e| NetworkError::Quic(format!("recv_datagram failed: {}", e)))
+        })
+    }
+
+    fn remote_address(&self) -> SocketAddr {
+        Connection::remote_address(self)
+    }
+
+    fn close(&self, code: u32, reason: &[u8]) {
+        Connection::close(self, quinn::VarInt::from_u32(code), reason);
+    }
 }
 
 /// Server-side cert resolver that always returns the same [`rustls::sign::CertifiedKey`].
@@ -967,21 +1186,26 @@ impl rustls::server::ResolvesServerCert for SingleCertResolver {
     }
 }
 
-/// Unison Stream - QUIC双方向ストリーム実装
+/// Unison Stream — transport 非依存の双方向ストリーム実装。
+///
+/// 内部は [`BoxUnisonSend`] / [`BoxUnisonRecv`] (= trait object) を保持し、
+/// raw QUIC と WebTransport のどちらのストリームでも同一の型で扱える。 これが
+/// `register_channel` ハンドラーに渡る面 (= handler-facing API) なので、 型名・
+/// メソッドシグネチャは安定させている。
 pub struct UnisonStream {
     stream_id: u64,
     method: String,
     #[allow(dead_code)]
-    connection: Arc<Connection>,
-    send_stream: Arc<Mutex<Option<SendStream>>>,
-    recv_stream: Arc<Mutex<Option<RecvStream>>>,
+    connection: Arc<dyn UnisonConn>,
+    send_stream: Arc<Mutex<Option<BoxUnisonSend>>>,
+    recv_stream: Arc<Mutex<Option<BoxUnisonRecv>>>,
     is_active: Arc<AtomicBool>,
 }
 
 impl UnisonStream {
     pub async fn new(
         method: String,
-        connection: Arc<Connection>,
+        connection: Arc<dyn UnisonConn>,
         stream_id: Option<u64>,
     ) -> Result<Self> {
         static STREAM_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -1008,9 +1232,9 @@ impl UnisonStream {
     pub fn from_streams(
         stream_id: u64,
         method: String,
-        connection: Arc<Connection>,
-        send_stream: SendStream,
-        recv_stream: RecvStream,
+        connection: Arc<dyn UnisonConn>,
+        send_stream: BoxUnisonSend,
+        recv_stream: BoxUnisonRecv,
     ) -> Self {
         Self {
             stream_id,
@@ -1089,15 +1313,11 @@ impl UnisonStream {
         self.is_active.store(false, Ordering::SeqCst);
 
         if let Some(mut send_stream) = self.send_stream.lock().await.take() {
-            send_stream
-                .finish()
-                .map_err(|e| NetworkError::Quic(format!("Failed to close send stream: {}", e)))?;
+            send_stream.finish().await?;
         }
 
         if let Some(mut recv_stream) = self.recv_stream.lock().await.take() {
-            recv_stream.stop(quinn::VarInt::from_u32(0)).map_err(|e| {
-                NetworkError::Quic(format!("Failed to close receive stream: {}", e))
-            })?;
+            recv_stream.stop()?;
         }
 
         info!(

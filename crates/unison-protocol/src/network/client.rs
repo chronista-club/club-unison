@@ -11,7 +11,10 @@ use super::context::ConnectionContext;
 use super::datagram_channel::DatagramChannel;
 use super::datagram_dispatcher::DatagramDispatcher;
 use super::identity::ServerIdentity;
-use super::quic::{FRAME_TYPE_PROTOCOL, QuicClient, UnisonStream, write_typed_frame};
+use super::quic::{
+    CHANNEL_ACK_METHOD, FRAME_TYPE_PROTOCOL, QuicClient, UnisonStream, read_typed_frame,
+    write_typed_frame,
+};
 use super::{MessageType, NetworkError, ProtocolMessage};
 
 /// Client side connection event (v0.10.0 で追加、 [`ProtocolServer::ConnectionEvent`] と parallel)
@@ -98,7 +101,14 @@ impl ProtocolClient {
         }
     }
 
-    /// Create a new client with QUIC transport
+    /// Create a new client with QUIC transport.
+    ///
+    /// **注意**: この constructor は [`QuicClient::new`] を経由し、証明書検証を
+    /// 行わない insecure な client を構築する (構築時に `tracing::warn!` が出る)。
+    /// production では [`QuicClient::builder`] + [`ProtocolClient::new`] で
+    /// 明示的に [`TrustAnchors`] を指定すること。
+    ///
+    /// [`TrustAnchors`]: crate::network::trust::TrustAnchors
     pub fn new_default() -> Result<Self> {
         let transport = QuicClient::new()?;
         let (event_tx, _) = broadcast::channel(16);
@@ -137,8 +147,13 @@ impl ProtocolClient {
 
     /// チャネルを開く（UnisonChannel を返す）
     ///
-    /// `__channel:{name}` メソッドで新しいQUICストリームを開き、
-    /// `UnisonChannel` でラップして返す。
+    /// `__channel:{name}` メソッドで新しいQUICストリームを開き、 サーバーが返す
+    /// `open_ack` (= Phase 6c) を待ってから `UnisonChannel` でラップして返す。
+    ///
+    /// サーバーが未登録 channel に対し nack (= `__channel_ack` の Error frame) を
+    /// 返した場合は [`NetworkError::Protocol`] で reject する (= channel-not-found)。
+    /// `open_ack` を待つことで、 fire-and-forget だった旧挙動の「accept されたか
+    /// 分からない」問題を解消する。
     pub async fn open_channel(&self, channel_name: &str) -> Result<UnisonChannel, NetworkError> {
         let connection_guard = self.transport.connection().read().await;
         let connection = connection_guard
@@ -146,7 +161,7 @@ impl ProtocolClient {
             .ok_or(NetworkError::NotConnected)?;
 
         // 新しい双方向ストリームを開く
-        let (mut send_stream, recv_stream) = connection
+        let (mut send_stream, mut recv_stream) = connection
             .open_bi()
             .await
             .map_err(|e| NetworkError::Quic(format!("Failed to open channel stream: {}", e)))?;
@@ -169,14 +184,38 @@ impl ProtocolClient {
             .await
             .map_err(|e| NetworkError::Protocol(format!("Failed to send channel open: {}", e)))?;
 
+        // Phase 6c: サーバーの open_ack を待つ。 server は handler を起動する前に
+        // 同 stream へ `__channel_ack` frame を 1 本返す。 これを recv loop に渡る
+        // 前にここで read することで、 accept されたかを確定させる。
+        let ack = read_channel_ack(&mut recv_stream).await?;
+        match ack.msg_type {
+            MessageType::Response => {
+                tracing::debug!("Channel '{}' open_ack received", channel_name);
+            }
+            MessageType::Error => {
+                let payload = ack.payload_as_value().unwrap_or_default();
+                return Err(NetworkError::Protocol(format!(
+                    "Channel '{}' open rejected: {}",
+                    channel_name, payload
+                )));
+            }
+            other => {
+                return Err(NetworkError::Protocol(format!(
+                    "Channel '{}' open: unexpected ack msg_type {:?}",
+                    channel_name, other
+                )));
+            }
+        }
+
         // UnisonStreamを作成してUnisonChannelでラップ
-        let conn_arc = Arc::new(connection.clone());
+        // quinn のストリームを transport 非依存の trait object へ box する。
+        let conn_arc: Arc<dyn super::conn::UnisonConn> = Arc::new(connection.clone());
         let stream = UnisonStream::from_streams(
             request_id,
             format!("__channel:{}", channel_name),
             conn_arc,
-            send_stream,
-            recv_stream,
+            Box::new(send_stream),
+            Box::new(recv_stream),
         );
 
         // コンテキストにチャネルを登録
@@ -221,7 +260,7 @@ impl ProtocolClient {
         let connection = connection_guard
             .as_ref()
             .ok_or(NetworkError::NotConnected)?;
-        let connection_arc = Arc::new(connection.clone());
+        let connection_arc: Arc<dyn super::conn::UnisonConn> = Arc::new(connection.clone());
         drop(connection_guard);
 
         // Datagram dispatcher を lazy spawn
@@ -364,6 +403,38 @@ impl ProtocolClient {
 }
 
 use super::generate_request_id;
+
+/// Channel open 後の `open_ack` (= `__channel_ack` frame) を recv ストリームから
+/// 1 本読む (= Phase 6c)。
+///
+/// サーバーは handler 起動の前に同 stream へ ack を返す。 frame type が
+/// PROTOCOL でない / method が `__channel_ack` でない場合はプロトコル違反として
+/// `Err`。 stream が ack 到着前に終端した場合も `Err` (= no-accept signal)。
+async fn read_channel_ack<R>(recv: &mut R) -> Result<ProtocolMessage, NetworkError>
+where
+    R: tokio::io::AsyncRead + Unpin + ?Sized,
+{
+    let (frame_type, frame_bytes) = read_typed_frame(recv)
+        .await
+        .map_err(|e| NetworkError::Protocol(format!("Failed to read open_ack frame: {}", e)))?;
+    if frame_type != FRAME_TYPE_PROTOCOL {
+        return Err(NetworkError::Protocol(format!(
+            "open_ack: unexpected frame type 0x{:02x}",
+            frame_type
+        )));
+    }
+    let frame = super::ProtocolFrame::from_bytes(&frame_bytes)
+        .map_err(|e| NetworkError::Protocol(format!("Failed to decode open_ack frame: {}", e)))?;
+    let msg = ProtocolMessage::from_frame(&frame)
+        .map_err(|e| NetworkError::Protocol(format!("Failed to parse open_ack: {}", e)))?;
+    if msg.method != CHANNEL_ACK_METHOD {
+        return Err(NetworkError::Protocol(format!(
+            "open_ack: expected method '{}', got '{}'",
+            CHANNEL_ACK_METHOD, msg.method
+        )));
+    }
+    Ok(msg)
+}
 
 #[cfg(test)]
 mod tests {

@@ -1,0 +1,37 @@
+// Unison TS SDK bench run — immutable snapshot。 1 file = 1 run。
+// 構造: benchmark > suite > case。 case props: hz(ops/sec) / mean_ms / p99_ms / rme_pct。
+// hz が高いほど速い。 honest baseline (= cherry-pick せず vitest bench 実出力のまま)。
+benchmark version="1.0.0-alpha.2" date="2026-05-16" {
+    machine arch="arm64" node="v22.22.2" runner="vitest-3"
+
+    suite "codec" {
+        case "JsonCodec.encode/small"   hz=2513720 mean_ms=0.0004 p99_ms=0.0006 rme_pct=0.56
+        case "JsonCodec.encode/medium"  hz=1263520 mean_ms=0.0008 p99_ms=0.0012 rme_pct=0.51
+        case "JsonCodec.encode/large"   hz=39895   mean_ms=0.0251 p99_ms=0.0559 rme_pct=0.57
+        case "JsonCodec.decode/small"   hz=2706584 mean_ms=0.0004 p99_ms=0.0005 rme_pct=0.12
+        case "JsonCodec.decode/medium"  hz=937847  mean_ms=0.0011 p99_ms=0.0012 rme_pct=0.62
+        case "JsonCodec.decode/large"   hz=30152   mean_ms=0.0332 p99_ms=0.0434 rme_pct=0.31
+        case "ProtoCodec.encode/small"  hz=273862  mean_ms=0.0037 p99_ms=0.0048 rme_pct=1.06
+        case "ProtoCodec.encode/medium" hz=53489   mean_ms=0.0187 p99_ms=0.0257 rme_pct=0.83
+        case "ProtoCodec.encode/large"  hz=1522    mean_ms=0.6569 p99_ms=0.9046 rme_pct=0.93
+        case "ProtoCodec.decode/small"  hz=477526  mean_ms=0.0021 p99_ms=0.0027 rme_pct=0.80
+        case "ProtoCodec.decode/medium" hz=90268   mean_ms=0.0111 p99_ms=0.0157 rme_pct=0.79
+        case "ProtoCodec.decode/large"  hz=2723    mean_ms=0.3672 p99_ms=0.6430 rme_pct=1.02
+    }
+    suite "channel" {
+        case "UnisonChannel.request"         hz=123723 mean_ms=0.0081 p99_ms=0.0300 rme_pct=0.89
+        case "DatagramChannel.eventDelivery" hz=882981 mean_ms=0.0011 p99_ms=0.0017 rme_pct=0.74
+    }
+    suite "datagram" {
+        case "varint.encode/1B"           hz=8909827  mean_ms=0.0001  rme_pct=0.79
+        case "varint.encode/3B"           hz=8600269  mean_ms=0.0001  rme_pct=2.48
+        case "varint.decode/1B"           hz=21666539 mean_ms=0.00005 rme_pct=0.34
+        case "varint.decode/3B"           hz=20907240 mean_ms=0.00005 rme_pct=0.51
+        case "dispatcher.demux/256dg-8ch" hz=73641    mean_ms=0.0136  p99_ms=0.0172 rme_pct=2.26
+    }
+
+    // honest 所感: TS-side CPU では JSON が proto を一貫して上回る
+    // (proto large encode は JSON large の ~26x 遅)。 run-to-run drift ~5%、
+    // baseline は ±数% 幅で読む。 dispatcher demux と varint encode/3B は rme ±2-3%。
+    // ProtoCodec の数値は Struct fixture 由来、 codegen 後に具体 schema で再計測要。
+}

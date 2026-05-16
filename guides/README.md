@@ -15,6 +15,10 @@
 
 | ガイド | 説明 |
 |-------|------|
+| [quickstart.md](quickstart.md) | Unison サーバ + TypeScript クライアントを end-to-end で疎通させる |
+| [migration.md](migration.md) | v1.0 までの破壊的変更と移行手順 |
+| [typescript-sdk.md](typescript-sdk.md) | TypeScript クライアント SDK の API リファレンス |
+| [channel-guide.md](channel-guide.md) | Rust 側 UnisonChannel API の実践ガイド |
 | [quinn-stream-api.md](quinn-stream-api.md) | Quinn（QUIC実装）のストリームAPIの使い方 |
 
 ## ガイドの書き方

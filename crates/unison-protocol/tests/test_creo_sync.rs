@@ -1,6 +1,6 @@
-use club_unison::codegen::CodeGenerator;
-use club_unison::parser::TypeRegistry;
-use club_unison::prelude::*;
+use unison::codegen::CodeGenerator;
+use unison::parser::TypeRegistry;
+use unison::prelude::*;
 
 #[test]
 fn test_creo_sync_parse_and_generate() {

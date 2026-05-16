@@ -26,7 +26,6 @@
 //! - recv task は session_deadline まで polling、 timeout per poll で busy-loop 回避
 //! - Transform struct (= peer id + pos + rot) JSON wire ~110-130 byte、 MTU 内
 
-use club_unison::{ProtocolClient, ProtocolServer};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use serde::{Deserialize, Serialize};
 use std::hint::black_box;
@@ -34,6 +33,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::runtime::Runtime;
+use unison::{ProtocolClient, ProtocolServer};
 
 /// 60Hz / 120Hz の 2 ケース (= game / VR で典型的な refresh rate)
 const TARGET_RATES_HZ: &[u64] = &[60, 120];

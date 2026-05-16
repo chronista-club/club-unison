@@ -19,7 +19,7 @@ path = "src/main.rs"
 rmcp.workspace = true
 schemars.workspace = true
 
-# club-unison: crates.io package、lib identifier は `club_unison`
+# club-unison: crates.io package、lib identifier は `unison`
 club-unison = { path = "../unison-protocol" }
 
 # Runtime

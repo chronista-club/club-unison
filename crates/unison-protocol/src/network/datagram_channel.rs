@@ -85,8 +85,9 @@ pub(crate) fn decode_varint(bytes: &[u8]) -> Result<(u64, usize), NetworkError> 
 /// `DatagramChannel` 自身は demux logic を知らず、 「自分宛の payload を pull する」
 /// 単純な責務のみ。
 pub struct DatagramChannel<C: Codec = JsonCodec> {
-    /// QUIC connection (= 同 connection の stream channel / 他 datagram channel と共有)
-    connection: Arc<quinn::Connection>,
+    /// 接続 (= 同 connection の stream channel / 他 datagram channel と共有)。
+    /// transport 非依存の [`UnisonConn`](super::conn::UnisonConn) trait object。
+    connection: Arc<dyn super::conn::UnisonConn>,
     /// Schema-time fixed の channel ID (= varint prefix)
     channel_id: u64,
     /// Channel name (= debug / log 用、 KDL schema 上の名前)
@@ -103,7 +104,7 @@ impl<C: Codec> DatagramChannel<C> {
     /// caller (= `ProtocolClient::open_datagram_channel` / `ProtocolServer::register_channel_datagram`)
     /// が demux dispatch table に `recv_tx` を登録した上で本 constructor を呼ぶ。
     pub(crate) fn new(
-        connection: Arc<quinn::Connection>,
+        connection: Arc<dyn super::conn::UnisonConn>,
         channel_id: u64,
         name: impl Into<String>,
         recv_rx: mpsc::Receiver<Vec<u8>>,
@@ -140,10 +141,8 @@ impl<C: Codec> DatagramChannel<C> {
         encode_varint(self.channel_id, &mut buf);
         buf.extend_from_slice(&encoded);
 
-        // QUIC datagram として送信
-        self.connection
-            .send_datagram(buf.into())
-            .map_err(|e| NetworkError::Quic(format!("send_datagram failed: {}", e)))
+        // datagram として送信 (= transport 非依存)
+        self.connection.send_datagram(buf.into())
     }
 
     /// Event を datagram で受信
@@ -270,7 +269,8 @@ mod tests {
         // mpsc::channel から DatagramChannel を構築できることを確認
         // (= connection は実 QUIC connection が必要なので、 ここでは Mutex/Arc の
         // type-level 整合だけを確認する compile-check)
-        let _phantom_check = |conn: Arc<quinn::Connection>, rx: mpsc::Receiver<Vec<u8>>| {
+        let _phantom_check = |conn: Arc<dyn super::super::conn::UnisonConn>,
+                              rx: mpsc::Receiver<Vec<u8>>| {
             let ch: DatagramChannel<JsonCodec> = DatagramChannel::new(conn, 42, "position", rx);
             assert_eq!(ch.channel_id(), 42);
             assert_eq!(ch.name(), "position");

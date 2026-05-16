@@ -3,6 +3,7 @@ members = [
     "crates/unison-protocol",
     "crates/unison-agent",
     "crates/unison-mcp-probe",
+    "crates/unison-cli",
 ]
 resolver = "2"
 
@@ -36,6 +37,11 @@ rustls-pemfile = "2.2"
 rcgen = "0.14"
 webpki-roots = "1.0"
 futures-util = "0.3"
+# 自己署名 cert の validity 期間設定用 (rcgen の date 型に合わせる)
+time = "0.3"
+
+# WebTransport (= QUIC + HTTP/3) — ブラウザ ingress 用 (Phase 6a)
+wtransport = "0.7"
 
 # Error handling
 thiserror = "2.0"
@@ -64,7 +70,7 @@ schemars = "1"
 
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1.23", features = ["v4", "serde"] }
+uuid = { version = "1.23", features = ["v4", "v7", "serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-stream = "0.3"
