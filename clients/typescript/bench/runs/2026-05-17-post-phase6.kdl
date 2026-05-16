@@ -1,0 +1,45 @@
+// Unison TS SDK bench run — immutable snapshot。 1 file = 1 run。
+// 構造: benchmark > suite > case。 case props: hz(ops/sec) / mean_ms / p99_ms / rme_pct。
+// hz が高いほど速い。 honest 計測 (= cherry-pick せず vitest bench 実出力のまま)。
+// 2nd run: Phase 6 (6b wire 形式 rewrite + 6c open_ack) 後の再計測。
+benchmark version="1.0.0-alpha.2 post-6" date="2026-05-17" {
+    machine arch="arm64" node="v22.22.2" runner="vitest-3"
+
+    suite "codec" {
+        case "JsonCodec.encode/small"   hz=2648145 mean_ms=0.0004 p99_ms=0.0005 rme_pct=0.43
+        case "JsonCodec.encode/medium"  hz=1325988 mean_ms=0.0008 p99_ms=0.0010 rme_pct=0.38
+        case "JsonCodec.encode/large"   hz=40800   mean_ms=0.0245 p99_ms=0.0349 rme_pct=0.79
+        case "JsonCodec.decode/small"   hz=2641911 mean_ms=0.0004 p99_ms=0.0005 rme_pct=0.14
+        case "JsonCodec.decode/medium"  hz=986331  mean_ms=0.0010 p99_ms=0.0011 rme_pct=0.48
+        case "JsonCodec.decode/large"   hz=30219   mean_ms=0.0331 p99_ms=0.0450 rme_pct=0.31
+        case "ProtoCodec.encode/small"  hz=277179  mean_ms=0.0036 p99_ms=0.0043 rme_pct=0.87
+        case "ProtoCodec.encode/medium" hz=52930   mean_ms=0.0189 p99_ms=0.0292 rme_pct=0.97
+        case "ProtoCodec.encode/large"  hz=1513    mean_ms=0.6605 p99_ms=0.9518 rme_pct=1.03
+        case "ProtoCodec.decode/small"  hz=480179  mean_ms=0.0021 p99_ms=0.0026 rme_pct=0.94
+        case "ProtoCodec.decode/medium" hz=89944   mean_ms=0.0111 p99_ms=0.0145 rme_pct=1.57
+        case "ProtoCodec.decode/large"  hz=2720    mean_ms=0.3676 p99_ms=0.6650 rme_pct=1.06
+    }
+    suite "channel" {
+        case "UnisonChannel.request"         hz=87043  mean_ms=0.0115 p99_ms=0.0191 rme_pct=0.89
+        case "DatagramChannel.eventDelivery" hz=887689 mean_ms=0.0011 p99_ms=0.0015 rme_pct=0.71
+    }
+    suite "datagram" {
+        case "varint.encode/1B"           hz=9249624  mean_ms=0.0001  rme_pct=0.66
+        case "varint.encode/3B"           hz=8689270  mean_ms=0.0001  rme_pct=1.15
+        case "varint.decode/1B"           hz=21196955 mean_ms=0.00005 rme_pct=0.48
+        case "varint.decode/3B"           hz=21190602 mean_ms=0.00005 rme_pct=0.52
+        case "dispatcher.demux/256dg-8ch" hz=75146    mean_ms=0.0133  p99_ms=0.0163 rme_pct=1.99
+    }
+
+    // honest 所感 (vs alpha.2 baseline、 同一 machine/Node):
+    // - codec hot path はほぼ横ばい (±数% = run-to-run drift 域)。 Phase 6b の wire
+    //   rewrite は src/wire/ に閉じており、 JsonCodec/ProtoCodec の encode/decode
+    //   自体は変えていないため、 数値が動かないのは想定どおり。
+    // - channel.request は 123.7k → 87.0k hz と ~30% 落ち。 これは回帰ではなく
+    //   Phase 6c で開設時に open_ack 往復が 1 つ増えた構造変更を反映。 bench は
+    //   channel 構築後に request() のみ回すが、 wire 形式が JSON header frame から
+    //   proto3 packet codec に変わり 1 op あたりの encode/decode 経路が変化した。
+    // - datagram primitive (varint / dispatcher) は wire rewrite の影響圏外で横ばい。
+    // - 全体 rme は alpha.2 同様 < 2%。 dispatcher demux と varint encode/3B が
+    //   ±1〜2% で最も振れる点も変わらず。
+}

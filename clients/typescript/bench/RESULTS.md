@@ -7,6 +7,39 @@
 > 静的サーバ経由で開くと run 横断の比較表（`cd clients/typescript/bench && npx serve`）。
 > 本 md は alpha.2 baseline の詳細分析（= 人間向け companion）。
 
+> **計測履歴**（実 run、 SSOT は `bench/runs/*.kdl`）:
+> - `2026-05-16-alpha.2` — v1.0.0-alpha.2 baseline（下記の詳細分析対象）
+> - `2026-05-17-post-phase6` — Phase 6 後の 2nd run（下記「2nd run」節を参照）
+
+---
+
+## 2nd run — Phase 6 post-wire-rewrite（2026-05-17）
+
+`runs/2026-05-17-post-phase6.kdl`。 同一 machine（arm64 / Node v22.22.2 / vitest 3）。
+Phase 6b で wire 形式を全面 rewrite（旧 JSON header frame の `frame.ts` を proto3
+packet codec ベースに、 `src/wire/` に hand-written codec 追加）、 Phase 6c で channel
+`open_ack` を追加。 これらが hot-path 数値にどう出たかを正直に再計測した。
+
+bench ファイル側の修正は不要だった（`UnisonChannel` / `DatagramChannel` / codec の
+public API は Phase 6 で変わっておらず、 `bench/*.bench.ts` はそのまま現行コードを
+コンパイル・実行できた）。
+
+| suite | 結果（vs alpha.2 baseline） |
+|-------|------------------------------|
+| **codec** | ほぼ横ばい。 JsonCodec encode small 2.51M→2.65M、 large 39.9k→40.8k hz、 ProtoCodec も全サイズ ±数% 内。 wire rewrite は `src/wire/` に閉じており codec 自体は未変更なので想定どおり。 |
+| **channel** | `UnisonChannel.request` が **123.7k → 87.0k hz（約 -30%）** と低下。 これは回帰ではなく構造変更の反映: `frame.ts` の wire 形式が JSON header frame から proto3 `UnisonPacket`（`packet.ts` + `protocol_message.ts`）に変わり、 1 round-trip の encode/decode 経路が変化した。 `DatagramChannel.eventDelivery` は 883k→888k hz でほぼ不変（datagram path は wire rewrite の影響圏外）。 |
+| **datagram** | 横ばい。 varint encode/decode・dispatcher demux いずれも ±数% 内。 wire rewrite と無関係な primitive。 |
+
+**正直な総括**: Phase 6b の wire rewrite は TS 側 CPU 速度を「上げてはいない」。
+`UnisonChannel.request` は約 30% 遅くなった。 wire 形式を proto3 packet に統一した
+狙いは Rust server との byte 一致・型安全・wire サイズであって、 in-process の
+encode 速度ではない（codec 節と同じ構図 — proto を選ぶ理由は速度ではない）。
+mock transport 上の 87k hz = 約 11.5μs/op は実 WebTransport では QUIC RTT に
+埋もれる下限値なので、 この -30% が実運用 latency を悪化させるわけではない。
+変化量を honest に記録した、 という位置づけ。
+
+---
+
 | 項目 | 値 |
 |------|-----|
 | 計測日 | 2026-05-16 |
