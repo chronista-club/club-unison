@@ -7,11 +7,15 @@
  * 残すため interface で分離。
  */
 
-/** 接続の信頼モード (= TLS cert 検証の policy) */
+/**
+ * 接続の信頼モード (= TLS cert 検証の policy)。
+ *
+ * browser WebTransport の security model 上、 非 CA path は cert hash pinning
+ * (= `serverCertificateHashes`) のみ。「全 cert 検証 skip」は browser に存在しない。
+ */
 export type TrustMode =
-  | "system" // システム CA store による標準検証
-  | "skip-verify" // dev_localhost 専用、 cert chain を一切検証しない
-  | { cert: string }; // 明示 cert pinning (= PEM string)
+  | "system" // システム CA store による標準検証 (= default)
+  | { certHash: string }; // 明示 cert pinning (= DER server cert の SHA-256、 hex 文字列)
 
 /** `connect()` への入力 */
 export interface ConnectOptions {
@@ -19,7 +23,10 @@ export interface ConnectOptions {
   url: string;
   /** TLS trust policy (= default: "system") */
   trust?: TrustMode;
-  /** caller 制御の cancellation (= 接続確立中の abort) */
+  /**
+   * caller 制御の cancellation。 connection lifetime の kill-switch:
+   * abort で connect() 中断、 確立後は connection + 配下全 stream を tear down。
+   */
   signal?: AbortSignal;
 }
 
@@ -36,18 +43,10 @@ export interface BidiStream {
   close(): Promise<void>;
 }
 
-/** Unidirectional stream (= server → client 一方向 push) */
-export interface UniStream {
-  readable: ReadableStream<Uint8Array>;
-  close(): Promise<void>;
-}
-
 /** 確立済み Connection */
 export interface Connection {
   /** Bidi stream を open (= request/response channel 用) */
   openBidiStream(): Promise<BidiStream>;
-  /** Server からの uni stream を accept (= AsyncIterable で連続受信) */
-  acceptUniStreams(): AsyncIterable<UniStream>;
   /** Datagram 1 件送信 (= MTU 超過は reject) */
   sendDatagram(payload: Uint8Array): Promise<void>;
   /** 受信 datagram の連続 stream */

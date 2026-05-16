@@ -10,7 +10,7 @@
  * See `design/typescript-client-api.md` for the API contract this package will satisfy.
  */
 
-// === Phase 2b: transport === (= scaffold、 全 method は stub throw)
+// === Phase 2b: transport === (= 実装中)
 export type {
   BidiStream,
   Connection,
@@ -18,8 +18,11 @@ export type {
   ConnectOptions,
   Transport,
   TrustMode,
-  UniStream,
 } from "./transport/types.js";
+export {
+  UnisonTransportError,
+  WebTransportUnsupportedError,
+} from "./transport/errors.js";
 export { WebTransportClient, WebTransportConnection, connect } from "./transport/web_transport.js";
 
 // === Phase 2c: channel === (= 未実装、 placeholder)
