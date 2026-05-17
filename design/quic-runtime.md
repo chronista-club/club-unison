@@ -9,7 +9,6 @@
 - **チャネルルーティング**: `__channel:` プレフィックスによるチャネル多重化
 - **Length-Prefixed Framing**: 4バイトBE長プレフィックスによるフレーム境界
 - **UnisonChannel**: 統合チャネル型（request/response + event push）
-- **コード生成統合**: `{Protocol}QuicConnection` 構造体の自動生成
 
 全体のアーキテクチャ層における位置付け:
 
@@ -388,86 +387,6 @@ sequenceDiagram
     UC->>UC: event_rx.send(message)
     UC-->>App: event_rx.recv() -> ProtocolMessage
 ```
-
-## 7. コード生成統合
-
-**ファイル**: `crates/unison-protocol/src/codegen/rust.rs`
-
-KDLスキーマで定義されたプロトコルのチャネルから、Rust構造体とBuilderトレイトが自動生成される。
-
-### 生成される構造体
-
-```mermaid
-classDiagram
-    class ProtocolConnection {
-        <<generated: テスト用>>
-        +channel_a: BidirectionalChannel~SendA, RecvA~
-        +channel_b: ReceiveChannel~EventB~
-    }
-
-    class ProtocolQuicConnection {
-        <<generated: 本番用>>
-        +channel_a: UnisonChannel
-        +channel_b: UnisonChannel
-    }
-
-    class ProtocolConnectionBuilder {
-        <<generated: trait>>
-        +build(client) Future~ProtocolQuicConnection~
-    }
-
-    ProtocolConnectionBuilder <|.. ProtocolQuicConnection
-```
-
-> **Note**: Unified Channel 統合により、全 QUIC チャネルのフィールド型は `UnisonChannel` に統一された。
-
-### generate_connection_struct
-
-`RustGenerator::generate_connection_struct()` は、プロトコル定義内の全チャネルをフィールドとして持つ2つの構造体を生成する:
-
-1. **`{Protocol}Connection`** -- インメモリチャネル版（テスト用）
-2. **`{Protocol}QuicConnection`** -- QUICストリーム版（本番用）
-
-```rust
-fn generate_connection_struct(&self, protocol: &Protocol) -> TokenStream {
-    let struct_name = format_ident!("{}Connection", protocol.name.to_case(Case::Pascal));
-    let quic_struct_name = format_ident!("{}QuicConnection", protocol.name.to_case(Case::Pascal));
-    let builder_name = format_ident!("{}ConnectionBuilder", protocol.name.to_case(Case::Pascal));
-    // ...
-}
-```
-
-### channel_quic_field_type のマッピング
-
-Unified Channel 統合により、全 QUIC チャネルは `UnisonChannel` 型に統一された:
-
-| チャネル定義 | 生成される型 |
-|---|---|
-| 全チャネル | `UnisonChannel` |
-
-### channel_field_type のマッピング（インメモリ版）
-
-インメモリチャネル版では、チャネルの `from`（発信元）と `lifetime`（永続性）も考慮する:
-
-| send | recv | from | lifetime | 生成される型 |
-|---|---|---|---|---|
-| あり | なし | Server | - | `ReceiveChannel<SendType>` |
-| あり | あり | - | Transient | `RequestChannel<SendType, RecvType>` |
-| あり | あり | - | Persistent | `BidirectionalChannel<SendType, RecvType>` |
-
-### ConnectionBuilder トレイト
-
-自動生成される `{Protocol}ConnectionBuilder` トレイトは、`ProtocolClient` から全チャネルを一括で開設する `build()` メソッドを提供する:
-
-```rust
-pub trait {Protocol}ConnectionBuilder {
-    fn build(
-        client: &crate::network::client::ProtocolClient,
-    ) -> impl std::future::Future<Output = Result<{Protocol}QuicConnection>> + Send;
-}
-```
-
-`build()` の実装では、各チャネルに対して `client.open_channel(channel_name)` を呼び出し、`UnisonChannel` を構築する。
 
 ## 関連ドキュメント
 

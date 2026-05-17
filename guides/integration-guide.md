@@ -149,16 +149,12 @@ protocol "vp-dashboard" version="1.0.0" {
 
 ### ③ TS 型を生成する
 
-Unison は **KDL スキーマが型の SSOT**。Rust 側の `TypeScriptGenerator` がスキーマから
-TS コードを生成する（codegen は Rust API。専用 CLI サブコマンドはまだ無い）:
+Unison は **KDL スキーマが型の SSOT**。コード生成は `club-kdl-codegen` crate に
+分離されている（club-unison 本体からは独立、crates.io で公開）。CLI で TS 型を生成:
 
-```rust
-use unison::codegen::{CodeGenerator, TypeScriptGenerator};
-use unison::parser::SchemaParser;
-
-let schema = SchemaParser::new().parse(&kdl_src)?;
-let generator = TypeScriptGenerator::new();
-generator.generate_to_file(&schema, &type_registry, "generated/vp-protocol.ts")?;
+```bash
+!cargo install club-kdl-codegen
+!club-kdl-codegen schemas/vp-dashboard.kdl --target typescript > generated/vp-protocol.ts
 ```
 
 生成物は channel ごとに以下を吐く:
