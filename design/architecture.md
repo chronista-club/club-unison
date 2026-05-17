@@ -19,7 +19,7 @@
 
 ## 1. 概要
 
-Unison ProtocolはCargoワークスペースとして構成され、プロトコル定義・パーサー・コード生成・ネットワーク通信を一つのクレートに統合している。KDLスキーマからの型安全なコード生成と、QUICベースのChannel指向通信を提供する。
+Unison ProtocolはCargoワークスペースとして構成され、プロトコル定義・パーサー・ネットワーク通信を一つのクレートに統合している。QUICベースのChannel指向通信を提供する。KDLスキーマからの型コード生成は `club-kdl-codegen` crate に分離されている。
 
 ---
 
@@ -30,7 +30,7 @@ unison/
   Cargo.toml              -- ワークスペースルート (edition = 2024, rust-version = 1.93)
   schemas/                 -- KDLプロトコル定義（テスト用）
   crates/
-    unison-protocol/       -- コアクレート（パーサー、コード生成、ネットワーク）
+    unison-protocol/       -- コアクレート（パーサー、ネットワーク）
     unison-agent/          -- エージェント実装
 ```
 
@@ -51,8 +51,7 @@ unison/
 | QUIC | quinn 0.11, rustls 0.23 |
 | 圧縮 | zstd |
 | 非同期ランタイム | tokio |
-| KDLパース | kdl, unison-kdl |
-| コード生成 | proc-macro2, quote, syn |
+| KDLパース | kdl, club-kdl |
 | CGP | cgp 0.4.2 |
 | エラーハンドリング | thiserror, anyhow, miette |
 
@@ -72,10 +71,6 @@ crates/unison-protocol/src/
     mod.rs                 -- SchemaParserエントリポイント
     schema.rs              -- ParsedSchema、スキーマ構造
     types.rs               -- TypeRegistry、型定義
-  codegen/
-    mod.rs                 -- CodeGeneratorトレイト
-    rust.rs                -- RustGenerator
-    typescript.rs          -- TypeScriptGenerator
   packet/
     mod.rs                 -- UnisonPacket、UnisonPacketBuilder、UnisonPacketView
     header.rs              -- UnisonPacketHeader (56 bytes)、PacketType

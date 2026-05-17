@@ -39,11 +39,9 @@
 //!
 //! ## コード生成
 //!
-//! `UnisonProtocol::generate_rust_code()` / `generate_typescript_code()` で
-//! KDLスキーマから型付きコードを生成できます。
+//! KDL スキーマからの型コード生成は `club-kdl-codegen` crate に分離済み。
 
 pub mod codec;
-pub mod codegen;
 pub mod network;
 pub mod parser;
 
@@ -76,7 +74,6 @@ pub mod proto {
 pub mod prelude;
 
 // preludeの型を内部で使用
-use codegen::{CodeGenerator, RustGenerator, TypeScriptGenerator};
 use parser::{ParseError as UnisonParseError, ParsedSchema, SchemaParser};
 
 // よく使用されるトレイトとクライアント/サーバーの再エクスポート
@@ -105,34 +102,6 @@ impl UnisonProtocol {
         let parsed = self.parser.parse(schema)?;
         self.schemas.push(parsed);
         Ok(())
-    }
-
-    /// 読み込んだスキーマからRustコードを生成
-    pub fn generate_rust_code(&self) -> Result<String, Box<dyn std::error::Error>> {
-        let generator = RustGenerator::new();
-        let type_registry = crate::parser::TypeRegistry::new(); // 一時的な空のレジストリ
-        let mut code = String::new();
-
-        for schema in &self.schemas {
-            code.push_str(&generator.generate(schema, &type_registry)?);
-            code.push('\n');
-        }
-
-        Ok(code)
-    }
-
-    /// 読み込んだスキーマからTypeScriptコードを生成
-    pub fn generate_typescript_code(&self) -> Result<String, Box<dyn std::error::Error>> {
-        let generator = TypeScriptGenerator::new();
-        let type_registry = crate::parser::TypeRegistry::new(); // 一時的な空のレジストリ
-        let mut code = String::new();
-
-        for schema in &self.schemas {
-            code.push_str(&generator.generate(schema, &type_registry)?);
-            code.push('\n');
-        }
-
-        Ok(code)
     }
 
     /// 新しいUnisonクライアントを作成

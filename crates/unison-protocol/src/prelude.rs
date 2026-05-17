@@ -18,9 +18,6 @@ pub use crate::parser::{
 // Codec 関連
 pub use crate::codec::{Codec, CodecError, Decodable, Encodable, JsonCodec, ProtoCodec};
 
-// コードジェネレータ関連
-pub use crate::codegen::{CodeGenerator, RustGenerator, TypeScriptGenerator};
-
 // ネットワーク関連
 pub use crate::network::{
     ConnectionEvent, ConnectionEventReceiver, DatagramChannel, ProtocolClient, ProtocolServer,
