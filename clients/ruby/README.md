@@ -53,15 +53,19 @@ refinement）。
 
 失敗はすべて `Unison::Error`（`< StandardError`）として raise される。
 
-次フェーズ: 実 Unison サーバ相手の E2E テスト。
+次フェーズ: GVL 解放中の呼び出しの中断（unblock function）、`recv` の timeout 版。
 
 ## ビルド・テスト
 
 ```
 bundle install
-bundle exec rake compile   # native 拡張をビルド
-bundle exec rake test      # compile → minitest
+bundle exec rake compile    # native 拡張をビルド
+bundle exec rake test       # compile → 単体テスト（ネットワーク不要）
+bundle exec rake test:e2e   # compile → E2E（`unison mock` を subprocess 起動）
 ```
+
+`rake test:e2e` は `unison` バイナリ（`cargo build -p unison-cli` で生成、または
+`UNISON_MOCK_BIN` で指定）を要する。見つからない場合は skip される。
 
 **Ruby 3.4 以上が必須。** 開発環境の version は `.mise.toml` に固定（現在 3.4.9）。
 

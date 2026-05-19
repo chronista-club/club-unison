@@ -11,11 +11,24 @@ RbSys::ExtensionTask.new("unison_client", GEMSPEC) do |ext|
   ext.lib_dir = "lib/unison_client"
 end
 
-# テストは native 拡張に依存するため compile を前提タスクにする。
+# 単体テスト（test/ 直下、ネットワーク不要）。native 拡張に依存するため
+# compile を前提タスクにする。
 Rake::TestTask.new(test: :compile) do |t|
   t.libs << "test" << "lib"
-  t.test_files = FileList["test/**/*_test.rb"]
+  t.test_files = FileList["test/*_test.rb"]
   t.warning = false
 end
+
+namespace :test do
+  # E2E テスト（test/e2e/、`unison mock` を subprocess 起動）。
+  # `unison` バイナリが無い環境では各テストが skip される。
+  Rake::TestTask.new(:e2e) do |t|
+    t.libs << "test" << "lib"
+    t.test_files = FileList["test/e2e/*_test.rb"]
+    t.warning = false
+  end
+end
+# `test:e2e` も native 拡張を要するため compile を前提に（root の compile を明示）。
+task "test:e2e" => :compile
 
 task default: :test
