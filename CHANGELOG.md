@@ -7,6 +7,18 @@
 
 ## [Unreleased]
 
+> rc.2 以降の追補。クレート実体（`club-unison` lib）の API は不変で、Ruby client
+> のテスト・ベンチ追加と依存更新が中心。
+
+### 追加 — Ruby client のテスト・ベンチマーク
+
+- `clients/ruby/test/e2e/` — `unison mock` を subprocess 起動する実サーバ E2E テスト（#52）
+- `clients/ruby/bench/` — `Channel#request` の RTT/throughput と GVL 解放効果を計測するベンチマーク（structured-log KDL 形式、#54）
+
+### 変更 — 依存
+
+- `club-kdl` を `0.5` → `0.8` に更新（#53）。club-unison は KDL パース（`from_str` / `KdlDeserialize`）にのみ使用しており API 互換、呼び出し側の変更なし
+
 ## [1.0.0-rc.2] - 2026-05-19 — polyglot client 拡充 + CLI request/response 被覆
 
 > rc.1 以降の追補。Ruby client gem を新設し、`unison` CLI に request 送信コマンドを追加して channel の request/event 両半分を CLI で被覆した。
