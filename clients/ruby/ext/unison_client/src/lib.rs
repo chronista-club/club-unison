@@ -12,7 +12,11 @@
 //! Channel payloads cross the boundary as native Ruby values: `serde_magnus`
 //! converts Ruby `Hash`/`Array`/… ⇄ `serde_json::Value`, which the channel's
 //! JSON codec consumes.
+//!
+//! Blocking calls release the GVL while parked on the network (see
+//! [`without_gvl`]), so other Ruby threads keep running.
 
+use std::ffi::c_void;
 use std::sync::OnceLock;
 
 use magnus::{Error, ExceptionClass, Ruby, Value, function, method, prelude::*};
@@ -28,6 +32,59 @@ use unison::{NetworkError, ProtocolClient, UnisonChannel};
 fn runtime() -> &'static Runtime {
     static RT: OnceLock<Runtime> = OnceLock::new();
     RT.get_or_init(|| Runtime::new().expect("failed to build the Unison tokio runtime"))
+}
+
+/// Runs `f` with Ruby's GVL released, letting other Ruby threads proceed.
+///
+/// `f` MUST NOT touch any Ruby value or Ruby C API — it executes without the
+/// GVL. It runs on the *calling* thread (`rb_thread_call_without_gvl` does not
+/// move work elsewhere), so non-`Send` captures are fine.
+///
+/// Limitations, both future refinements:
+/// - No unblock function is registered, so a blocked call cannot be
+///   interrupted by Ruby (e.g. `Thread#kill`).
+/// - A panic inside `f` crosses an `extern "C"` boundary and aborts the
+///   process. The closures here (`block_on` of QUIC ops) are not expected to
+///   panic.
+fn without_gvl<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    /// Carries the closure in and its result out across the C boundary.
+    struct Payload<F, R> {
+        func: Option<F>,
+        result: Option<R>,
+    }
+
+    unsafe extern "C" fn trampoline<F, R>(arg: *mut c_void) -> *mut c_void
+    where
+        F: FnOnce() -> R,
+    {
+        // SAFETY: `arg` is the `&mut Payload` passed below; Ruby invokes this
+        // exactly once, on this thread, before `rb_thread_call_without_gvl`
+        // returns.
+        let payload = unsafe { &mut *(arg as *mut Payload<F, R>) };
+        let func = payload.func.take().expect("without_gvl closure already ran");
+        payload.result = Some(func());
+        std::ptr::null_mut()
+    }
+
+    let mut payload = Payload::<F, R> {
+        func: Some(f),
+        result: None,
+    };
+    // SAFETY: `trampoline::<F, R>` interprets the data pointer as
+    // `&mut Payload<F, R>`, which is exactly what we hand it; no unblock
+    // function is used.
+    unsafe {
+        rb_sys::rb_thread_call_without_gvl(
+            Some(trampoline::<F, R>),
+            (&raw mut payload).cast(),
+            None,
+            std::ptr::null_mut(),
+        );
+    }
+    payload.result.expect("without_gvl closure did not run")
 }
 
 /// Current `Ruby` handle.
@@ -88,29 +145,29 @@ impl Client {
 
     /// `client.connect(url)` — opens the QUIC connection to `url`.
     ///
-    /// Blocks the calling thread (and, for now, the Ruby VM) until the
-    /// handshake completes. Raises `Unison::Error` on failure.
+    /// Blocks the calling thread until the handshake completes (the GVL is
+    /// released, so other Ruby threads keep running). Raises `Unison::Error`
+    /// on failure.
     fn connect(&self, url: String) -> Result<(), Error> {
-        runtime().block_on(self.inner.connect(&url)).map_err(net_err)
+        without_gvl(|| runtime().block_on(self.inner.connect(&url))).map_err(net_err)
     }
 
     /// `client.connected?` — whether the QUIC connection is currently open.
     fn connected(&self) -> bool {
-        runtime().block_on(self.inner.is_connected())
+        without_gvl(|| runtime().block_on(self.inner.is_connected()))
     }
 
     /// `client.disconnect` — closes the QUIC connection.
     ///
     /// Raises `Unison::Error` only if the close itself errors.
     fn disconnect(&self) -> Result<(), Error> {
-        runtime().block_on(self.inner.disconnect()).map_err(net_err)
+        without_gvl(|| runtime().block_on(self.inner.disconnect())).map_err(net_err)
     }
 
     /// `client.open_channel(name)` — opens a named channel, returning a
     /// `Unison::Channel`. Raises `Unison::Error` on failure.
     fn open_channel(&self, name: String) -> Result<Channel, Error> {
-        let inner = runtime()
-            .block_on(self.inner.open_channel(&name))
+        let inner = without_gvl(|| runtime().block_on(self.inner.open_channel(&name)))
             .map_err(net_err)?;
         Ok(Channel { inner })
     }
@@ -132,10 +189,12 @@ impl Channel {
     /// value. Raises `Unison::Error` on a protocol error or timeout.
     fn request(&self, method: String, payload: Value) -> Result<Value, Error> {
         let ruby = ruby();
+        // Ruby → Rust conversion needs the GVL; do it before releasing it.
         let req: JsonValue = serde_magnus::deserialize(&ruby, payload)?;
-        let resp: JsonValue = runtime()
-            .block_on(self.inner.request::<JsonValue, JsonValue>(&method, &req))
-            .map_err(net_err)?;
+        let resp: JsonValue = without_gvl(|| {
+            runtime().block_on(self.inner.request::<JsonValue, JsonValue>(&method, &req))
+        })
+        .map_err(net_err)?;
         serde_magnus::serialize(&ruby, &resp)
     }
 
@@ -143,8 +202,7 @@ impl Channel {
     /// (no response is awaited).
     fn send_event(&self, method: String, payload: Value) -> Result<(), Error> {
         let event: JsonValue = serde_magnus::deserialize(&ruby(), payload)?;
-        runtime()
-            .block_on(self.inner.send_event(&method, &event))
+        without_gvl(|| runtime().block_on(self.inner.send_event(&method, &event)))
             .map_err(net_err)
     }
 
@@ -152,10 +210,10 @@ impl Channel {
     /// other non-response message), returned as a Ruby `Hash` with keys
     /// `"id"`, `"type"`, `"method"`, `"payload"`.
     ///
-    /// Note: blocks the Ruby VM until a message arrives — GVL release and a
-    /// timeout variant are future refinements.
+    /// The GVL is released while waiting, so other Ruby threads run; the call
+    /// itself is not interruptible and has no timeout (future refinements).
     fn recv(&self) -> Result<Value, Error> {
-        let msg = runtime().block_on(self.inner.recv()).map_err(net_err)?;
+        let msg = without_gvl(|| runtime().block_on(self.inner.recv())).map_err(net_err)?;
         let payload = msg.payload_as_value().map_err(net_err)?;
         let out = serde_json::json!({
             "id": msg.id,
@@ -168,7 +226,7 @@ impl Channel {
 
     /// `channel.close` — closes the channel and stops its receive loop.
     fn close(&self) -> Result<(), Error> {
-        runtime().block_on(self.inner.close()).map_err(net_err)
+        without_gvl(|| runtime().block_on(self.inner.close())).map_err(net_err)
     }
 }
 
