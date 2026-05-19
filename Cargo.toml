@@ -78,7 +78,7 @@ indexmap = "2.14"
 scc = "3"
 tempfile = "3.27"
 kdl = "6.5.0"
-club-kdl = "0.5"
+club-kdl = "0.8"
 
 # Dev dependencies
 pretty_assertions = "1.4"
