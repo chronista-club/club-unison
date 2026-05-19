@@ -33,9 +33,11 @@ class ConnectE2ETest < Minitest::Test
       Process.kill("TERM", @server)
       Process.wait(@server)
     end
-    @log&.close!
   rescue Errno::ESRCH, Errno::ECHILD
     # プロセスは既に終了・回収済み
+  ensure
+    # rescue 経路でも Tempfile を確実に unlink する。
+    @log&.close!
   end
 
   def test_connect_open_channel_request_disconnect
