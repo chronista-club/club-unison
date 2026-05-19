@@ -1,0 +1,21 @@
+# frozen_string_literal: true
+
+require "rb_sys/extensiontask"
+require "rake/testtask"
+
+GEMSPEC = Gem::Specification.load("unison-client.gemspec")
+
+# Builds the Rust crate in `ext/unison_client/` into the native extension at
+# `lib/unison_client/unison_client.<bundle|so>`.
+RbSys::ExtensionTask.new("unison_client", GEMSPEC) do |ext|
+  ext.lib_dir = "lib/unison_client"
+end
+
+# テストは native 拡張に依存するため compile を前提タスクにする。
+Rake::TestTask.new(test: :compile) do |t|
+  t.libs << "test" << "lib"
+  t.test_files = FileList["test/**/*_test.rb"]
+  t.warning = false
+end
+
+task default: :test

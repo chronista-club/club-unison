@@ -1,0 +1,33 @@
+# crate 名は拡張ターゲット名（unison_client）と一致させる。gem 名はハイフン
+# 区切りの `unison-client`（gem 慣習）で、両者が別表記なのは想定どおり。
+[package]
+name = "unison_client"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+description = "Native extension for the unison-client Ruby gem — Magnus binding over club-unison."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+magnus = "0.8"
+# club-unison 本体（QUIC / channel / wire）。crate の package 名は club-unison、
+# lib 名は unison なので Rust 側は `use unison::...`。1.0.0-rc.1 は prerelease の
+# ため version を明示指定する（通常 cargo は prerelease を選ばない）。
+club-unison = "1.0.0-rc.1"
+# block_on で async API を Ruby の同期呼び出しへ橋渡しするための runtime。
+tokio = { version = "1", features = ["rt-multi-thread"] }
+# channel payload の Ruby 値 ⇄ serde_json::Value 変換。serde_magnus は magnus
+# エコシステム標準で、magnus version を一致させる必要がある（0.11 → magnus 0.8）。
+serde_json = "1"
+serde_magnus = "0.11"
+# GVL 解放（rb_thread_call_without_gvl）の raw FFI。magnus 0.8 はこの C API を
+# 安全ラッパとして公開していないため rb-sys を直接使う。magnus が間接依存する
+# のと同じ crate（version 一致で unify）。
+rb-sys = "0.9"
+
+# cargo 単体（clippy / check）は rb-sys が Ruby ABI を要求するため通らない。
+# ビルド・lint は `bundle exec rake compile` 経由で行う（rb_sys が Ruby env を
+# 注入する）。

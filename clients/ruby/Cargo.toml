@@ -1,0 +1,11 @@
+# Ruby client gem の native 拡張 workspace。
+#
+# gem root に置くのは rb_sys（rake-compiler）の要請: `cargo metadata` を
+# gem root から実行するため、ここに manifest が無いと cargo が親へ遡り
+# club-unison の workspace を誤って拾う。
+#
+# 親 (club-unison) の Cargo workspace は `crates/*` のみを member とするため
+# この workspace とは独立。両者が干渉することはない。
+[workspace]
+members = ["ext/unison_client"]
+resolver = "3"
