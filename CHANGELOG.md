@@ -7,6 +7,30 @@
 
 ## [Unreleased]
 
+## [1.0.0-rc.2] - 2026-05-19 — polyglot client 拡充 + CLI request/response 被覆
+
+> rc.1 以降の追補。Ruby client gem を新設し、`unison` CLI に request 送信コマンドを追加して channel の request/event 両半分を CLI で被覆した。
+
+### 追加 — Ruby client gem (`unison-client`)
+
+- `clients/ruby/` — Rust `club-unison` crate を Magnus native 拡張で wrap する言語バインディング（protocol 再実装ではない）
+- `Unison::Client`（接続ライフサイクル + `open_channel`）/ `Unison::Channel`（`request` / `send_event` / `recv` / `close`）/ `Unison::Error` (`< StandardError`)
+- channel payload は native Ruby 値 ⇄ `serde_json::Value` を `serde_magnus` で双方向変換
+- ブロッキング呼び出しは `rb_thread_call_without_gvl` で GVL を解放
+
+### 追加 — `unison call` サブコマンド
+
+- `unison call <url> -c <channel> -m <method> [-p <json>] [--timeout <ms>]` — channel に request を 1 本送り response を pretty JSON 出力
+- `mock`（サーバ応答）と対になり、CLI だけで request/response ループが閉じる
+
+### 変更 — `unison ping`
+
+- 接続時に server identity（name / version / namespace）を表示
+
+### 変更 — 接続 URL scheme
+
+- canonical scheme を `quic://` に統一（`connect` は `quic://` / `https://` / `http://` / bare を受理）
+
 ## [1.0.0-rc.1] - 2026-05-17 — v1.0 polyglot client base (release candidate)
 
 > v1.0 sprint「polyglot client base」 の release candidate。 TypeScript client SDK を新設し、 **browser から Rust server へ実 WebTransport で接続**できる状態に到達。 dogfood 開始点 (= Vantage Point ほか chronista-club ecosystem での実利用検証)。 GA は dogfood exit criteria (3+ caller × 実運用 × critical bug 0) 達成後。
