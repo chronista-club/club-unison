@@ -27,7 +27,7 @@ Ruby (require "unison")
 require "unison"
 
 client = Unison::Client.new
-client.connect("https://127.0.0.1:4433")
+client.connect("quic://[::1]:7878")
 
 ch = client.open_channel("greeter")
 ch.request("Hello", { "name" => "Mako" })   #=> レスポンス Hash

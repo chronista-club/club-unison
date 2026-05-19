@@ -30,9 +30,17 @@ pub async fn run(args: PingArgs) -> Result<()> {
     println!("PING {} (trust={:?})", args.url, args.trust);
 
     let mut samples: Vec<Duration> = Vec::with_capacity(args.count as usize);
+    let mut identity_shown = false;
     for seq in 1..=args.count {
         match probe_once(&args).await {
-            Ok(rtt) => {
+            Ok((rtt, identity)) => {
+                if !identity_shown {
+                    match &identity {
+                        Some(id) => println!("  server: {id}"),
+                        None => println!("  server: <identity 未受信>"),
+                    }
+                    identity_shown = true;
+                }
                 println!("  seq={seq:<3} connected  time={:.2}ms", ms(rtt));
                 samples.push(rtt);
             }
@@ -70,8 +78,8 @@ pub async fn run(args: PingArgs) -> Result<()> {
     Ok(())
 }
 
-/// 1 回 connect して RTT を返す。
-async fn probe_once(args: &PingArgs) -> Result<Duration> {
+/// 1 回 connect して RTT と server identity を返す。
+async fn probe_once(args: &PingArgs) -> Result<(Duration, Option<String>)> {
     let quic = QuicClient::builder()
         .trust_anchors(args.trust.to_anchors())
         .build()
@@ -82,8 +90,14 @@ async fn probe_once(args: &PingArgs) -> Result<Duration> {
     client.connect(&args.url).await.context("connect failed")?;
     let rtt = start.elapsed();
 
+    // Identity Handshake で受信済みの server identity (= 接続先の確認用)
+    let identity = client
+        .server_identity()
+        .await
+        .map(|id| format!("{} v{} ({})", id.name, id.version, id.namespace));
+
     let _ = client.disconnect().await;
-    Ok(rtt)
+    Ok((rtt, identity))
 }
 
 fn ms(d: Duration) -> f64 {

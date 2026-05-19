@@ -6,12 +6,14 @@
 //! # サブコマンド
 //!
 //! - `ping <url>`        — サーバへ接続し疎通 + RTT 計測
+//! - `call <url>`        — channel に request を 1 本送り response を表示
 //! - `sniff <url>`       — channel traffic を覗く packet inspector
 //! - `mock --schema F`   — KDL schema から stub server を起動
 //! - `schema-lint F`     — KDL schema を parse + invariant 検証
 
 use clap::{Parser, Subcommand};
 
+mod call;
 mod mock;
 mod ping;
 mod schema_lint;
@@ -29,6 +31,8 @@ struct Cli {
 enum Command {
     /// サーバへ接続して疎通確認 + ラウンドトリップ遅延を計測する
     Ping(ping::PingArgs),
+    /// channel に request を 1 本送り response を表示する
+    Call(call::CallArgs),
     /// サーバへ接続し channel traffic を覗く (dev packet inspector)
     Sniff(sniff::SniffArgs),
     /// KDL channel schema から stub 応答する mock server を起動する
@@ -51,13 +55,14 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Ping(args) => ping::run(args).await,
+        Command::Call(args) => call::run(args).await,
         Command::Sniff(args) => sniff::run(args).await,
         Command::Mock(args) => mock::run(args).await,
         Command::SchemaLint(args) => schema_lint::run(args),
     }
 }
 
-/// `--trust` フラグ共通定義 (= ping / sniff で共有)
+/// `--trust` フラグ共通定義 (= ping / call / sniff で共有)
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 pub enum TrustMode {
     /// cert 検証を skip (dev 用、self-signed server 向け)
