@@ -1,0 +1,31 @@
+// Unison Ruby client bench run — immutable snapshot。1 file = 1 run。
+// 構造: benchmark > suite > case。
+// - channel: Channel#request の hz(req/sec) / mean_ms / p50_ms / p99_ms。
+// - gvl: 背景スレッドの spin-count throughput を idle=100% として正規化した
+//   pct（5 ラウンド中央値）。unison > cpu の差が network 待ち中の GVL 解放分。
+//   cpu が 0 でないのは CRuby の GVL タイムスライスによる漏れ。
+benchmark version="1.0.0-rc.2" date="2026-05-19" client="ruby-client" {
+    machine arch="arm64" ruby="3.4.9" server="unison-mock"
+
+    suite "channel" {
+        case "Channel.request" hz=7018 mean_ms=0.1421 p50_ms=0.13 p99_ms=0.422 samples=3000
+    }
+    suite "gvl" {
+        case "bg-throughput/idle"   pct=100.0
+        case "bg-throughput/unison" pct=86.0
+        case "bg-throughput/cpu"    pct=45.9
+    }
+
+    // honest 所感:
+    // - Channel.request: 7018 req/s (p50 0.13ms / p99 0.42ms)。loopback QUIC +
+    //   unison mock の stub 応答。実 network ではなく、Ruby ⇄ Rust 往復 + QUIC
+    //   stream + serde_magnus 変換を含めた client パスの下限性能の目安。
+    // - gvl: 背景スレッドは Unison request 中 86% の throughput を維持。GVL を
+    //   握りっぱなしの純 Ruby CPU ループ (45.9%) の ~1.9 倍。request 時間の
+    //   大半が block_on (network 待ち = GVL 解放) で、残り ~14% が GVL 保持下の
+    //   serde_magnus 変換 + ループ overhead に相当する。
+    // - cpu が 0 でなく 45.9% なのは CRuby の GVL タイムスライス (タイトな Ruby
+    //   ループでも定期的に GVL を手放す) による。これが対照群のベースライン。
+    // → 「Unison client は network 待ち中に GVL を解放し、他の Ruby スレッドを
+    //   止めない」ことが 86% vs 45.9% の差で数値的に裏付けられた。
+}

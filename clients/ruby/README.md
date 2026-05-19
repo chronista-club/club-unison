@@ -69,6 +69,17 @@ bundle exec rake test:e2e   # compile → E2E（`unison mock` を subprocess 起
 
 **Ruby 3.4 以上が必須。** 開発環境の version は `.mise.toml` に固定（現在 3.4.9）。
 
+## ベンチマーク
+
+```
+ruby bench/bench.rb > bench/runs/<date>-<tag>.kdl
+```
+
+`unison mock` を subprocess 起動し、(1) `Channel#request` の RTT / throughput と
+(2) GVL 解放の効果（ブロッキング呼び出し中に背景スレッドが進む割合）を計測し、
+structured-log KDL を出力する。run は `bench/runs/` に immutable に蓄積し、
+`bench/index.kdl` が append-only インデックスとして参照する。
+
 ## 対応 protocol 世代
 
 `1.0.0-rc.1` — npm `@chronista-club/unison-client` / crates.io `club-unison`
