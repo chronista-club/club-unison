@@ -69,6 +69,11 @@ impl Client {
     /// `Unison::Client.new` — builds a default QUIC-backed client.
     ///
     /// Does not open a connection; call `#connect` for that.
+    ///
+    /// **Warning**: backed by `ProtocolClient::new_default()`, which builds an
+    /// **insecure** client — TLS certificate verification is skipped (intended
+    /// for loopback / development). A secure constructor taking explicit trust
+    /// anchors is future work.
     fn new() -> Result<Self, Error> {
         let inner = ProtocolClient::new_default()
             .map_err(|e| runtime_error(format!("Unison::Client.new failed: {e}")))?;

@@ -11,3 +11,7 @@
 /Gemfile.lock
 /.bundle/
 /tmp/
+
+# Cargo.lock は追跡する（native gem = cdylib の再現ビルドのため）。
+# 親リポジトリの .gitignore が Cargo.lock を一律 ignore しているのを打ち消す。
+!Cargo.lock

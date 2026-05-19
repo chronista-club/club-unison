@@ -22,6 +22,7 @@ Gem::Specification.new do |spec|
     "lib/**/*.rb",
     "ext/**/*.{rs,rb,toml}",
     "Cargo.toml",
+    "Cargo.lock",
     "README.md",
   ]
   spec.require_paths = ["lib"]

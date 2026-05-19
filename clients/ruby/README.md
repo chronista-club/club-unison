@@ -38,6 +38,10 @@ ch.close
 client.disconnect
 ```
 
+> **注意**: `Unison::Client.new` は証明書検証を行わない insecure な client を
+> 構築する（loopback / 開発用途）。trust anchor を明示する secure constructor は
+> 今後のフェーズ。
+
 channel payload は native な Ruby 値（`Hash` / `Array` / scalar）で渡せる。
 Rust 側で `serde_magnus` が `serde_json::Value` へ双方向変換し、channel の
 JSON codec が処理する。
