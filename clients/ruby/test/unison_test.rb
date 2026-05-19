@@ -25,4 +25,8 @@ class UnisonTest < Minitest::Test
   def test_channel_class_is_defined
     assert_kind_of Class, Unison::Channel
   end
+
+  def test_error_is_a_standard_error_subclass
+    assert_operator Unison::Error, :<, StandardError
+  end
 end

@@ -50,7 +50,9 @@ async は extension 内に埋めた tokio runtime で `block_on` する。現状
 Ruby VM をブロックする（GVL 解放は今後の refinement。特に `recv` は event 到着
 まで待つため影響が大きい）。
 
-次フェーズ: 実 Unison サーバ相手の E2E テスト、GVL 解放、`Unison::Error` 例外階層。
+失敗はすべて `Unison::Error`（`< StandardError`）として raise される。
+
+次フェーズ: 実 Unison サーバ相手の E2E テスト、GVL 解放。
 
 ## ビルド・テスト
 

@@ -7,6 +7,7 @@
 //!
 //! - `Unison::Client`  — connection lifecycle, wraps `ProtocolClient`
 //! - `Unison::Channel` — request/response + event push, wraps `UnisonChannel`
+//! - `Unison::Error`   — base class for every failure this binding raises
 //!
 //! Channel payloads cross the boundary as native Ruby values: `serde_magnus`
 //! converts Ruby `Hash`/`Array`/… ⇄ `serde_json::Value`, which the channel's
@@ -14,7 +15,7 @@
 
 use std::sync::OnceLock;
 
-use magnus::{Error, Ruby, Value, function, method, prelude::*};
+use magnus::{Error, ExceptionClass, Ruby, Value, function, method, prelude::*};
 use serde_json::Value as JsonValue;
 use tokio::runtime::Runtime;
 use unison::{NetworkError, ProtocolClient, UnisonChannel};
@@ -37,17 +38,22 @@ fn ruby() -> Ruby {
     Ruby::get().expect("Unison binding used outside a Ruby thread")
 }
 
-/// Builds a Ruby `RuntimeError` carrying `msg`.
+/// Builds a `Unison::Error` exception carrying `msg`.
 ///
-/// A dedicated `Unison::Error` hierarchy is a deliberate later refinement —
-/// for now every failure surfaces as `RuntimeError`.
-fn runtime_error(msg: impl Into<String>) -> Error {
-    Error::new(ruby().exception_runtime_error(), msg.into())
+/// `Unison::Error` is defined once in `init`; this re-fetches it via the
+/// (idempotent) module handle rather than caching — error construction is
+/// never a hot path.
+fn unison_error(msg: impl Into<String>) -> Error {
+    let class: ExceptionClass = ruby()
+        .define_module("Unison")
+        .and_then(|m| m.const_get("Error"))
+        .expect("Unison::Error class is not defined");
+    Error::new(class, msg.into())
 }
 
-/// Turns a `NetworkError` into a Ruby `RuntimeError`.
+/// Turns a `NetworkError` into a `Unison::Error`.
 fn net_err(e: NetworkError) -> Error {
-    runtime_error(e.to_string())
+    unison_error(e.to_string())
 }
 
 /// The Unison protocol generation this client is built against.
@@ -76,14 +82,14 @@ impl Client {
     /// anchors is future work.
     fn new() -> Result<Self, Error> {
         let inner = ProtocolClient::new_default()
-            .map_err(|e| runtime_error(format!("Unison::Client.new failed: {e}")))?;
+            .map_err(|e| unison_error(format!("Unison::Client.new failed: {e}")))?;
         Ok(Self { inner })
     }
 
     /// `client.connect(url)` — opens the QUIC connection to `url`.
     ///
     /// Blocks the calling thread (and, for now, the Ruby VM) until the
-    /// handshake completes. Raises `RuntimeError` on failure.
+    /// handshake completes. Raises `Unison::Error` on failure.
     fn connect(&self, url: String) -> Result<(), Error> {
         runtime().block_on(self.inner.connect(&url)).map_err(net_err)
     }
@@ -95,13 +101,13 @@ impl Client {
 
     /// `client.disconnect` — closes the QUIC connection.
     ///
-    /// Raises `RuntimeError` only if the close itself errors.
+    /// Raises `Unison::Error` only if the close itself errors.
     fn disconnect(&self) -> Result<(), Error> {
         runtime().block_on(self.inner.disconnect()).map_err(net_err)
     }
 
     /// `client.open_channel(name)` — opens a named channel, returning a
-    /// `Unison::Channel`. Raises `RuntimeError` on failure.
+    /// `Unison::Channel`. Raises `Unison::Error` on failure.
     fn open_channel(&self, name: String) -> Result<Channel, Error> {
         let inner = runtime()
             .block_on(self.inner.open_channel(&name))
@@ -123,7 +129,7 @@ struct Channel {
 impl Channel {
     /// `channel.request(method, payload)` — sends a request and blocks until
     /// the matching response arrives. Returns the response payload as a Ruby
-    /// value. Raises `RuntimeError` on a protocol error or timeout.
+    /// value. Raises `Unison::Error` on a protocol error or timeout.
     fn request(&self, method: String, payload: Value) -> Result<Value, Error> {
         let ruby = ruby();
         let req: JsonValue = serde_magnus::deserialize(&ruby, payload)?;
@@ -170,6 +176,9 @@ impl Channel {
 fn init(ruby: &Ruby) -> Result<(), Error> {
     let module = ruby.define_module("Unison")?;
     module.define_module_function("protocol_target", function!(protocol_target, 0))?;
+
+    // `Unison::Error` — base class for every failure raised by this binding.
+    module.define_error("Error", ruby.exception_standard_error())?;
 
     let client = module.define_class("Client", ruby.class_object())?;
     client.define_singleton_method("new", function!(Client::new, 0))?;
