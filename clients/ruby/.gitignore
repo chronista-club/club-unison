@@ -1,0 +1,13 @@
+# Rust build output (workspace target dir is at the gem root)
+/target/
+
+# compiled native extension (built into lib/ by `rake compile`)
+/lib/unison_client/
+*.bundle
+*.so
+*.o
+
+# bundler
+/Gemfile.lock
+/.bundle/
+/tmp/

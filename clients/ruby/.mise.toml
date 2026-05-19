@@ -1,0 +1,5 @@
+# Ruby client の開発環境 version 固定。
+# 親 (club-unison) は Rust 主体で Ruby を要求しないため、この sub-project 直下で
+# 上書きする。SSOT は mise（グローバル config は触らない）。
+[tools]
+ruby = "3.4.9"
