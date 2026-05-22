@@ -171,6 +171,8 @@ impl MeshCa {
         let ca_key = KeyPair::from_pem(ca_key_pem).context("MeshCa: parsing CA key PEM")?;
         let issuer = Issuer::from_ca_cert_pem(ca_cert_pem, ca_key)
             .context("MeshCa: parsing CA certificate PEM")?;
+        // `Issuer` は CA cert DER を保持しない (rcgen の設計) ため、rustls 用の
+        // trust anchor / leaf chain に渡す DER は PEM から独立に取り出す。
         let ca_cert_der = rustls_pemfile::certs(&mut ca_cert_pem.as_bytes())
             .next()
             .context("MeshCa: no certificate found in CA PEM")?
@@ -267,7 +269,9 @@ mod tests {
             panic!("trust_anchors() must be Custom");
         };
         let mut roots = RootCertStore::empty();
-        roots.add(ca_certs[0].clone()).expect("add CA to root store");
+        roots
+            .add(ca_certs[0].clone())
+            .expect("add CA to root store");
         WebPkiServerVerifier::builder_with_provider(
             Arc::new(roots),
             Arc::new(rustls::crypto::ring::default_provider()),
@@ -287,8 +291,12 @@ mod tests {
         let (cert_pem, key_pem) = ca.to_pem();
         let reloaded = MeshCa::from_pem(&cert_pem, &key_pem).expect("from_pem");
 
-        let TrustAnchors::Custom(orig) = ca.trust_anchors() else { unreachable!() };
-        let TrustAnchors::Custom(back) = reloaded.trust_anchors() else { unreachable!() };
+        let TrustAnchors::Custom(orig) = ca.trust_anchors() else {
+            unreachable!()
+        };
+        let TrustAnchors::Custom(back) = reloaded.trust_anchors() else {
+            unreachable!()
+        };
         assert_eq!(orig, back, "reloaded CA must point at the same cert");
     }
 
@@ -298,7 +306,9 @@ mod tests {
         let chain = chain_of(&ca.issue(["leaf.test".to_string()]).expect("issue"));
 
         assert_eq!(chain.len(), 2, "chain should be [leaf, ca]");
-        let TrustAnchors::Custom(ca_certs) = ca.trust_anchors() else { unreachable!() };
+        let TrustAnchors::Custom(ca_certs) = ca.trust_anchors() else {
+            unreachable!()
+        };
         assert_eq!(chain[1], ca_certs[0], "chain[1] must be the CA cert");
     }
 

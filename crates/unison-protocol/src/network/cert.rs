@@ -11,7 +11,8 @@
 //!
 //! | Scenario | Variant |
 //! |----------|---------|
-//! | Internal cluster mesh (server↔server) | [`CertSource::SelfSigned`] via [`InternalMeshKeypair`] |
+//! | Internal mesh, fixed server↔client pair | [`CertSource::SelfSigned`] via [`InternalMeshKeypair`] |
+//! | Internal mesh, many servers (private CA) | [`CertSource::Provided`] via [`super::mesh::MeshCa::issue`] |
 //! | Public server (Let's Encrypt etc.) | [`CertSource::Provided`] or [`CertSource::FromFile`] |
 //! | Dev quickstart (localhost only) | [`CertSource::dev_localhost`] |
 //!
