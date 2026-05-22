@@ -29,7 +29,7 @@ pub use channel::UnisonChannel;
 pub use client::{ClientConnectionEvent, ClientConnectionEventReceiver, ProtocolClient};
 pub use conn::UnisonConn;
 pub use datagram_channel::DatagramChannel;
-pub use mesh::InternalMeshKeypair;
+pub use mesh::{InternalMeshKeypair, MeshCa};
 pub use quic::{QuicClient, QuicServer, TypedFrame, UnisonStream};
 pub use server::{ConnectionEvent, ConnectionEventReceiver, ProtocolServer, ServerHandle};
 pub use trust::TrustAnchors;
