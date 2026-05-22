@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [1.0.0-rc.3] - 2026-05-22 — MeshCa private-CA primitive + Ruby client 拡充
+
 > rc.2 以降の追補。`unison` trust に private-CA primitive を新設（fleetflow からの
 > dogfood handoff 発）、ほか Ruby client のテスト・ベンチと依存更新。
 
