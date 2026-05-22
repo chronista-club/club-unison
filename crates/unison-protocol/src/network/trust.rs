@@ -11,7 +11,8 @@
 //! | Scenario | Variant |
 //! |----------|---------|
 //! | Connect to public server (CA chain) | [`TrustAnchors::System`] |
-//! | Internal mesh (pinned CA) | [`TrustAnchors::Custom`] (via [`super::mesh::InternalMeshKeypair`]) |
+//! | Internal mesh, fixed pair | [`TrustAnchors::Custom`] (via [`super::mesh::InternalMeshKeypair`]) |
+//! | Internal mesh, many servers (private CA) | [`TrustAnchors::Custom`] (via [`super::mesh::MeshCa::trust_anchors`]) |
 //! | Dev against `dev_localhost()` server | [`TrustAnchors::SkipVerification`] |
 
 use std::sync::Arc;

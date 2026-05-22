@@ -7,8 +7,16 @@
 
 ## [Unreleased]
 
-> rc.2 以降の追補。クレート実体（`club-unison` lib）の API は不変で、Ruby client
-> のテスト・ベンチ追加と依存更新が中心。
+## [1.0.0-rc.3] - 2026-05-22 — MeshCa private-CA primitive + Ruby client 拡充
+
+> rc.2 以降の追補。`unison` trust に private-CA primitive を新設（fleetflow からの
+> dogfood handoff 発）、ほか Ruby client のテスト・ベンチと依存更新。
+
+### 追加 — trust: `MeshCa` private-CA primitive
+
+- `network::mesh::MeshCa` — 内部 mesh 用の private 認証局。`generate()` で CA 生成、`issue(sans)` で per-server leaf cert を CA 署名して発行（`CertSource`）、`trust_anchors()` で client 用 `TrustAnchors::Custom([CA])`、`to_pem` / `from_pem` で永続化。
+- `InternalMeshKeypair`（self-signed 1 枚の pairwise）が N server にスケールしない問題を解消 — client は CA 1 枚を信頼するだけ（O(1)）、server 追加で client 無改修、per-server key で compromise 隔離。
+- client 側は新規コード不要（`TrustAnchors::Custom` が rustls の chain 検証に乗る）。fleetflow の Podman+Quadlet epic の dogfood handoff 発。
 
 ### 追加 — Ruby client のテスト・ベンチマーク
 
@@ -18,6 +26,7 @@
 ### 変更 — 依存
 
 - `club-kdl` を `0.5` → `0.8` に更新（#53）。club-unison は KDL パース（`from_str` / `KdlDeserialize`）にのみ使用しており API 互換、呼び出し側の変更なし
+- `rcgen` の `x509-parser` feature を有効化（`MeshCa::from_pem` が CA cert PEM から `Issuer` を復元するのに必要）
 
 ## [1.0.0-rc.2] - 2026-05-19 — polyglot client 拡充 + CLI request/response 被覆
 
