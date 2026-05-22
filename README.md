@@ -9,7 +9,7 @@ KDL スキーマベースの型安全な QUIC 通信フレームワーク。
 ```toml
 [dependencies]
 # crates.io package = `club-unison`、Rust crate identifier = `unison`
-club-unison = "^0.10"
+club-unison = "1.0.0-rc.3"
 tokio = { version = "1.52", features = ["full"] }
 ```
 
@@ -23,14 +23,19 @@ let server_config = QuicServer::configure_server_with(CertSource::dev_localhost(
 // Client: trust anchor も TrustAnchors enum で明示選択
 let client_config = QuicClient::configure_client_with(TrustAnchors::System).await?;
 
-// 内部メッシュ: 両端を 1 つの pair で生成
+// 内部メッシュ (固定ペア): 両端を 1 つの pair で生成
 use unison::network::InternalMeshKeypair;
 let pair = InternalMeshKeypair::generate(["broker.local".into(), "*.unison.local".into()])?;
-// pair.server_cert_source → server 側
-// pair.client_trust_anchors → client 側
+// pair.server_cert_source → server 側 / pair.client_trust_anchors → client 側
+
+// 内部メッシュ (多 server): private CA で per-server cert を発行
+use unison::network::MeshCa;
+let ca = MeshCa::generate()?;
+let server_cert = ca.issue(["cp.internal".into()])?; // server 側 CertSource
+let client_trust = ca.trust_anchors();               // 全 client 共通 (CA 1 枚を信頼)
 ```
 
-詳細な trust model 設計は [CHANGELOG](https://github.com/chronista-club/club-unison/blob/main/CHANGELOG.md) の v0.7.0 (TLS 導入) と v0.9.0 (deprecated `configure_*()` 削除) entry を参照。
+詳細な trust model 設計は [CHANGELOG](https://github.com/chronista-club/club-unison/blob/main/CHANGELOG.md) の v0.7.0 (TLS 導入) / v0.9.0 (deprecated `configure_*()` 削除) / v1.0.0-rc.3 (`MeshCa` private CA) entry を参照。
 
 ---
 
