@@ -7,6 +7,22 @@
 
 ## [Unreleased]
 
+## [1.0.0-rc.4] - 2026-05-23 — crates.io readme refresh + README clone fix
+
+> rc.3 と同じコードのまま、**crates.io 上の readme を同期するための republish**。
+> rc.3 を publish した commit には README sync (PR #57) がまだ含まれておらず、
+> crates.io の readme が `club-unison = "^0.10"` / `MeshCa` 未掲載の古い版に
+> なっていた。crates.io は publish 時点の readme を永続的に焼き込む（後から
+> 更新不可、再 publish も不可）ため、readme を更新するには新しい version での
+> publish が必要。
+
+### 修正
+
+- README: `git clone` 後の `cd unison` を `cd club-unison`（リポジトリ名と一致）に修正
+- crates.io 上の readme を最新版（`MeshCa` 例 + `club-unison = "1.0.0-rc.4"` 表記）で再公開
+
+ライブラリの API・実装は **rc.3 と同一**（コード変更なし、メタデータと README のみ）。
+
 ## [1.0.0-rc.3] - 2026-05-22 — MeshCa private-CA primitive + Ruby client 拡充
 
 > rc.2 以降の追補。`unison` trust に private-CA primitive を新設（fleetflow からの
