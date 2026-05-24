@@ -328,8 +328,8 @@ sequenceDiagram
     participant C as QuicClient
     participant S as QuicServer
 
-    Note over C: IPv6 アドレス解析
-    C->>C: Endpoint::client("[::]:0")
+    Note over C: IPv4 / IPv6 アドレス解析
+    C->>C: Endpoint::client(family-matched bind: "0.0.0.0:0" or "[::]:0")
     C->>S: QUIC 接続要求
     Note over C,S: TLS 1.3 ハンドシェイク
     S-->>C: 接続確立

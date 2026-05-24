@@ -17,7 +17,7 @@ use crate::TrustMode;
 
 #[derive(Args)]
 pub struct CallArgs {
-    /// Unison サーバの URL (例: `quic://[::1]:7878`)
+    /// Unison サーバの URL (例: `quic://[::1]:7878` / `quic://127.0.0.1:7878`)
     pub url: String,
 
     /// request を送る channel 名

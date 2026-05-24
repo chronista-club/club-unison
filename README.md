@@ -236,7 +236,7 @@ cargo build
 RUSTFLAGS="-C symbol-mangling-version=v0" cargo test --workspace
 ```
 
-IPv6 専用設計。アドレスは `[::1]:port` を使う。
+**IPv4 / IPv6 どちらでも繋がる。** `[::1]:port`（IPv6 ループバック）でも `127.0.0.1:port`（IPv4 ループバック）でも、ホスト名（DNS 解決）でも OK。client は target アドレスの family に合わせて local bind を切り替える。CLI 既定と多くの例は IPv6 寄りで、bare port のみ（`8080` 等）指定した場合は `[::1]` にフォールバックする。
 
 ## ドキュメント
 

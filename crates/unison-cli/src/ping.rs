@@ -14,7 +14,7 @@ use crate::TrustMode;
 
 #[derive(Args)]
 pub struct PingArgs {
-    /// Unison サーバの URL (例: `quic://[::1]:7878`)
+    /// Unison サーバの URL (例: `quic://[::1]:7878` / `quic://127.0.0.1:7878`)
     pub url: String,
 
     /// trust anchor mode (default: skip — dev self-signed 用)

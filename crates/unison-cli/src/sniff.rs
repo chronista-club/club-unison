@@ -18,7 +18,7 @@ use crate::TrustMode;
 
 #[derive(Args)]
 pub struct SniffArgs {
-    /// Unison サーバの URL (例: `quic://[::1]:7878`)
+    /// Unison サーバの URL (例: `quic://[::1]:7878` / `quic://127.0.0.1:7878`)
     pub url: String,
 
     /// 覗く channel 名
