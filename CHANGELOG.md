@@ -7,6 +7,16 @@
 
 ## [Unreleased]
 
+### 修正 — IPv4 / IPv6 両対応を明示（誤記訂正）
+
+実装は当初から IPv4 / IPv6 両家族に対応していた（`network::quic::resolve_socket_addr` が両者を受理し、client は target family に合わせて local bind を切り替え、`server.rs` の bind テストも `127.0.0.1` 使用）が、README が「IPv6 専用設計」と誤って明言していたため訂正:
+
+- `README.md` 「IPv6 専用設計」→ 「IPv4 / IPv6 どちらでも繋がる」（bare port → `::1` フォールバックのバイアスは明記）
+- `unison` CLI の `ping` / `sniff` / `call` arg help に `quic://127.0.0.1:7878` の IPv4 例を併記
+- `spec/01-core-concept/SPEC.md` シーケンス図の note を「IPv6 アドレス解析」→「IPv4 / IPv6 アドレス解析」、`Endpoint::client` を family-matched bind 表記に
+
+コード変更なし。
+
 ## [1.0.0-rc.4] - 2026-05-23 — crates.io readme refresh + README clone fix
 
 > rc.3 と同じコードのまま、**crates.io 上の readme を同期するための republish**。
