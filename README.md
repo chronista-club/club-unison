@@ -1,6 +1,8 @@
+English | [日本語](README.ja.md)
+
 # Unison Protocol
 
-KDL スキーマベースの型安全な QUIC 通信フレームワーク。
+A type-safe QUIC communication framework, defined by KDL schema.
 
 [![Crates.io](https://img.shields.io/crates/v/club-unison.svg)](https://crates.io/crates/club-unison)
 [![Build Status](https://github.com/chronista-club/club-unison/workflows/CI/badge.svg)](https://github.com/chronista-club/club-unison/actions)
@@ -8,7 +10,7 @@ KDL スキーマベースの型安全な QUIC 通信フレームワーク。
 
 ```toml
 [dependencies]
-# crates.io package = `club-unison`、Rust crate identifier = `unison`
+# crates.io package = `club-unison`, Rust crate identifier = `unison`
 club-unison = "1.0.0"
 tokio = { version = "1.52", features = ["full"] }
 ```
@@ -17,56 +19,56 @@ tokio = { version = "1.52", features = ["full"] }
 use unison::network::{CertSource, TrustAnchors};
 use unison::network::quic::{QuicClient, QuicServer};
 
-// Server: TLS cert を CertSource enum で明示選択
+// Server: pick the TLS cert source explicitly via the `CertSource` enum.
 let server_config = QuicServer::configure_server_with(CertSource::dev_localhost()).await?;
 
-// Client: trust anchor も TrustAnchors enum で明示選択
+// Client: pick the trust anchor explicitly via the `TrustAnchors` enum.
 let client_config = QuicClient::configure_client_with(TrustAnchors::System).await?;
 
-// 内部メッシュ (固定ペア): 両端を 1 つの pair で生成
+// Internal mesh (fixed pair): one keypair for both ends.
 use unison::network::InternalMeshKeypair;
 let pair = InternalMeshKeypair::generate(["broker.local".into(), "*.unison.local".into()])?;
-// pair.server_cert_source → server 側 / pair.client_trust_anchors → client 側
+// pair.server_cert_source → server side / pair.client_trust_anchors → client side
 
-// 内部メッシュ (多 server): private CA で per-server cert を発行
+// Internal mesh (many servers): a private CA issuing per-server certs.
 use unison::network::MeshCa;
 let ca = MeshCa::generate()?;
-let server_cert = ca.issue(["cp.internal".into()])?; // server 側 CertSource
-let client_trust = ca.trust_anchors();               // 全 client 共通 (CA 1 枚を信頼)
+let server_cert = ca.issue(["cp.internal".into()])?; // server-side CertSource
+let client_trust = ca.trust_anchors();               // shared by every client (one CA to trust)
 ```
 
-詳細な trust model 設計は [CHANGELOG](https://github.com/chronista-club/club-unison/blob/main/CHANGELOG.md) の v0.7.0 (TLS 導入) / v0.9.0 (deprecated `configure_*()` 削除) / v1.0.0-rc.3 (`MeshCa` private CA) entry を参照。
+See the [CHANGELOG](https://github.com/chronista-club/club-unison/blob/main/CHANGELOG.md) entries for v0.7.0 (TLS introduced), v0.9.0 (deprecated `configure_*()` removed), and v1.0.0-rc.3 (`MeshCa` private CA) for the trust model design in depth.
 
 ---
 
-## 接続すると何が起こるか
+## What happens when you connect
 
-クライアントがサーバーに接続し、チャネルを開いてやり取りするまでの流れ。
+The flow from connect, to opening a channel, to actually exchanging data:
 
 ```mermaid
 sequenceDiagram
     participant C as Client
     participant S as Server
 
-    C->>S: QUIC 接続（TLS 1.3 自動）
-    S->>C: Identity（サーバー名・利用可能チャネル）
+    C->>S: QUIC connect (TLS 1.3 — automatic)
+    S->>C: Identity (server name, available channels)
     C->>S: open_channel("users")
-    Note over C,S: QUIC 双方向ストリーム確立
+    Note over C,S: QUIC bidirectional stream established
     C->>S: request("CreateUser", {name, email})
     S->>C: response({id, created_at})
     S->>C: event("UserCreated", {id})
 ```
 
-1. クライアントが QUIC で接続する。TLS 1.3 証明書は開発時は自動生成される
-2. サーバーが Identity を返す（サーバー名、バージョン、利用可能なチャネル一覧）
-3. クライアントがチャネルを開くと QUIC 双方向ストリームが確立される
-4. 以降、そのチャネル上で Request/Response、Event push、Raw bytes を自由にやり取りする
+1. The client opens a QUIC connection. TLS 1.3 certificates are auto-generated for dev.
+2. The server replies with its Identity — name, version, and the list of available channels.
+3. When the client opens a channel, a QUIC bidirectional stream is established for it.
+4. From there, request/response, event push, and raw bytes all flow freely over that one channel.
 
-全通信がチャネル経由。RPC という概念はなく、`UnisonChannel` に統一されている。
+**Everything is a channel.** There is no separate "RPC" concept — it's unified under `UnisonChannel`.
 
 ---
 
-## サーバーを書く
+## Writing a server
 
 ```rust
 use unison::{ProtocolServer, NetworkError};
@@ -79,7 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "my-server", "1.0.0", "com.example.myservice",
     );
 
-    // チャネルハンドラーの登録
+    // Register a channel handler.
     server.register_channel("users", |_ctx, stream| async move {
         let channel = UnisonChannel::new(stream);
         loop {
@@ -93,16 +95,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     }).await;
 
-    // バックグラウンドで起動（グレースフルシャットダウン対応）
+    // Spawn in the background with graceful-shutdown support.
     let handle = server.spawn_listen("[::1]:8080").await?;
-    println!("サーバー起動: {}", handle.local_addr());
+    println!("server up at {}", handle.local_addr());
 
-    // handle.shutdown().await? で停止
+    // Stop it with `handle.shutdown().await?`.
     Ok(())
 }
 ```
 
-## クライアントを書く
+## Writing a client
 
 ```rust
 use unison::ProtocolClient;
@@ -113,18 +115,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = ProtocolClient::new_default()?;
     client.connect("[::1]:8080").await?;
 
-    // チャネルを開いて Request/Response
+    // Open a channel and do a request/response.
     let users = client.open_channel("users").await?;
     let response = users.request("CreateUser", json!({
         "name": "Alice",
         "email": "alice@example.com"
     })).await?;
-    println!("作成されたユーザー: {}", response);
+    println!("user created: {}", response);
 
-    // イベント受信
+    // Receive events on another channel.
     let events = client.open_channel("events").await?;
     while let Ok(event) = events.recv().await {
-        println!("イベント: {:?}", event);
+        println!("event: {:?}", event);
     }
 
     Ok(())
@@ -135,7 +137,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## UnisonChannel
 
-1つのチャネルで3種類の通信パターンをサポートする。
+A single channel supports three communication patterns side-by-side:
 
 ```
 Client                              Server
@@ -151,23 +153,23 @@ Client                              Server
 ```
 
 ```rust
-// Request/Response
+// Request / response.
 let res = channel.request("CreateUser", payload).await?;
 channel.send_response(id, method, payload).await?;
 
-// Event push（一方向）
+// Event push (one-way).
 channel.send_event("UserCreated", payload).await?;
 
-// Raw bytes（rkyv/zstd をバイパス、オーディオ等に）
+// Raw bytes — bypasses rkyv/zstd. Useful for audio, etc.
 channel.send_raw(&pcm_data).await?;
 let data = channel.recv_raw().await?;
 ```
 
-フレームの先頭 1 バイトで Protocol frame (`0x00`, rkyv + zstd) と Raw frame (`0x01`, 生バイト) を区別する。2KB 以上のペイロードは自動で zstd 圧縮される。
+A single byte at the head of each frame distinguishes Protocol frames (`0x00`, rkyv + zstd) from Raw frames (`0x01`, raw bytes). Payloads larger than 2 KB are automatically compressed with zstd.
 
 ---
 
-## 接続イベント
+## Connection events
 
 ```rust
 let mut events = server.subscribe_connection_events();
@@ -175,19 +177,19 @@ tokio::spawn(async move {
     while let Ok(event) = events.recv().await {
         match event {
             ConnectionEvent::Connected { remote_addr, context } => {
-                println!("接続: {}", remote_addr);
+                println!("connected: {}", remote_addr);
             }
             ConnectionEvent::Disconnected { remote_addr } => {
-                println!("切断: {}", remote_addr);
+                println!("disconnected: {}", remote_addr);
             }
         }
     }
 });
 ```
 
-## KDL スキーマ
+## KDL schema
 
-プロトコルを KDL で定義すると、Rust / TypeScript のコードを自動生成できる。
+Define a protocol in KDL and the Rust / TypeScript code is generated for you:
 
 ```kdl
 protocol "my-service" version="1.0.0" {
@@ -209,46 +211,46 @@ protocol "my-service" version="1.0.0" {
 
 ---
 
-## ワークスペースクレート
+## Workspace crates
 
-| クレート | 説明 |
-|---------|------|
-| [`unison-protocol`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-protocol) | コアライブラリ。crates.io では `club-unison` として公開、Rust crate identifier は `unison`。KDL スキーマ、QUIC、チャネル、パケット |
-| [`unison-agent`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-agent) | [Claude Agent SDK](https://crates.io/crates/claude-agent-sdk) 統合。AgentClient、InteractiveClient、MCP ツール公開 |
+| Crate | Description |
+|-------|-------------|
+| [`unison-protocol`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-protocol) | Core library. Published on crates.io as `club-unison`; the Rust crate identifier is `unison`. KDL schema, QUIC, channels, packets. |
+| [`unison-agent`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-agent) | [Claude Agent SDK](https://crates.io/crates/claude-agent-sdk) integration. AgentClient, InteractiveClient, MCP tool exposure. |
 
-### unison-agent の例
+### unison-agent examples
 
 ```bash
-cargo run -p unison-agent --example simple_query        # 単発クエリ
-cargo run -p unison-agent --example interactive_chat    # マルチターン会話
+cargo run -p unison-agent --example simple_query        # one-shot query
+cargo run -p unison-agent --example interactive_chat    # multi-turn conversation
 ```
 
 ---
 
-## 開発
+## Development
 
 ```bash
 git clone https://github.com/chronista-club/club-unison
 cd club-unison
 cargo build
 
-# テスト (lib unit + integration tests)
+# Tests (lib unit + integration tests)
 RUSTFLAGS="-C symbol-mangling-version=v0" cargo test --workspace
 ```
 
-**IPv4 / IPv6 どちらでも繋がる。** `[::1]:port`（IPv6 ループバック）でも `127.0.0.1:port`（IPv4 ループバック）でも、ホスト名（DNS 解決）でも OK。client は target アドレスの family に合わせて local bind を切り替える。CLI 既定と多くの例は IPv6 寄りで、bare port のみ（`8080` 等）指定した場合は `[::1]` にフォールバックする。
+**IPv4 / IPv6 both work.** `[::1]:port` (IPv6 loopback), `127.0.0.1:port` (IPv4 loopback), and hostnames (resolved via DNS) all connect. The client picks a local bind address that matches the target's address family. CLI defaults and most examples lean IPv6; if you pass only a bare port (e.g. `8080`) it falls back to `[::1]`.
 
-## ドキュメント
+## Documentation
 
-- [コアコンセプト](https://github.com/chronista-club/club-unison/blob/main/spec/01-core-concept/SPEC.md) — Everything is a Channel
-- [Unified Channel Protocol](https://github.com/chronista-club/club-unison/blob/main/spec/02-unified-channel/SPEC.md) — KDL スキーマ、コード生成
-- [チャネルガイド](https://github.com/chronista-club/club-unison/blob/main/guides/channel-guide.md) — 実践ガイド
+- [Core concept](https://github.com/chronista-club/club-unison/blob/main/spec/01-core-concept/SPEC.md) — Everything is a Channel
+- [Unified Channel Protocol](https://github.com/chronista-club/club-unison/blob/main/spec/02-unified-channel/SPEC.md) — KDL schema, code generation
+- [Channel guide](https://github.com/chronista-club/club-unison/blob/main/guides/channel-guide.md) — practical guide
 
-## ライセンス
+## License
 
-MIT License - [LICENSE](https://github.com/chronista-club/club-unison/blob/main/LICENSE)
+MIT License — [LICENSE](https://github.com/chronista-club/club-unison/blob/main/LICENSE)
 
 ---
 
-> **Inspired by**: 宝鐘マリン船長の [Unison](https://www.youtube.com/watch?v=_VIeV_LZXHM) ⚓
-> 「同じ調べに乗る」という意味も、このフレームワークの名に込めています。
+> **Inspired by**: [Unison](https://www.youtube.com/watch?v=_VIeV_LZXHM) by Captain Houshou Marine ⚓
+> The name also carries the meaning "to ride the same tune" — exactly what this framework is for.
