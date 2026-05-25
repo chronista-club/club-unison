@@ -7,6 +7,36 @@
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-05-23 — v1.0 GA: protocol API freeze
+
+> v1.0 sprint の到達点。`alpha.1` → `alpha.2` → `rc.1` 〜 `rc.5` で固めた内容を
+> そのまま stable に昇格し、**SemVer の stability commitment** に入る。
+> これ以降の minor / patch リリースは API 互換を保つ。破壊的変更が必要な
+> 場合は v2.0。
+
+### API freeze 対象（SemVer 互換の保証範囲）
+
+- `unison::{ProtocolClient, ProtocolServer, UnisonChannel, ServerHandle}` の public API
+- `network::trust::{TrustAnchors, ...}` および `network::cert::{CertSource, ...}` の trust 抽象
+- `network::mesh::{InternalMeshKeypair, MeshCa}` の internal mesh primitive
+- `network::quic::{QuicClient, QuicServer, UnisonStream, TypedFrame}`
+- `codec::{JsonCodec, ProtoCodec, Codec, Encodable, Decodable}`
+- `wire` の proto3 `ProtocolMessage` フォーマット（同一 wire 形式互換）
+- KDL channel schema 構文（`channel` / `request` / `returns` / `event` / `field`）
+
+### コード
+
+rc.5 と**同一バイナリ**（version メタデータと CHANGELOG のみ変更）。crates.io 上で stable として認識され、`/crates/club-unison` の landing が v1.0.0 になる。
+
+### v0.x → v1.0 累積（rc.1 entry の要約）
+
+- Polyglot client base: Rust core + TS SDK + Ruby gem
+- Unified Channel: request/response + event push + Datagram、JsonCodec / ProtoCodec
+- WebTransport ingress（browser ↔ Rust server）
+- MeshCa private-CA primitive（rc.3〜）— IPv4 / IPv6 両対応
+- `unison` CLI: `ping` / `sniff` / `mock` / `call` / `schema-lint`
+- dogfood signal: fleetflow handoff (MeshCa) / VP dashboard 統合 / Ruby client E2E + bench
+
 ## [1.0.0-rc.5] - 2026-05-23 — IPv4 / IPv6 両対応の文書訂正 + crates.io readme refresh
 
 > rc.4 と同じコードのまま、IPv4 / IPv6 両対応を明示するドキュメント訂正を反映した
