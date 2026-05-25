@@ -21,7 +21,12 @@ import { StreamServerStub, sendIdentity } from "../tests/integration/server_stub
 import type { BidiStream } from "../src/transport/types.js";
 
 // ============================================================
-// Channel meta (= Phase 1 codegen 出力の代用、 vp-dashboard KDL schema 由来)
+// Channel meta (= 教材用の手書き、 codegen 範を理解するための reference)
+//
+// `club-kdl-codegen 0.9.0` 以降は stream / datagram どちらも生成可能になっており
+// （VP dogfood で確認、 dogfood/vp-2026-05-26.md signal #2）、 実 use では
+// 手書きせず codegen で吐く方を推奨する。 ここは「codegen が出すべき形」 を読者が
+// 理解するための self-contained 例として残す。
 //
 // 生成 interface + `__types` phantom carrier 込みで書く (= codegen が吐く
 // `<Channel>ChannelEventTypes` / `<Channel>ChannelRequestTypes` + meta `__types`
