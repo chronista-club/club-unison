@@ -253,4 +253,4 @@ MIT License — [LICENSE](https://github.com/chronista-club/club-unison/blob/mai
 ---
 
 > **Inspired by**: [Unison](https://www.youtube.com/watch?v=_VIeV_LZXHM) by Captain Houshou Marine ⚓
-> The name also carries the meaning "to ride the same tune" — exactly what this framework is for.
+> The name also carries the meaning of being "on the same waves" — exactly what this framework is for.
