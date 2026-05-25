@@ -3,7 +3,7 @@
 > TypeScript client SDK for the [Unison protocol](https://github.com/chronista-club/club-unison).
 > Part of the **v1.0 polyglot client base** (= server stays Rust, client polyglot for adoption surface).
 
-**Status**: `1.0.0-alpha.2` — v1.0 sprint feature-complete. The SDK genuinely talks to the Rust server over **real WebTransport** (verified by `tests/integration/webtransport_e2e.test.ts`). See [design/typescript-client-api.md](../../design/typescript-client-api.md) for the SDK design contract.
+**Status**: `1.0.0` — v1.0 GA. Protocol API is frozen and the SDK is shipped to npm. It talks to the Rust server over **real WebTransport** (verified by `tests/integration/webtransport_e2e.test.ts`). See [design/typescript-client-api.md](../../design/typescript-client-api.md) for the SDK design contract.
 
 ---
 
@@ -105,10 +105,9 @@ npm run typecheck      # tsc --noEmit (= type safety verification)
 ## Versioning policy
 
 - TS package version is kept in **major.minor sync** with the Rust crate `club-unison`
-- `1.0.0-alpha.x` — implementation phases, breaking changes allowed (current)
-- `1.0.0-rc.x` — feature complete, dogfood phase with the chronista-club ecosystem
-- `1.0.0` — stability commitment, breaking changes require v2.0
-  (dogfood exit criteria: 3+ caller × 3+ months × critical bug 0)
+- `1.0.0` (current) — protocol API frozen, stability committed; breaking changes to the public surface require v2.0
+- `1.x.0` — additive features (channels, codecs, error codes) that preserve API compatibility
+- `1.0.x` — patch fixes
 
 ## Compatibility
 
@@ -123,7 +122,7 @@ Safari / Firefox WebTransport support: tracked in v1.x roadmap, polyfill via Web
 
 ## License
 
-MIT — see [LICENSE](../../LICENSE-MIT) in the repository root.
+MIT — see [LICENSE](./LICENSE) (bundled) or [LICENSE](../../LICENSE) in the repository root.
 
 ## Contributing
 
