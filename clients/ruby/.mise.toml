@@ -1,5 +1,9 @@
 # Ruby client の開発環境 version 固定。
 # 親 (club-unison) は Rust 主体で Ruby を要求しないため、この sub-project 直下で
 # 上書きする。SSOT は mise（グローバル config は触らない）。
+#
+# 3.4.9 と 4.0.5 を並列インストール、 既定は最初 (3.4.9)。 cross-version test 時は
+# `mise exec ruby@4.0.5 -- ...` で 4 系を明示する。 gem の native ext (Magnus 0.8)
+# は両系統で compile + test pass 確認済 (2026-05-25)。
 [tools]
-ruby = "3.4.9"
+ruby = ["3.4.9", "4.0.5"]

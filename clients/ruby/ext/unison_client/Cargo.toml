@@ -14,9 +14,8 @@ crate-type = ["cdylib"]
 [dependencies]
 magnus = "0.8"
 # club-unison 本体（QUIC / channel / wire）。crate の package 名は club-unison、
-# lib 名は unison なので Rust 側は `use unison::...`。1.0.0-rc.1 は prerelease の
-# ため version を明示指定する（通常 cargo は prerelease を選ばない）。
-club-unison = "1.0.0-rc.1"
+# lib 名は unison なので Rust 側は `use unison::...`。
+club-unison = "1.0.0"
 # block_on で async API を Ruby の同期呼び出しへ橋渡しするための runtime。
 tokio = { version = "1", features = ["rt-multi-thread"] }
 # channel payload の Ruby 値 ⇄ serde_json::Value 変換。serde_magnus は magnus
