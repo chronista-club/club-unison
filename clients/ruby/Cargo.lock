@@ -507,9 +507,9 @@ dependencies = [
 
 [[package]]
 name = "club-kdl"
-version = "0.5.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88dd9d9177c8fb6c15f68ce34c1c96d6e23a75aa8015b547840ad732488509c7"
+checksum = "0b8bf59c4e61acdf2fdbb6cce8598ee1b51285c3bbf80ff89a0c122152f910c5"
 dependencies = [
  "club-kdl-derive",
  "kdl",
@@ -518,9 +518,9 @@ dependencies = [
 
 [[package]]
 name = "club-kdl-derive"
-version = "0.5.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfd2cea257dfdd7f8418db9b5fb8ef74cea09a4710f204c9b380952ab61438de"
+checksum = "82913adfe940ae4e2f6c7975a5158e39d5d8fd286bfe1707995eb69a5030011c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -529,9 +529,9 @@ dependencies = [
 
 [[package]]
 name = "club-unison"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "722b83118ee63ec2734ae1558f724427a30de787a51ed99778a86cf8e1f821e8"
+checksum = "a2045a606cfcdbd6a8d90b0a6c7b57aa500f8b5a90f0d6701466df2dfc37b565"
 dependencies = [
  "anyhow",
  "async-stream",
