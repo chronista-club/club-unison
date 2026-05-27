@@ -2,6 +2,7 @@
 members = [
     "crates/unison-protocol",
     "crates/unison-agent",
+    "crates/unison-mcp",
     "crates/unison-mcp-probe",
     "crates/unison-cli",
 ]

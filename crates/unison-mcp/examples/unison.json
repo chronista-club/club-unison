@@ -1,0 +1,4 @@
+{
+  "endpoint": "quic://[::1]:7878",
+  "trust": "skip"
+}
