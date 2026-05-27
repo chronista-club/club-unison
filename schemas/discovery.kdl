@@ -1,0 +1,54 @@
+// Unison Discovery — server-distributed protocol schema, runtime-fetchable.
+//
+// 設計: spec/04-discovery/SPEC.md
+// 起源: Unison Hailing Epic (Hailing-α、 MCP demo を Epic 完了条件とする)
+//
+// 目的:
+//   ServerIdentity (spec/01 §5) が提供する channel listing
+//   (= name / direction / lifetime / status) を補完し、 client が server の
+//   **完全な protocol KDL** を runtime fetch して TypeRegistry を構築できる
+//   ようにする。 MCP bridge / browser dynamic client / federation peer の
+//   共通基盤。
+//
+// スコープ外 (本 KDL は仕様確定のみ、 emit / 動的更新は後続 Epic):
+//   - SchemaUpdated event の actual emit (= hot reload semantics)
+//   - codec negotiation (= v0.1.0 は JSON 固定 = lingua franca)
+//   - signing / trust (= 配信 KDL の検証 protocol)
+//   - partial schema fetch (= 1 channel だけ要求する API)
+//   - diff-based update (= patch protocol)
+
+protocol "unison-discovery" version="0.1.0" {
+    namespace "club.chronista.unison.discovery"
+
+    channel "unison.discovery" from="client" lifetime="persistent" {
+
+        // Client → Server: server の protocol KDL を要求
+        request "GetProtocol" {
+            // 要求 format。 "kdl" = 生 KDL ソース、 "kdl+hash" = hash 付き
+            // (= v0.1.0 では両方とも同じ ProtocolDocument を返す = 違いは future hint)
+            field "format" type="string" required=#true
+
+            returns "ProtocolDocument" {
+                // KDL ソース全文 (= UTF-8 raw text)
+                field "kdl" type="string" required=#true
+
+                // protocol "<name>" version="<v>" 構文の version 値
+                field "version" type="string" required=#true
+
+                // kdl 本文の SHA-256 hex (= 64 文字 lowercase)、 cache validation 用
+                field "hash" type="string" required=#true
+
+                // server が話せる codec 一覧 (= ["json"] 固定 in v0.1.0)
+                // future: codec negotiation で ["json", "proto", "buffa"] 等
+                field "codecs" type="json" required=#true
+            }
+        }
+
+        // Server → Client: schema 更新通知 (= hot reload trigger)
+        // v0.1.0 では emit されない (= 仕様のみ確定、 emit の本実装は別 Epic で)
+        event "SchemaUpdated" {
+            field "new_hash" type="string" required=#true
+            field "new_version" type="string"
+        }
+    }
+}
