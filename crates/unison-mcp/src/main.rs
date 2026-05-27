@@ -23,9 +23,7 @@ use rmcp::{ServiceExt, transport::stdio};
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
-mod bridge;
-mod config;
-mod tools;
+use unison_mcp::{bridge, config, tools};
 
 #[derive(Parser, Debug)]
 #[command(name = "unison-mcp", version, about, long_about = None)]
@@ -55,7 +53,9 @@ async fn main() -> Result<()> {
     };
     tracing::info!("unison-mcp starting on stdio (config={:?})", config);
 
-    let bridge = bridge::UnisonBridge::new(config);
+    let bridge = bridge::UnisonBridge::new(config)
+        .await
+        .context("bridge initialization failed")?;
     let server = tools::UnisonMcp::new(bridge)
         .serve(stdio())
         .await

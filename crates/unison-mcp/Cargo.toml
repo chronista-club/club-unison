@@ -10,6 +10,10 @@ repository.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lib]
+name = "unison_mcp"
+path = "src/lib.rs"
+
 [[bin]]
 name = "unison-mcp"
 path = "src/main.rs"
