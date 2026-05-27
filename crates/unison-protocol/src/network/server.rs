@@ -226,6 +226,44 @@ impl ProtocolServer {
         identity
     }
 
+    /// `unison.discovery` channel を有効化する。 server 自身の protocol KDL を
+    /// runtime fetch できるようにする (= Unison Hailing Epic の P1 deliverable)。
+    ///
+    /// 内部で [`ProtocolCache`](super::protocol_cache::ProtocolCache) を build
+    /// し、 [`register_channel`](Self::register_channel) で
+    /// [`DISCOVERY_CHANNEL_NAME`](super::discovery::DISCOVERY_CHANNEL_NAME) を
+    /// 登録する。 同 name で 2 度呼ぶと既存 entry が replace される。
+    ///
+    /// 設計: `spec/04-discovery/SPEC.md`
+    ///
+    /// # Errors
+    /// `kdl` が parse できない or `protocol` block を欠く場合は
+    /// [`NetworkError::Protocol`] を返す。
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let server = ProtocolServer::new();
+    /// let kdl = std::fs::read_to_string("schemas/my_protocol.kdl")?;
+    /// server.enable_discovery(kdl).await?;
+    /// // 他 channel を register、 listen 開始...
+    /// ```
+    pub async fn enable_discovery(
+        &self,
+        kdl: impl Into<String>,
+    ) -> Result<(), NetworkError> {
+        let cache = Arc::new(super::protocol_cache::ProtocolCache::new(kdl)?);
+        self.register_channel(
+            super::discovery::DISCOVERY_CHANNEL_NAME,
+            move |_ctx, stream| {
+                let cache = Arc::clone(&cache);
+                async move { super::discovery::handle_channel(cache, stream).await }
+            },
+        )
+        .await;
+        Ok(())
+    }
+
     /// チャネルハンドラーを登録
     pub async fn register_channel<F, Fut>(&self, name: &str, handler: F)
     where

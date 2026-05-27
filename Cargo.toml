@@ -58,6 +58,9 @@ cgp-component = "0.7.0"
 buffa = "0.5"
 buffa-build = "0.5"
 
+# Hashing (= unison.discovery channel の protocol KDL hash 用)
+sha2 = "0.10"
+
 # Packet module dependencies
 bytes = "1.11"
 zstd = "0.13"
