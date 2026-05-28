@@ -14,11 +14,15 @@ pub mod conn_quinn;
 pub mod context;
 pub mod datagram_channel;
 pub mod datagram_dispatcher;
+pub mod discovery;
 pub mod dispatch;
+pub mod dynamic;
 pub mod frame;
 pub mod identity;
 pub mod mesh;
+pub mod protocol_cache;
 pub mod quic;
+pub mod schema_registry;
 pub mod server;
 pub mod stream;
 pub mod trust;
@@ -29,8 +33,15 @@ pub use channel::UnisonChannel;
 pub use client::{ClientConnectionEvent, ClientConnectionEventReceiver, ProtocolClient};
 pub use conn::UnisonConn;
 pub use datagram_channel::DatagramChannel;
+pub use discovery::{
+    DISCOVERY_CHANNEL_NAME, GET_PROTOCOL_METHOD, GetProtocolRequest, ProtocolDocument,
+    SCHEMA_UPDATED_EVENT, SchemaUpdatedEvent,
+};
+pub use dynamic::{DynamicChannel, DynamicError, DynamicProtocol};
 pub use mesh::{InternalMeshKeypair, MeshCa};
+pub use protocol_cache::ProtocolCache;
 pub use quic::{QuicClient, QuicServer, TypedFrame, UnisonStream};
+pub use schema_registry::{RegistryError, SchemaRegistry, ValidationError};
 pub use server::{ConnectionEvent, ConnectionEventReceiver, ProtocolServer, ServerHandle};
 pub use trust::TrustAnchors;
 pub use webtransport::WebTransportServer;

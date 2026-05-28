@@ -2,13 +2,13 @@
 members = [
     "crates/unison-protocol",
     "crates/unison-agent",
-    "crates/unison-mcp-probe",
+    "crates/unison-mcp",
     "crates/unison-cli",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 authors = ["Mako<mito@chronista.club>"]
 license = "MIT"
@@ -57,6 +57,9 @@ cgp-component = "0.7.0"
 # Protocol Buffers
 buffa = "0.5"
 buffa-build = "0.5"
+
+# Hashing (= unison.discovery channel の protocol KDL hash 用)
+sha2 = "0.10"
 
 # Packet module dependencies
 bytes = "1.11"

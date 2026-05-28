@@ -117,6 +117,11 @@ pub struct ChannelRequest {
     #[kdl(argument)]
     pub name: String,
 
+    /// リクエストの人間可読な説明 (= MCP tool description 等に流す)。
+    /// optional、 KDL syntax は `request "Name" description="..." { ... }`。
+    #[kdl(property)]
+    pub description: Option<String>,
+
     /// リクエストフィールド
     #[kdl(children, name = "field")]
     pub fields: Vec<Field>,
@@ -370,6 +375,14 @@ impl Field {
             "bool" => FieldType::Bool,
             "json" => FieldType::Json,
             "object" => FieldType::Object,
+            // `type="array"` = JSON array of any element (= items は untyped、
+            // typed-element 構文 `array<T>` は別 Epic)。 これにより
+            // `SchemaRegistry::validate_request` の Array arm + `mapping::field_type_to_schema`
+            // の Array branch が live になり、 docs/kdl-to-json-schema.md と一致する。
+            "array" => FieldType::Array(Box::new(FieldType::Json)),
+            // `type="map"` = JSON object with string keys → any values (= 慣用)、
+            // typed-K/V 構文 `map<K, V>` は別 Epic。 これも対応する arm が live になる。
+            "map" => FieldType::Map(Box::new(FieldType::String), Box::new(FieldType::Json)),
             _ => FieldType::Custom(type_str.to_string()),
         }
     }

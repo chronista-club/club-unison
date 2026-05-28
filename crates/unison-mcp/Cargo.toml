@@ -1,17 +1,21 @@
 [package]
-name = "unison-mcp-probe"
+name = "unison-mcp"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-description = "MCP probe for inspecting Unison Protocol servers — a dev-experience tool to poke Unison channels from Claude Code."
+description = "MCP (Model Context Protocol) bridge for Unison Protocol — discovers server protocol at runtime and synthesizes typed tools for AI agents."
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lib]
+name = "unison_mcp"
+path = "src/lib.rs"
+
 [[bin]]
-name = "unison-mcp-probe"
+name = "unison-mcp"
 path = "src/main.rs"
 
 [dependencies]
@@ -24,15 +28,17 @@ club-unison = { path = "../unison-protocol" }
 
 # Runtime
 tokio.workspace = true
-async-stream.workspace = true
-futures-util.workspace = true
 
 # Serialization
 serde.workspace = true
 serde_json.workspace = true
 
+# CLI
+clap.workspace = true
+
 # Error handling
 anyhow.workspace = true
+thiserror.workspace = true
 
 # Logging
 tracing.workspace = true
