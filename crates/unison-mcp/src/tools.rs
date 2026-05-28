@@ -342,7 +342,7 @@ async fn handle_synthesized(
         .map(|c| c.name.as_str())
         .collect();
     let (channel_name, method) = mapping::resolve_tool_name(tool_name, channel_names)
-        .ok_or_else(|| McpError::method_not_found::<CallToolRequestMethod>())?;
+        .ok_or(McpError::method_not_found::<CallToolRequestMethod>())?;
 
     let chan = disc
         .proto
