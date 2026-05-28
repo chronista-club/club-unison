@@ -7,6 +7,30 @@
 
 ## [Unreleased]
 
+### Added (Hailing α Epic — 2026-05-27 ~ 2026-05-28)
+
+- **Runtime schema discovery**: `unison.discovery` channel (= `GetProtocol` request + `SchemaUpdated` event)、 server が自身の protocol KDL + version + SHA-256 hash + codecs を runtime 配信
+- **Server side** (`crates/unison-protocol/src/network/discovery.rs` + `protocol_cache.rs`): `ProtocolServer::enable_discovery(kdl)` extension method
+- **Client side** (`crates/unison-protocol/src/network/schema_registry.rs` + `dynamic.rs`): `SchemaRegistry` (= KDL → runtime channel lookup + validation)、 `DynamicProtocol::fetch` (= discovery 経由で schema を fetch して typed channel を open)、 `DynamicChannel::request` (= payload を schema に validate → fail-fast → server 送信)
+- **MCP bridge** (`crates/unison-mcp` — new crate): stdio MCP server + 3 static escape hatch tools (`unison_ping` / `unison_call` / `unison_discover`) + synthesized typed tools (`unison_<channel>_<method>` × N、 KDL の各 `channel.request` から動的合成)
+- **KDL → JSON Schema converter** (`crates/unison-mcp/src/mapping.rs`): MCP `Tool.input_schema` / Anthropic Messages API `tools[].input_schema` 共通の output、 docs `docs/kdl-to-json-schema.md` 完備
+- **KDL syntax extension**:
+  - `field "x" type="array"` → `FieldType::Array(Json)` (= live、 以前は Custom 扱いの dead code)
+  - `field "x" type="map"` → `FieldType::Map(String, Json)` (= 同上)
+  - `request "X" description="..."` (= MCP tool description の入口、 LLM tool-selection 精度改善)
+- **Spec**: `spec/04-discovery/SPEC.md` (= channel KDL、 message flow、 bootstrap codec、 schema hash、 ServerIdentity との補完関係)
+- **Demo**: `crates/unison-protocol/examples/hailing_demo_server.rs` (= 4 channels with handlers)、 `crates/unison-mcp/DEMO.md` (= Claude Code を driver にした手順)
+
+### Removed
+
+- **`crates/unison-mcp-probe`** crate を削除 (= 後継 `unison-mcp` が機能を完全 subsume、 probe の `unison_channel_list` TODO は `unison_discover` + server 側 `enable_discovery` で埋まった、 chronista 「Legacy は残さない」 規律)
+- `.mcp.json` の `unison-probe` entry を `unison` (= `unison-mcp` binary) に置換
+
+### Dependencies
+
+- `sha2 = "0.10"` を workspace dep に追加 (= `unison.discovery` channel の KDL SHA-256 hash 用)
+
+
 ## [1.0.0] - 2026-05-23 — v1.0 GA: protocol API freeze
 
 > v1.0 sprint の到達点。`alpha.1` → `alpha.2` → `rc.1` 〜 `rc.5` で固めた内容を

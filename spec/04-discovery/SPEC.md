@@ -84,7 +84,7 @@ Discovery は ServerIdentity を **置き換えない**。 ServerIdentity は接
 
 ### 2.4 escape hatch との関係
 
-`unison-mcp-probe` の `unison_call(channel, method, payload)` のように、 client が schema を知らなくても generic に channel を叩く path は **escape hatch として残す**。 Discovery は typed primary、 escape hatch は generic secondary。 両刀。
+`unison-mcp` の `unison_call(channel, method, payload)` のように、 client が schema を知らなくても generic に channel を叩く path は **escape hatch として残す**。 Discovery は typed primary、 escape hatch は generic secondary。 両刀。
 
 ---
 
@@ -402,7 +402,7 @@ let result = proto.call("memory.search", json!({ "query": "..." })).await?;
 
 - [crates/unison-protocol/src/network/server.rs](../../crates/unison-protocol/src/network/server.rs) — `register_channel` API (line 230)、 built-in `ping` channel example (line 612)
 - [crates/unison-protocol/src/network/identity.rs](../../crates/unison-protocol/src/network/identity.rs) — ServerIdentity / ChannelInfo
-- [crates/unison-mcp-probe/](../../crates/unison-mcp-probe/) — 既存 MCP probe (Hailing-α P3 で deprecated 予定)、 `unison_channel_list` TODO ([tools.rs:6](../../crates/unison-mcp-probe/src/tools.rs)) を本 spec の P1 が埋める
+- [crates/unison-mcp/](../../crates/unison-mcp/) — MCP bridge crate (= Hailing α P3a-c で実装、 probe の後継として probe を置換した)
 
 ### Epic 文脈 (creo-memories)
 

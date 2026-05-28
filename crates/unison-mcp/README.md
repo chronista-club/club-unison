@@ -2,19 +2,17 @@
 
 MCP (Model Context Protocol) bridge for the Unison Protocol — discovers a server's protocol schema at runtime and exposes tools to AI agents (e.g. Claude Code).
 
-> **後継位置づけ**: `unison-mcp-probe` の superset。 probe の `unison_channel_list` TODO を `unison_discover` が埋める。 probe は Unison Hailing α P3c で deletion 予定。
-
 ## Status
 
-**Hailing α Epic — P3a scaffold (2026-05-28 in progress)**
+**Hailing α Epic v0.1.0** (= GA、 2026-05-28)
 
 | feature | status |
 |---|---|
-| `unison_ping` (escape hatch) | ✅ ported from probe |
-| `unison_call` (escape hatch) | ✅ ported from probe |
-| `unison_discover` (NEW) | ✅ wraps `DynamicProtocol::fetch` |
-| Synthesized typed tools (`unison.<channel>.<method>`) | ⏳ P3b |
-| MCP E2E demo with Claude Code | ⏳ P3c |
+| `unison_ping` (= static escape hatch) | ✅ |
+| `unison_call` (= static escape hatch、 generic、 schema 検証なし) | ✅ |
+| `unison_discover` (= unison.discovery 経由で server KDL を fetch + summary) | ✅ |
+| Synthesized typed tools (= `unison_<channel>_<method>`、 起動時 discovery 成功時) | ✅ |
+| MCP E2E demo (= Claude Code から実機 round-trip) | ✅ (DEMO.md 参照) |
 
 ## Install
 
@@ -138,5 +136,5 @@ Internally:
 ## Related
 
 - `crates/unison-protocol` — core protocol (= `DynamicProtocol`, `SchemaRegistry`, `ProtocolCache`)
-- `crates/unison-mcp-probe` — legacy probe (= scheduled for deletion in P3c)
 - `spec/04-discovery/SPEC.md` — discovery channel specification
+- `DEMO.md` — Claude Code を driver にした E2E demo 手順

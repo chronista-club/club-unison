@@ -2,20 +2,22 @@
 //!
 //! Stdio MCP server that exposes 3 tools to AI agents:
 //!
-//! - `unison_ping` — endpoint への疎通確認 (= probe 互換 escape hatch)
-//! - `unison_call` — 任意 channel / method に payload を送信 (= probe 互換 escape hatch)
+//! Static escape hatch tools:
+//! - `unison_ping` — endpoint への疎通確認
+//! - `unison_call` — 任意 channel / method に payload を送信 (= generic、 schema 検証なし)
 //! - `unison_discover` — `unison.discovery` channel 経由で server の protocol KDL を
-//!   fetch し、 channel / request 一覧 + schema 情報を返す (= NEW、 Hailing α P2-Rust
-//!   の `DynamicProtocol::fetch` を MCP tool として exposure)
+//!   fetch し、 channel / request 一覧 + schema 情報を返す
+//!
+//! Config endpoint がある場合は、 起動時に `DynamicProtocol::fetch` で discovery が走り、
+//! channel.request 毎に `unison_<channel>_<method>` 形式の **typed synthesized tools** が
+//! 動的に exposure される (= AI agent が初見の Unison server を typed call できる)。
 //!
 //! 起動: `unison-mcp [--config <path>]`
 //!
-//! `--config` を omit すると default config で動作 (= endpoint 未設定、 全 tool に
-//! endpoint arg を渡す必要)。 `--config` を指定すると `BridgeConfig` の default
-//! endpoint / trust が tool で省略可能になる。
-//!
-//! 後継位置づけ: `unison-mcp-probe` の superset (= probe の `unison_channel_list`
-//! TODO を `unison_discover` が埋める)。 probe は Hailing α P3c で deletion 予定。
+//! `--config` を omit すると default config で動作 (= endpoint 未設定、 static escape
+//! hatch tools のみ、 全 tool に endpoint arg を渡す必要)。 `--config` を指定すると
+//! `BridgeConfig` の default endpoint / trust が tool で省略可能 + synthesized typed tools
+//! が available。
 
 use anyhow::{Context, Result};
 use clap::Parser;
