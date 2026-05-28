@@ -11,7 +11,7 @@ KDL スキーマベースの型安全な QUIC 通信フレームワーク。
 ```toml
 [dependencies]
 # crates.io package = `club-unison`、Rust crate identifier = `unison`
-club-unison = "1.0.0"
+club-unison = "1.1.0"
 tokio = { version = "1.52", features = ["full"] }
 ```
 

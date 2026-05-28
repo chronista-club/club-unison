@@ -4,7 +4,7 @@ MCP (Model Context Protocol) bridge for the Unison Protocol — discovers a serv
 
 ## Status
 
-**Hailing α Epic v0.1.0** (= GA、 2026-05-28)
+**v1.1.0 — Hailing α GA** (= 2026-05-28)
 
 | feature | status |
 |---|---|

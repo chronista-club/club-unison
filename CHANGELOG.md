@@ -7,6 +7,15 @@
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-05-28 — Hailing α: runtime protocol discovery + AI-native MCP tools
+
+> Hailing α Epic の minor release。 `unison.discovery` channel で server が自身の
+> protocol KDL を runtime 配信、 client は `DynamicProtocol::fetch` で typed channel
+> を open、 `unison-mcp` bridge が AI agent に typed tools を expose する。
+> SemVer minor (= additive)、 dogfood phase。
+>
+> PR: [#66](https://github.com/chronista-club/club-unison/pull/66)
+
 ### Added (Hailing α Epic — 2026-05-27 ~ 2026-05-28)
 
 - **Runtime schema discovery**: `unison.discovery` channel (= `GetProtocol` request + `SchemaUpdated` event)、 server が自身の protocol KDL + version + SHA-256 hash + codecs を runtime 配信
