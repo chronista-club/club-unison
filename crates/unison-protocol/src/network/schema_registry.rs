@@ -58,27 +58,21 @@ pub enum ValidationError {
     #[error("method '{method}' not found in channel '{channel}'")]
     MethodNotFound { channel: String, method: String },
 
-    #[error(
-        "request payload must be a JSON object for {channel}.{method}, got {got}"
-    )]
+    #[error("request payload must be a JSON object for {channel}.{method}, got {got}")]
     PayloadNotObject {
         channel: String,
         method: String,
         got: String,
     },
 
-    #[error(
-        "required field '{field}' missing in request {channel}.{method}"
-    )]
+    #[error("required field '{field}' missing in request {channel}.{method}")]
     MissingRequired {
         channel: String,
         method: String,
         field: String,
     },
 
-    #[error(
-        "type mismatch for {channel}.{method}.{field}: expected {expected}, got {got}"
-    )]
+    #[error("type mismatch for {channel}.{method}.{field}: expected {expected}, got {got}")]
     TypeMismatch {
         channel: String,
         method: String,
@@ -117,7 +111,10 @@ impl SchemaRegistry {
 
     fn protocol(&self) -> &crate::parser::Protocol {
         // from_kdl で None なら Err にしているので unwrap 安全
-        self.schema.protocol.as_ref().expect("protocol present (verified in from_kdl)")
+        self.schema
+            .protocol
+            .as_ref()
+            .expect("protocol present (verified in from_kdl)")
     }
 
     /// `protocol "<name>" version="<version>"` の name 部分
@@ -247,12 +244,12 @@ fn type_matches(expected: &FieldType, value: &serde_json::Value) -> bool {
         FieldType::Int => value.is_i64() || value.is_u64(),
         FieldType::Float => value.is_f64() || value.is_i64() || value.is_u64(),
         FieldType::Bool => value.is_boolean(),
-        FieldType::Json => true,                      // 任意 JSON OK
+        FieldType::Json => true, // 任意 JSON OK
         FieldType::Object => value.is_object(),
-        FieldType::Array(_) => value.is_array(),     // 要素型まで深掘りしない (v0.1.0)
+        FieldType::Array(_) => value.is_array(), // 要素型まで深掘りしない (v0.1.0)
         FieldType::Map(_, _) => value.is_object(),
-        FieldType::Custom(_) => true,                // 未知型は passthrough
-        FieldType::Enum(_) => true,                  // enum も v0.1.0 は passthrough
+        FieldType::Custom(_) => true, // 未知型は passthrough
+        FieldType::Enum(_) => true,   // enum も v0.1.0 は passthrough
     }
 }
 
@@ -366,22 +363,14 @@ protocol "demo" version="1.0.0" {
     #[test]
     fn validate_accepts_valid_payload() {
         let r = registry();
-        let ok = r.validate_request(
-            "chat",
-            "Send",
-            &json!({"to": "alice", "msg": "hi"}),
-        );
+        let ok = r.validate_request("chat", "Send", &json!({"to": "alice", "msg": "hi"}));
         assert!(ok.is_ok(), "got: {:?}", ok);
     }
 
     #[test]
     fn validate_accepts_optional_field_omitted() {
         let r = registry();
-        let ok = r.validate_request(
-            "chat",
-            "Send",
-            &json!({"to": "alice", "msg": "hi"}),
-        );
+        let ok = r.validate_request("chat", "Send", &json!({"to": "alice", "msg": "hi"}));
         assert!(ok.is_ok());
     }
 
@@ -422,9 +411,7 @@ protocol "demo" version="1.0.0" {
     #[test]
     fn validate_rejects_unknown_channel() {
         let r = registry();
-        let err = r
-            .validate_request("ghost", "X", &json!({}))
-            .unwrap_err();
+        let err = r.validate_request("ghost", "X", &json!({})).unwrap_err();
         assert_eq!(err, ValidationError::ChannelNotFound("ghost".to_string()));
     }
 
@@ -480,7 +467,10 @@ protocol "demo" version="1.0.0" {
             .unwrap_err();
         match err {
             ValidationError::TypeMismatch {
-                field, expected, got, ..
+                field,
+                expected,
+                got,
+                ..
             } => {
                 assert_eq!(field, "to");
                 assert_eq!(expected, "string");
@@ -516,15 +506,18 @@ protocol "demo" version="1.0.0" {
     fn validate_accepts_anything_for_json_field() {
         let r = registry();
         // tags is `type="json"` → 何でも OK
-        assert!(r
-            .validate_request("metrics", "Query", &json!({"tags": ["a", "b"]}))
-            .is_ok());
-        assert!(r
-            .validate_request("metrics", "Query", &json!({"tags": "string-also-ok"}))
-            .is_ok());
-        assert!(r
-            .validate_request("metrics", "Query", &json!({"tags": 42}))
-            .is_ok());
+        assert!(
+            r.validate_request("metrics", "Query", &json!({"tags": ["a", "b"]}))
+                .is_ok()
+        );
+        assert!(
+            r.validate_request("metrics", "Query", &json!({"tags": "string-also-ok"}))
+                .is_ok()
+        );
+        assert!(
+            r.validate_request("metrics", "Query", &json!({"tags": 42}))
+                .is_ok()
+        );
     }
 
     /// F1 (Purple Haze) acceptance: `type="array"` が dead code でなく live、
@@ -543,7 +536,10 @@ protocol "x" version="0.1.0" {
 "#;
         let r = SchemaRegistry::from_kdl(kdl).unwrap();
         // valid: JSON array
-        assert!(r.validate_request("c", "R", &json!({"tags": [1, "a", true]})).is_ok());
+        assert!(
+            r.validate_request("c", "R", &json!({"tags": [1, "a", true]}))
+                .is_ok()
+        );
         assert!(r.validate_request("c", "R", &json!({"tags": []})).is_ok());
         // invalid: 別 JSON 型
         match r
@@ -572,7 +568,10 @@ protocol "x" version="0.1.0" {
 }
 "#;
         let r = SchemaRegistry::from_kdl(kdl).unwrap();
-        assert!(r.validate_request("c", "R", &json!({"metadata": {"k": "v"}})).is_ok());
+        assert!(
+            r.validate_request("c", "R", &json!({"metadata": {"k": "v"}}))
+                .is_ok()
+        );
         match r
             .validate_request("c", "R", &json!({"metadata": [1, 2]}))
             .unwrap_err()

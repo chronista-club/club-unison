@@ -93,8 +93,10 @@ where
     if candidates.is_empty() {
         return None;
     }
-    let channel_map: Vec<(&str, String)> =
-        channels.into_iter().map(|c| (c, normalize_channel_name(c))).collect();
+    let channel_map: Vec<(&str, String)> = channels
+        .into_iter()
+        .map(|c| (c, normalize_channel_name(c)))
+        .collect();
     for (candidate_chan_norm, method) in candidates {
         for (raw, normalized) in &channel_map {
             if *normalized == candidate_chan_norm {
@@ -197,10 +199,7 @@ pub fn field_type_to_schema(ft: &FieldType) -> JsonObject {
         FieldType::Map(_k, v) => {
             obj.insert("type".to_string(), json!("object"));
             let v_schema = field_type_to_schema(v);
-            obj.insert(
-                "additionalProperties".to_string(),
-                Value::Object(v_schema),
-            );
+            obj.insert("additionalProperties".to_string(), Value::Object(v_schema));
         }
         FieldType::Custom(_) | FieldType::Enum(_) => {
             // passthrough (= 任意)、 v0.1.0 では type 制約なし。 将来 typedef 解決で具体化
@@ -228,7 +227,10 @@ mod tests {
 
     #[test]
     fn synth_tool_name_dashed_channel() {
-        assert_eq!(synth_tool_name("ping-pong", "Ping"), "unison_ping_pong_Ping");
+        assert_eq!(
+            synth_tool_name("ping-pong", "Ping"),
+            "unison_ping_pong_Ping"
+        );
     }
 
     #[test]
@@ -331,7 +333,10 @@ mod tests {
             Box::new(FieldType::Int),
         ));
         assert_eq!(schema.get("type"), Some(&json!("object")));
-        let ap = schema.get("additionalProperties").and_then(Value::as_object).unwrap();
+        let ap = schema
+            .get("additionalProperties")
+            .and_then(Value::as_object)
+            .unwrap();
         assert_eq!(ap.get("type"), Some(&json!("integer")));
     }
 
@@ -363,15 +368,29 @@ protocol "x" version="0.1.0" {
         assert_eq!(schema.get("type"), Some(&json!("object")));
         let props = schema.get("properties").and_then(Value::as_object).unwrap();
         assert_eq!(
-            props.get("name").and_then(Value::as_object).unwrap().get("type"),
+            props
+                .get("name")
+                .and_then(Value::as_object)
+                .unwrap()
+                .get("type"),
             Some(&json!("string"))
         );
         assert_eq!(
-            props.get("count").and_then(Value::as_object).unwrap().get("type"),
+            props
+                .get("count")
+                .and_then(Value::as_object)
+                .unwrap()
+                .get("type"),
             Some(&json!("integer"))
         );
         // json field は empty schema (= 任意)
-        assert!(props.get("extra").and_then(Value::as_object).unwrap().is_empty());
+        assert!(
+            props
+                .get("extra")
+                .and_then(Value::as_object)
+                .unwrap()
+                .is_empty()
+        );
 
         // required は name のみ
         let req_list = schema.get("required").and_then(Value::as_array).unwrap();
@@ -454,7 +473,10 @@ protocol "x" version="0.1.0" {
         // input_schema は object with properties + required
         let schema_obj: &JsonObject = tool.input_schema.as_ref();
         assert_eq!(schema_obj.get("type"), Some(&json!("object")));
-        let props = schema_obj.get("properties").and_then(Value::as_object).unwrap();
+        let props = schema_obj
+            .get("properties")
+            .and_then(Value::as_object)
+            .unwrap();
         assert!(props.contains_key("to"));
         assert!(props.contains_key("msg"));
     }
@@ -483,7 +505,10 @@ protocol "x" version="0.1.0" {
         // array field
         let tags = props.get("tags").and_then(Value::as_object).unwrap();
         assert_eq!(tags.get("type"), Some(&json!("array")));
-        assert!(tags.get("items").is_some(), "items property must exist for array");
+        assert!(
+            tags.get("items").is_some(),
+            "items property must exist for array"
+        );
         // map field (= JSON Schema 慣用 = type:object + additionalProperties)
         let meta = props.get("meta").and_then(Value::as_object).unwrap();
         assert_eq!(meta.get("type"), Some(&json!("object")));
@@ -512,7 +537,12 @@ protocol "x" version="0.1.0" {
         // 1. top-level type は "object"
         assert_eq!(schema.get("type"), Some(&json!("object")));
         // 2. properties が object
-        assert!(schema.get("properties").and_then(Value::as_object).is_some());
+        assert!(
+            schema
+                .get("properties")
+                .and_then(Value::as_object)
+                .is_some()
+        );
         // 3. 全 properties の各 entry は object (= sub-schema)
         let props = schema.get("properties").and_then(Value::as_object).unwrap();
         for (_, v) in props {

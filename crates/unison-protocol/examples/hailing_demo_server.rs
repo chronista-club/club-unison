@@ -110,9 +110,16 @@ async fn main() -> Result<()> {
                 match channel.recv().await {
                     Ok(msg) if msg.msg_type == MessageType::Request && msg.method == "Hello" => {
                         let payload = msg.payload_as_value().unwrap_or_default();
-                        let name = payload.get("name").and_then(|v| v.as_str()).unwrap_or("anon");
+                        let name = payload
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("anon");
                         let reply = json!({ "message": format!("Hello, {name}! 👋") });
-                        if channel.send_response(msg.id, &msg.method, &reply).await.is_err() {
+                        if channel
+                            .send_response(msg.id, &msg.method, &reply)
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -137,7 +144,11 @@ async fn main() -> Result<()> {
                         let a = payload.get("a").and_then(|v| v.as_i64()).unwrap_or(0);
                         let b = payload.get("b").and_then(|v| v.as_i64()).unwrap_or(0);
                         let reply = json!({ "result": a + b });
-                        if channel.send_response(msg.id, &msg.method, &reply).await.is_err() {
+                        if channel
+                            .send_response(msg.id, &msg.method, &reply)
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -161,7 +172,11 @@ async fn main() -> Result<()> {
                         let payload = msg.payload_as_value().unwrap_or_default();
                         let inner = payload.get("payload").cloned().unwrap_or(json!(null));
                         let reply = json!({ "echoed": inner });
-                        if channel.send_response(msg.id, &msg.method, &reply).await.is_err() {
+                        if channel
+                            .send_response(msg.id, &msg.method, &reply)
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }

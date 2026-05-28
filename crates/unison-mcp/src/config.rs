@@ -55,10 +55,10 @@ impl BridgeConfig {
     /// JSON ファイルから config を読み込む
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("read {}", path.display()))?;
-        let cfg: Self = serde_json::from_str(&text)
-            .with_context(|| format!("parse {}", path.display()))?;
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        let cfg: Self =
+            serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
         Ok(cfg)
     }
 }

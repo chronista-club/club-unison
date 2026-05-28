@@ -17,9 +17,7 @@ use tokio::time::timeout;
 use tracing::{Level, info};
 
 use unison::network::channel::UnisonChannel;
-use unison::network::discovery::{
-    DISCOVERY_CHANNEL_NAME, GET_PROTOCOL_METHOD, ProtocolDocument,
-};
+use unison::network::discovery::{DISCOVERY_CHANNEL_NAME, GET_PROTOCOL_METHOD, ProtocolDocument};
 use unison::{ProtocolClient, ProtocolServer, ServerHandle};
 
 /// テスト用の最小 KDL (= unison-discovery 自身の channel と test.echo channel)

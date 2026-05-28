@@ -195,7 +195,10 @@ protocol "demo" version="0.1.0" {
             new_version: None,
         };
         let json = serde_json::to_value(&evt).unwrap();
-        assert!(json.get("new_version").is_none(), "new_version should be omitted when None");
+        assert!(
+            json.get("new_version").is_none(),
+            "new_version should be omitted when None"
+        );
         assert!(json.get("new_hash").is_some());
     }
 }

@@ -22,11 +22,10 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use rmcp::{
-    ErrorData as McpError, ServerHandler,
+    ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::{common::schema_for_type, wrapper::Parameters},
     model::*,
     service::RequestContext,
-    RoleServer,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -88,8 +87,11 @@ impl UnisonMcp {
         use std::collections::HashSet;
 
         let mut tools = self.static_tools.clone();
-        let mut seen: HashSet<String> =
-            self.static_tools.iter().map(|t| t.name.to_string()).collect();
+        let mut seen: HashSet<String> = self
+            .static_tools
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect();
 
         if let Some(disc) = self.bridge.discovered() {
             for channel in disc.proto.registry().channels() {
@@ -242,23 +244,15 @@ async fn connect_client(
     Ok((client, endpoint.to_string()))
 }
 
-async fn handle_ping(
-    bridge: &UnisonBridge,
-    args: PingArgs,
-) -> Result<CallToolResult, McpError> {
-    let (_client, endpoint) =
-        connect_client(bridge, args.endpoint.as_deref(), args.trust).await?;
+async fn handle_ping(bridge: &UnisonBridge, args: PingArgs) -> Result<CallToolResult, McpError> {
+    let (_client, endpoint) = connect_client(bridge, args.endpoint.as_deref(), args.trust).await?;
     let trust = bridge.resolve_trust(args.trust);
     let msg = format!("✅ connected to {endpoint} (trust={trust:?})");
     Ok(CallToolResult::success(vec![Content::text(msg)]))
 }
 
-async fn handle_call(
-    bridge: &UnisonBridge,
-    args: CallArgs,
-) -> Result<CallToolResult, McpError> {
-    let (client, _endpoint) =
-        connect_client(bridge, args.endpoint.as_deref(), args.trust).await?;
+async fn handle_call(bridge: &UnisonBridge, args: CallArgs) -> Result<CallToolResult, McpError> {
+    let (client, _endpoint) = connect_client(bridge, args.endpoint.as_deref(), args.trust).await?;
 
     let channel = client
         .open_channel(&args.channel_name)
@@ -286,8 +280,7 @@ async fn handle_discover(
 ) -> Result<CallToolResult, McpError> {
     use unison::network::DynamicProtocol;
 
-    let (client, endpoint) =
-        connect_client(bridge, args.endpoint.as_deref(), args.trust).await?;
+    let (client, endpoint) = connect_client(bridge, args.endpoint.as_deref(), args.trust).await?;
     let client = Arc::new(client);
 
     let proto = DynamicProtocol::fetch(client.clone())
@@ -348,10 +341,8 @@ async fn handle_synthesized(
         .channels()
         .map(|c| c.name.as_str())
         .collect();
-    let (channel_name, method) =
-        mapping::resolve_tool_name(tool_name, channel_names).ok_or_else(|| {
-            McpError::method_not_found::<CallToolRequestMethod>()
-        })?;
+    let (channel_name, method) = mapping::resolve_tool_name(tool_name, channel_names)
+        .ok_or_else(|| McpError::method_not_found::<CallToolRequestMethod>())?;
 
     let chan = disc
         .proto
@@ -359,20 +350,17 @@ async fn handle_synthesized(
         .await
         .map_err(|e| McpError::internal_error(format!("open_channel failed: {e}"), None))?;
 
-    let response = chan
-        .request(&method, arguments)
-        .await
-        .map_err(|e| {
-            // DynamicError には Network / Validation / Registry / Serde がある。
-            // Validation は invalid_request、 それ以外は internal_error にマップ。
-            use unison::network::DynamicError;
-            match e {
-                DynamicError::Validation(v) => {
-                    McpError::invalid_request(format!("validation: {v}"), None)
-                }
-                other => McpError::internal_error(format!("request failed: {other}"), None),
+    let response = chan.request(&method, arguments).await.map_err(|e| {
+        // DynamicError には Network / Validation / Registry / Serde がある。
+        // Validation は invalid_request、 それ以外は internal_error にマップ。
+        use unison::network::DynamicError;
+        match e {
+            DynamicError::Validation(v) => {
+                McpError::invalid_request(format!("validation: {v}"), None)
             }
-        })?;
+            other => McpError::internal_error(format!("request failed: {other}"), None),
+        }
+    })?;
 
     let result = serde_json::json!({
         "channel": channel_name,
@@ -390,15 +378,14 @@ async fn handle_synthesized(
 
 impl ServerHandler for UnisonMcp {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions(
-                "MCP bridge for Unison Protocol. Static escape hatch tools: \
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
+            "MCP bridge for Unison Protocol. Static escape hatch tools: \
                  `unison_ping` / `unison_call` / `unison_discover`. \
                  If a default endpoint is configured (= unison.json), synthesized typed tools \
                  named `unison_<channel>_<method>` are also exposed for each channel.request \
                  in the discovered KDL schema. Synthesized tools are payload-validated against \
                  the server's schema before dispatch (= fail-fast on type mismatch).",
-            )
+        )
     }
 
     fn list_tools(
@@ -425,8 +412,7 @@ impl ServerHandler for UnisonMcp {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
-        let args_value =
-            serde_json::Value::Object(request.arguments.clone().unwrap_or_default());
+        let args_value = serde_json::Value::Object(request.arguments.clone().unwrap_or_default());
         async move { self.invoke_tool(request.name.as_ref(), args_value).await }
     }
 }
@@ -451,7 +437,11 @@ mod tests {
         let server = UnisonMcp::new(bridge);
         // static tools 3 つ
         assert_eq!(server.static_tools.len(), 3);
-        let names: Vec<&str> = server.static_tools.iter().map(|t| t.name.as_ref()).collect();
+        let names: Vec<&str> = server
+            .static_tools
+            .iter()
+            .map(|t| t.name.as_ref())
+            .collect();
         assert!(names.contains(&"unison_ping"));
         assert!(names.contains(&"unison_call"));
         assert!(names.contains(&"unison_discover"));

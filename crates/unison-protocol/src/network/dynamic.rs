@@ -70,7 +70,10 @@ impl DynamicProtocol {
     pub async fn fetch(client: Arc<ProtocolClient>) -> Result<Self, DynamicError> {
         let channel = client.open_channel(DISCOVERY_CHANNEL_NAME).await?;
         let value: serde_json::Value = channel
-            .request(GET_PROTOCOL_METHOD, &serde_json::json!({ "format": "kdl+hash" }))
+            .request(
+                GET_PROTOCOL_METHOD,
+                &serde_json::json!({ "format": "kdl+hash" }),
+            )
             .await?;
         // discovery channel は単発の request だけ使う、 以降 SchemaUpdated event は
         // hot reload Epic で扱うため、 ここでは close する。
@@ -123,9 +126,9 @@ impl DynamicProtocol {
     /// (= fail-fast)。
     pub async fn open_channel(&self, name: &str) -> Result<DynamicChannel, DynamicError> {
         if self.registry.channel(name).is_none() {
-            return Err(DynamicError::Validation(
-                ValidationError::ChannelNotFound(name.to_string()),
-            ));
+            return Err(DynamicError::Validation(ValidationError::ChannelNotFound(
+                name.to_string(),
+            )));
         }
         let inner = self.client.open_channel(name).await?;
         Ok(DynamicChannel {
@@ -185,8 +188,7 @@ mod tests {
         let net: DynamicError = NetworkError::NotConnected.into();
         assert!(matches!(net, DynamicError::Network(_)));
 
-        let val: DynamicError =
-            ValidationError::ChannelNotFound("x".to_string()).into();
+        let val: DynamicError = ValidationError::ChannelNotFound("x".to_string()).into();
         assert!(matches!(val, DynamicError::Validation(_)));
     }
 }

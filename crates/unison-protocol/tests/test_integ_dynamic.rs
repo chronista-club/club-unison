@@ -71,16 +71,17 @@ async fn start_dynamic_server() -> Result<(ServerHandle, String)> {
                 match channel.recv().await {
                     Ok(msg) if msg.msg_type == MessageType::Request && msg.method == "Ping" => {
                         let payload = msg.payload_as_value().unwrap_or_default();
-                        let msg_text = payload
-                            .get("msg")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
+                        let msg_text = payload.get("msg").and_then(|v| v.as_str()).unwrap_or("");
                         let count = payload.get("count").and_then(|v| v.as_i64()).unwrap_or(0);
                         let reply = json!({
                             "reply": format!("Pong: {msg_text}"),
                             "count": count + 1,
                         });
-                        if channel.send_response(msg.id, &msg.method, &reply).await.is_err() {
+                        if channel
+                            .send_response(msg.id, &msg.method, &reply)
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -165,7 +166,10 @@ async fn test_e2e_dynamic_valid_request_round_trip() -> Result<()> {
     )
     .await??;
 
-    assert_eq!(resp.get("reply").and_then(|v| v.as_str()), Some("Pong: hello"));
+    assert_eq!(
+        resp.get("reply").and_then(|v| v.as_str()),
+        Some("Pong: hello")
+    );
     assert_eq!(resp.get("count").and_then(|v| v.as_i64()), Some(1));
 
     chan.close().await?;
@@ -191,10 +195,7 @@ async fn test_e2e_dynamic_missing_required_is_fail_fast() -> Result<()> {
 
     let chan = proto.open_channel("test.echo").await?;
     // msg field を欠く (= required)
-    let err = chan
-        .request("Ping", json!({"count": 1}))
-        .await
-        .unwrap_err();
+    let err = chan.request("Ping", json!({"count": 1})).await.unwrap_err();
     match err {
         DynamicError::Validation(ValidationError::MissingRequired { field, .. }) => {
             assert_eq!(field, "msg");
@@ -257,10 +258,7 @@ async fn test_e2e_dynamic_unknown_method_is_fail_fast() -> Result<()> {
     let proto = DynamicProtocol::fetch(client.clone()).await?;
 
     let chan = proto.open_channel("test.echo").await?;
-    let err = chan
-        .request("NotARealMethod", json!({}))
-        .await
-        .unwrap_err();
+    let err = chan.request("NotARealMethod", json!({})).await.unwrap_err();
     match err {
         DynamicError::Validation(ValidationError::MethodNotFound { method, .. }) => {
             assert_eq!(method, "NotARealMethod");

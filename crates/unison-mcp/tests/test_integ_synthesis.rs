@@ -68,10 +68,7 @@ async fn start_test_server() -> Result<(ServerHandle, String)> {
                 match channel.recv().await {
                     Ok(msg) if msg.msg_type == MessageType::Request && msg.method == "Ping" => {
                         let payload = msg.payload_as_value().unwrap_or_default();
-                        let msg_text = payload
-                            .get("msg")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
+                        let msg_text = payload.get("msg").and_then(|v| v.as_str()).unwrap_or("");
                         let count = payload.get("count").and_then(|v| v.as_i64()).unwrap_or(0);
                         let reply = json!({
                             "reply": format!("Pong: {msg_text}"),
@@ -123,7 +120,10 @@ async fn test_e2e_synthesis_lists_static_plus_synthesized_tools() -> Result<()> 
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
 
     // static 3 (= ping/call/discover)
-    assert!(names.contains(&"unison_ping"), "static unison_ping must be present: {names:?}");
+    assert!(
+        names.contains(&"unison_ping"),
+        "static unison_ping must be present: {names:?}"
+    );
     assert!(names.contains(&"unison_call"));
     assert!(names.contains(&"unison_discover"));
 
@@ -232,10 +232,7 @@ async fn test_e2e_synthesis_validation_error_fails_fast() -> Result<()> {
 }
 
 /// McpError が invalid_request で、 message に期待される field 名を含むことを検証
-fn assert_invalid_request<T>(
-    result: Result<T, McpError>,
-    expected_field_in_msg: &str,
-) -> Result<()>
+fn assert_invalid_request<T>(result: Result<T, McpError>, expected_field_in_msg: &str) -> Result<()>
 where
     T: std::fmt::Debug,
 {

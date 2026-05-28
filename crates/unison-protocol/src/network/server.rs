@@ -248,10 +248,7 @@ impl ProtocolServer {
     /// server.enable_discovery(kdl).await?;
     /// // 他 channel を register、 listen 開始...
     /// ```
-    pub async fn enable_discovery(
-        &self,
-        kdl: impl Into<String>,
-    ) -> Result<(), NetworkError> {
+    pub async fn enable_discovery(&self, kdl: impl Into<String>) -> Result<(), NetworkError> {
         let cache = Arc::new(super::protocol_cache::ProtocolCache::new(kdl)?);
         self.register_channel(
             super::discovery::DISCOVERY_CHANNEL_NAME,

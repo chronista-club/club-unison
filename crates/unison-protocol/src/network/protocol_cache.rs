@@ -73,10 +73,7 @@ impl ProtocolCache {
     pub fn from_file(path: impl AsRef<std::path::Path>) -> Result<Self, NetworkError> {
         let path = path.as_ref();
         let kdl = std::fs::read_to_string(path).map_err(|e| {
-            NetworkError::Connection(format!(
-                "discovery: failed to read {}: {e}",
-                path.display()
-            ))
+            NetworkError::Connection(format!("discovery: failed to read {}: {e}", path.display()))
         })?;
         Self::new(kdl)
     }
