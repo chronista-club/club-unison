@@ -136,6 +136,7 @@ client.messages.create(
 
 | 項目 | 想定 phase / Epic |
 |---|---|
+| **Typed element syntax** (= `array<string>`、 `map<string, int>` 等) — 現状は `type="array"` / `type="map"` のみ recognize、 要素型は untyped (= `Json`) | 別 Epic、 KDL syntax convention の確立と連動 |
 | `Custom` / `Enum` の typedef 解決 (= 具体型を schema に展開) | 後続 phase、 KDL parser 側の typedef AST 整備と連動 |
 | `Float` の f32/f64 sub-type 区別 | JSON Schema の `format` 拡張で表現可 (= `float`/`double`) |
 | 制約 (`min`/`max`/`pattern`) の schema 出力 | constraint Epic で SchemaRegistry validation と同時に追加 |

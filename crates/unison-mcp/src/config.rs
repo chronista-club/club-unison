@@ -29,19 +29,16 @@ pub struct BridgeConfig {
 }
 
 /// Trust anchor mode (= unison::network::TrustAnchors に対応する serializable enum)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum TrustMode {
     /// Skip cert verification (= dev only、 self-signed server 向け)
+    #[default]
     Skip,
     /// OS / webpki-roots trust store (= public server 向け)
     System,
-}
-
-impl Default for TrustMode {
-    fn default() -> Self {
-        Self::Skip
-    }
 }
 
 impl TrustMode {

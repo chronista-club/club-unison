@@ -403,6 +403,37 @@ protocol "x" version="0.1.0" {
         assert!(props.contains_key("msg"));
     }
 
+    /// F1 (Purple Haze) acceptance: KDL `type="array"` を持つ field が input_schema
+    /// で `{"type": "array", "items": {}}` として出る (= 以前は parser が Custom("array")
+    /// 扱いで empty schema、 dead code path だった)。
+    #[test]
+    fn synthesize_tool_with_array_field_produces_array_schema() {
+        let kdl = r#"
+protocol "x" version="0.1.0" {
+    namespace "x"
+    channel "c" from="client" lifetime="persistent" {
+        request "R" {
+            field "tags" type="array" required=#true
+            field "meta" type="map"
+        }
+    }
+}
+"#;
+        let parsed = unison::parser::SchemaParser::new().parse(kdl).unwrap();
+        let req = &parsed.protocol.as_ref().unwrap().channels[0].requests[0];
+        let tool = synthesize_tool("c", req);
+        let schema: &JsonObject = tool.input_schema.as_ref();
+        let props = schema.get("properties").and_then(Value::as_object).unwrap();
+        // array field
+        let tags = props.get("tags").and_then(Value::as_object).unwrap();
+        assert_eq!(tags.get("type"), Some(&json!("array")));
+        assert!(tags.get("items").is_some(), "items property must exist for array");
+        // map field (= JSON Schema 慣用 = type:object + additionalProperties)
+        let meta = props.get("meta").and_then(Value::as_object).unwrap();
+        assert_eq!(meta.get("type"), Some(&json!("object")));
+        assert!(meta.get("additionalProperties").is_some());
+    }
+
     /// Anthropic Messages API `tools[].input_schema` 互換性: top-level に
     /// `type: "object"` + `properties` がある JSON Schema Draft 7+ object であること
     /// が要求される。 本 test で構造を検証 (= Hailing-δ leverage 1 acceptance)。

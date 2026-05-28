@@ -81,7 +81,7 @@ impl UnisonBridge {
     /// Tool arg で endpoint が未指定の場合、 config の default endpoint を返す。
     /// 両方とも未指定なら None。
     pub fn resolve_endpoint<'a>(&'a self, arg: Option<&'a str>) -> Option<&'a str> {
-        arg.or_else(|| self.config.endpoint.as_deref())
+        arg.or(self.config.endpoint.as_deref())
     }
 
     /// Tool arg で trust が未指定の場合、 config の default trust を返す。
@@ -92,14 +92,25 @@ impl UnisonBridge {
 }
 
 /// 内部: endpoint + trust から DynamicProtocol を build する。
+///
+/// 全体を 3 秒 timeout で wrap (= QUIC の `max_idle_timeout=60s` を待たず、
+/// bridge 起動時に discovery server が unreachable な場合の wall を圧縮)。
+/// startup-time discovery は best-effort、 失敗時は static escape hatch のみで継続。
 async fn try_discover(endpoint: &str, trust: TrustMode) -> Result<DynamicProtocol> {
-    let quic = QuicClient::builder()
-        .trust_anchors(trust.to_anchors())
-        .build()?;
-    let client = Arc::new(ProtocolClient::new(quic));
-    client.connect(endpoint).await?;
-    let proto = DynamicProtocol::fetch(client.clone()).await?;
-    Ok(proto)
+    use tokio::time::{Duration, timeout};
+    const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(3);
+
+    timeout(DISCOVERY_TIMEOUT, async {
+        let quic = QuicClient::builder()
+            .trust_anchors(trust.to_anchors())
+            .build()?;
+        let client = Arc::new(ProtocolClient::new(quic));
+        client.connect(endpoint).await?;
+        let proto = DynamicProtocol::fetch(client.clone()).await?;
+        anyhow::Ok(proto)
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("discovery timeout after {DISCOVERY_TIMEOUT:?} for {endpoint}"))?
 }
 
 #[cfg(test)]

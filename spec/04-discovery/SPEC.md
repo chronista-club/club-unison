@@ -166,7 +166,11 @@ protocol "unison-discovery" version="0.1.0" {
 | `"kdl"` | 生 KDL ソースのみ要求 | ProtocolDocument を返す (= hash は server が常に計算する) |
 | `"kdl+hash"` | hash 検証付き | 同上 (= v0.1.0 では差なし、 future hint として残置) |
 
-未知 format は server が `Error` で reject する。
+**v0.1.0 server は未知 format を lenient に受理** (= debug log 出して default の `"kdl"` 扱い、 reject しない)。 これは future format 追加 (= `"kdl+diff"` 等) を non-breaking で導入できる余地を残す目的 (= forward-compat)。
+
+**v1.0+ で strict 化を検討**: capability detection を clean に行うため、 「未知 format は server が `Error` で reject、 client は capability negotiation で確認」 の semantic に migrate する想定。 その時点で本 spec § と impl 両方を同時に更新する。
+
+実装: [`crates/unison-protocol/src/network/discovery.rs`](../../crates/unison-protocol/src/network/discovery.rs) `handle_channel` (= 不正 payload を debug log で受け流し、 default ProtocolDocument を返す)。
 
 #### `ProtocolDocument.kdl`
 

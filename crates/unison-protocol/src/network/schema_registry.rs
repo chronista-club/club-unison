@@ -527,6 +527,64 @@ protocol "demo" version="1.0.0" {
             .is_ok());
     }
 
+    /// F1 (Purple Haze) acceptance: `type="array"` が dead code でなく live、
+    /// JSON array 以外を reject、 JSON array は accept。
+    #[test]
+    fn validate_array_field_accepts_array_rejects_others() {
+        let kdl = r#"
+protocol "x" version="0.1.0" {
+    namespace "x"
+    channel "c" from="client" lifetime="persistent" {
+        request "R" {
+            field "tags" type="array" required=#true
+        }
+    }
+}
+"#;
+        let r = SchemaRegistry::from_kdl(kdl).unwrap();
+        // valid: JSON array
+        assert!(r.validate_request("c", "R", &json!({"tags": [1, "a", true]})).is_ok());
+        assert!(r.validate_request("c", "R", &json!({"tags": []})).is_ok());
+        // invalid: 別 JSON 型
+        match r
+            .validate_request("c", "R", &json!({"tags": "not-array"}))
+            .unwrap_err()
+        {
+            ValidationError::TypeMismatch { expected, got, .. } => {
+                assert_eq!(expected, "array");
+                assert_eq!(got, "string");
+            }
+            other => panic!("expected TypeMismatch, got {other:?}"),
+        }
+    }
+
+    /// F1 (Purple Haze) acceptance: `type="map"` も live、 JSON object 以外を reject。
+    #[test]
+    fn validate_map_field_accepts_object_rejects_others() {
+        let kdl = r#"
+protocol "x" version="0.1.0" {
+    namespace "x"
+    channel "c" from="client" lifetime="persistent" {
+        request "R" {
+            field "metadata" type="map" required=#true
+        }
+    }
+}
+"#;
+        let r = SchemaRegistry::from_kdl(kdl).unwrap();
+        assert!(r.validate_request("c", "R", &json!({"metadata": {"k": "v"}})).is_ok());
+        match r
+            .validate_request("c", "R", &json!({"metadata": [1, 2]}))
+            .unwrap_err()
+        {
+            ValidationError::TypeMismatch { expected, got, .. } => {
+                assert_eq!(expected, "map");
+                assert_eq!(got, "array");
+            }
+            other => panic!("expected TypeMismatch, got {other:?}"),
+        }
+    }
+
     #[test]
     fn from_kdl_rejects_no_protocol_block() {
         // 完全に protocol を欠く KDL

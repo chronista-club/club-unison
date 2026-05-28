@@ -80,12 +80,33 @@ impl UnisonMcp {
 
     /// 全 tool (= static + synthesized) を列挙する。 ServerHandler::list_tools と
     /// integration test 両方が呼ぶ entry。
+    ///
+    /// Tool name collision (= 異なる channel が同じ normalized 名に潰れる、 例:
+    /// `chat.send` と `chat_send` 両方 → `unison_chat_send_X`) は warn log を吐いて
+    /// **先に登録された方を優先** (= first-wins)。 silent wrong dispatch を防ぐ。
     pub fn all_tools(&self) -> Vec<Tool> {
+        use std::collections::HashSet;
+
         let mut tools = self.static_tools.clone();
+        let mut seen: HashSet<String> =
+            self.static_tools.iter().map(|t| t.name.to_string()).collect();
+
         if let Some(disc) = self.bridge.discovered() {
             for channel in disc.proto.registry().channels() {
                 for request in &channel.requests {
-                    tools.push(mapping::synthesize_tool(&channel.name, request));
+                    let tool = mapping::synthesize_tool(&channel.name, request);
+                    let name = tool.name.to_string();
+                    if !seen.insert(name.clone()) {
+                        tracing::warn!(
+                            tool = %name,
+                            channel = %channel.name,
+                            method = %request.name,
+                            "tool name collision detected — skipping duplicate (first-wins); \
+                             check that no two channels normalize to the same MCP tool name"
+                        );
+                        continue;
+                    }
+                    tools.push(tool);
                 }
             }
         }
