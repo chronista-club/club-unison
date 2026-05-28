@@ -108,15 +108,20 @@ where
 /// `ChannelRequest` を MCP `Tool` に変換する。
 ///
 /// - name: `synth_tool_name(channel, request.name)`
-/// - description: 「`<channel>.<method>` channel request」 (= KDL に description field
-///   があれば優先する future hint)
+/// - description: KDL `request "X" description="..."` があればその文字列を採用、
+///   無ければ formulaic な default (= 「Invoke the X request on the Y channel」) を生成
 /// - input_schema: `request.fields` を JSON Schema object に変換
+///
+/// description は LLM の tool-selection accuracy に強相関するので、 schema 設計時に
+/// `description="..."` を書くことで LLM が tool を正しく選びやすくなる。
 pub fn synthesize_tool(channel_name: &str, request: &ChannelRequest) -> Tool {
     let name = synth_tool_name(channel_name, &request.name);
-    let description = format!(
-        "Invoke the `{}` request on the `{}` Unison channel (= runtime-synthesized from server's KDL schema).",
-        request.name, channel_name
-    );
+    let description = request.description.clone().unwrap_or_else(|| {
+        format!(
+            "Invoke the `{}` request on the `{}` Unison channel (= runtime-synthesized from server's KDL schema).",
+            request.name, channel_name
+        )
+    });
     let input_schema = fields_to_input_schema(&request.fields);
     Tool::new(
         Cow::Owned(name),
@@ -374,6 +379,57 @@ protocol "x" version="0.1.0" {
 
         // additionalProperties true
         assert_eq!(schema.get("additionalProperties"), Some(&json!(true)));
+    }
+
+    /// F11 (Purple Haze MEDIUM) acceptance: KDL `request "X" description="..."` が
+    /// あれば、 synthesized tool の description として採用される (= formulaic を override)。
+    /// LLM の tool-selection accuracy 改善のための入口。
+    #[test]
+    fn synthesize_tool_uses_kdl_description_when_present() {
+        let kdl = r#"
+protocol "x" version="0.1.0" {
+    channel "memory" from="client" lifetime="persistent" {
+        request "Search" description="Full-text search over user memories with semantic ranking" {
+            field "query" type="string" required=#true
+        }
+    }
+}
+"#;
+        let parsed = unison::parser::SchemaParser::new().parse(kdl).unwrap();
+        let req = &parsed.protocol.as_ref().unwrap().channels[0].requests[0];
+        let tool = synthesize_tool("memory", req);
+
+        let desc = tool.description.as_ref().expect("description present");
+        assert_eq!(
+            desc.as_ref(),
+            "Full-text search over user memories with semantic ranking",
+            "KDL description should be used verbatim, not the formulaic default"
+        );
+    }
+
+    /// description が無い場合は従来の formulaic default が使われる (= backward compat)。
+    #[test]
+    fn synthesize_tool_falls_back_to_formulaic_description() {
+        let kdl = r#"
+protocol "x" version="0.1.0" {
+    channel "chat" from="client" lifetime="persistent" {
+        request "Send" {
+            field "msg" type="string" required=#true
+        }
+    }
+}
+"#;
+        let parsed = unison::parser::SchemaParser::new().parse(kdl).unwrap();
+        let req = &parsed.protocol.as_ref().unwrap().channels[0].requests[0];
+        let tool = synthesize_tool("chat", req);
+
+        let desc = tool.description.as_ref().expect("description present");
+        assert!(desc.contains("Send"));
+        assert!(desc.contains("chat"));
+        assert!(
+            desc.contains("runtime-synthesized"),
+            "formulaic default should mention runtime synthesis"
+        );
     }
 
     #[test]

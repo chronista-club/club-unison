@@ -117,6 +117,11 @@ pub struct ChannelRequest {
     #[kdl(argument)]
     pub name: String,
 
+    /// リクエストの人間可読な説明 (= MCP tool description 等に流す)。
+    /// optional、 KDL syntax は `request "Name" description="..." { ... }`。
+    #[kdl(property)]
+    pub description: Option<String>,
+
     /// リクエストフィールド
     #[kdl(children, name = "field")]
     pub fields: Vec<Field>,
