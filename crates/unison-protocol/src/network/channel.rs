@@ -59,9 +59,30 @@ impl<C: Codec> UnisonChannel<C> {
         let (raw_tx, raw_rx) = mpsc::channel(256);
 
         // recv ループ — recv_typed_frame() で type tag ベースの振り分け
+        //
+        // 重要: この demux ループは event/raw consumer が遅くても **絶対にブロック
+        // しない**。 `event_tx.send().await` で待つと、 後続フレーム (= in-flight
+        // request() が待つ Response 含む) の処理が止まり、 全 request/response が
+        // HoL stall する。 そのため event/raw 配送は `try_send` で行い、 buffer
+        // (256) が full のときは drop + warn する (= event は局所 backpressure 下で
+        // best-effort セマンティクス)。 Response は pending oneshot 経由で常に
+        // 即時解決され、 この影響を受けない。
         let recv_stream = Arc::clone(&stream);
         let recv_pending = Arc::clone(&pending);
         let recv_task = tokio::spawn(async move {
+            /// event/raw を非ブロッキングで送る。 full なら drop + warn。
+            fn try_deliver<T>(tx: &mpsc::Sender<T>, item: T, kind: &str) {
+                use mpsc::error::TrySendError;
+                if let Err(e) = tx.try_send(item) {
+                    match e {
+                        TrySendError::Full(_) => tracing::warn!(
+                            "channel {kind} buffer full (256); dropping frame to keep \
+                             response path unblocked (slow consumer?)"
+                        ),
+                        TrySendError::Closed(_) => { /* consumer gone — no-op */ }
+                    }
+                }
+            }
             loop {
                 match recv_stream.recv_typed_frame().await {
                     Ok(TypedFrame::Protocol(msg)) => {
@@ -78,17 +99,17 @@ impl<C: Codec> UnisonChannel<C> {
                                     let _ = sender.send(msg);
                                 } else {
                                     drop(map);
-                                    let _ = event_tx.send(msg).await;
+                                    try_deliver(&event_tx, msg, "event");
                                 }
                             }
                             _ => {
                                 // Event, Request, その他 → event_rx に流す
-                                let _ = event_tx.send(msg).await;
+                                try_deliver(&event_tx, msg, "event");
                             }
                         }
                     }
                     Ok(TypedFrame::Raw(data)) => {
-                        let _ = raw_tx.send(data).await;
+                        try_deliver(&raw_tx, data, "raw");
                     }
                     Err(_) => {
                         // 接続断 — 全 pending を Error で解決

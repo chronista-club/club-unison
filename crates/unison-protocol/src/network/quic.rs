@@ -129,6 +129,50 @@ fn has_port(addr: &str) -> bool {
     false
 }
 
+/// TLS SNI / 証明書検証に渡す server name を URL から抽出する。
+///
+/// `Endpoint::connect` の server_name は rustls の証明書 **名前検証** に使われる。
+/// 以前はリテラル `"localhost"` 固定で、(a) mesh CA が実ホスト名で発行した
+/// 証明書への接続が常に名前不一致で失敗し、(b) `localhost` SAN を持つ証明書なら
+/// 任意のホストになりすませる name-pinning 不全を生んでいた。
+///
+/// 解決方針:
+/// - hostname 入力 (`example.com:443`) → hostname を SNI に (= DNS SAN 照合)
+/// - IP リテラル入力 (`[::1]:8080` / `127.0.0.1:8080` / `::1`) → IP 文字列を SNI に
+///   (rustls は `ServerName::IpAddress` として IP SAN を照合)
+/// - port のみ (`8080`) → 解決後の loopback IP を SNI に
+fn sni_server_name(addr: &str, resolved: SocketAddr) -> String {
+    let addr = strip_scheme(addr);
+
+    // IPv6 bracket リテラル ("[::1]:8080" / "[::1]") → 括弧内の IP
+    if let Some(rest) = addr.strip_prefix('[')
+        && let Some(end) = rest.find(']')
+    {
+        return rest[..end].to_string();
+    }
+
+    // port のみ ("8080") → 解決済み loopback IP
+    if addr.parse::<u16>().is_ok() {
+        return resolved.ip().to_string();
+    }
+
+    // bracket なし IPv6 リテラル ("::1", "fd7a:115c::1")
+    if addr.contains(':')
+        && !addr.contains('.')
+        && addr.parse::<std::net::Ipv6Addr>().is_ok()
+    {
+        return addr.to_string();
+    }
+
+    // host:port → host 部分、port なし → そのまま (hostname or IPv4 リテラル)
+    if has_port(addr)
+        && let Some(colon) = addr.rfind(':')
+    {
+        return addr[..colon].to_string();
+    }
+    addr.to_string()
+}
+
 /// QUIC client implementation
 pub struct QuicClient {
     endpoint: Mutex<Option<Endpoint>>,
@@ -326,8 +370,11 @@ impl QuicClient {
         let mut endpoint = Endpoint::client(bind_addr)?;
         endpoint.set_default_client_config(client_config);
 
+        // SNI / 証明書名前検証に渡す server name を実 URL から導出する
+        // (旧実装は "localhost" 固定で名前検証が機能していなかった)。
+        let server_name = sni_server_name(url, addr);
         let connection = endpoint
-            .connect(addr, "localhost")?
+            .connect(addr, &server_name)?
             .await
             .context("Failed to establish QUIC connection")?;
 
@@ -912,5 +959,77 @@ mod tests {
     fn strip_scheme_keeps_address_when_no_prefix() {
         assert_eq!(strip_scheme("example.com:443"), "example.com:443");
         assert_eq!(strip_scheme("[::1]:8080"), "[::1]:8080");
+    }
+
+    // ─────────────────────────────────────────
+    // sni_server_name — SNI / 証明書名前検証に渡す名前の導出
+    // ─────────────────────────────────────────
+
+    fn sa(s: &str) -> SocketAddr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn sni_hostname_uses_hostname_not_resolved_ip() {
+        // hostname 入力は (DNS 解決後の IP ではなく) hostname を SNI にする
+        assert_eq!(
+            sni_server_name("example.com:443", sa("93.184.216.34:443")),
+            "example.com"
+        );
+        assert_eq!(
+            sni_server_name("localhost:8080", sa("127.0.0.1:8080")),
+            "localhost"
+        );
+    }
+
+    #[test]
+    fn sni_ipv6_bracket_literal_uses_ip() {
+        assert_eq!(sni_server_name("[::1]:8080", sa("[::1]:8080")), "::1");
+        assert_eq!(
+            sni_server_name(
+                "[fd7a:115c::1]:4510",
+                sa("[fd7a:115c::1]:4510")
+            ),
+            "fd7a:115c::1"
+        );
+    }
+
+    #[test]
+    fn sni_bare_ipv6_literal_uses_ip() {
+        assert_eq!(sni_server_name("::1", sa("[::1]:8080")), "::1");
+    }
+
+    #[test]
+    fn sni_ipv4_literal_uses_ip() {
+        assert_eq!(
+            sni_server_name("127.0.0.1:8080", sa("127.0.0.1:8080")),
+            "127.0.0.1"
+        );
+    }
+
+    #[test]
+    fn sni_port_only_uses_resolved_loopback_ip() {
+        assert_eq!(sni_server_name("8080", sa("[::1]:8080")), "::1");
+    }
+
+    #[test]
+    fn sni_strips_scheme_first() {
+        assert_eq!(
+            sni_server_name("quic://example.com:4510", sa("10.0.0.1:4510")),
+            "example.com"
+        );
+        assert_eq!(
+            sni_server_name("https://[::1]:4510", sa("[::1]:4510")),
+            "::1"
+        );
+    }
+
+    #[test]
+    fn sni_is_never_hardcoded_localhost() {
+        // regression guard: 旧実装の "localhost" 固定に戻らないこと
+        assert_ne!(
+            sni_server_name("cp.fleetstage.cloud:4510", sa("10.1.2.3:4510")),
+            "localhost"
+        );
     }
 }

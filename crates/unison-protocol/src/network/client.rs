@@ -316,6 +316,13 @@ impl ProtocolClient {
             .await
             .map_err(|e| NetworkError::Connection(e.to_string()))?;
 
+        // reconnect 対策: 古い connection に bind された datagram dispatcher を破棄する。
+        // dispatcher は spawn 時の connection を握ったままなので、 これを clear しないと
+        // reconnect 後の open_datagram_channel が死んだ旧 connection の dispatcher を
+        // 再利用し、 datagram が一切流れなくなる (= silently dead)。 次回 open 時に
+        // 新 connection に対して lazy 再 spawn される。
+        *self.datagram_dispatcher.lock().await = None;
+
         // v0.10.0 Step 2: Connected event を fire (= subscribe している caller に通知)
         // remote_addr を connection から取得 (= ない場合は空 SocketAddr で fallback)
         let remote_addr = {
@@ -383,6 +390,9 @@ impl ProtocolClient {
             .disconnect()
             .await
             .map_err(|e| NetworkError::Connection(e.to_string()))?;
+        // dispatcher は旧 connection に bind されている。 破棄して task を終わらせ、
+        // 再接続時にクリーンに再 spawn できるようにする。
+        *self.datagram_dispatcher.lock().await = None;
         // v0.10.0 Step 2: 明示 disconnect でも Disconnected event を fire (= subscribe
         // 側で「自分で disconnect した」 を別 path で識別したい場合は reason 文字列で判定)
         // 注: spawn_drop_detection_task の `closed().await` も同時に fire するため、
