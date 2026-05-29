@@ -4,12 +4,10 @@ use unison::prelude::*;
 fn test_basic_kdl_parsing() {
     let schema_str = r#"
 protocol "TestProtocol" version="1.0.0" {
-    service "TestService" {
-        method "testMethod" {
-            request {
-                field "test" type="string" required=#true
-            }
-            response {
+    channel "test-channel" from="client" lifetime="transient" {
+        request "testMethod" {
+            field "test" type="string" required=#true
+            returns "testResult" {
                 field "result" type="bool"
             }
         }
@@ -28,16 +26,15 @@ protocol "TestProtocol" version="1.0.0" {
     let protocol = schema.protocol.unwrap();
     assert_eq!(protocol.name, "TestProtocol");
     assert_eq!(protocol.version, "1.0.0");
-    assert_eq!(protocol.services.len(), 1);
+    assert_eq!(protocol.channels.len(), 1);
 
-    let service = &protocol.services[0];
-    assert_eq!(service.name, "TestService");
-    assert_eq!(service.methods.len(), 1);
+    let channel = &protocol.channels[0];
+    assert_eq!(channel.name, "test-channel");
+    assert_eq!(channel.requests.len(), 1);
 
-    let method = &service.methods[0];
-    assert_eq!(method.name, "testMethod");
-    assert!(method.request.is_some());
-    assert!(method.response.is_some());
+    let request = &channel.requests[0];
+    assert_eq!(request.name, "testMethod");
+    assert!(request.returns.is_some());
 }
 
 #[test]
@@ -97,41 +94,33 @@ fn test_channel_parsing() {
             namespace "test.streaming"
 
             channel "events" from="server" lifetime="persistent" {
-                send "Event" {
+                event "Event" {
                     field "event_type" type="string" required=#true
                     field "payload" type="json"
                 }
             }
 
-            channel "control" from="client" lifetime="persistent" {
-                send "Subscribe" {
-                    field "category" type="string"
-                }
-                recv "Ack" {
-                    field "status" type="string"
-                }
-            }
-
             channel "query" from="client" lifetime="transient" {
-                send "Request" {
+                request "Request" {
                     field "method" type="string" required=#true
                     field "params" type="json"
-                }
-                recv "Response" {
-                    field "data" type="json"
-                }
-                error "QueryError" {
-                    field "code" type="string"
-                    field "message" type="string"
+                    returns "Response" {
+                        field "data" type="json"
+                    }
                 }
             }
 
             channel "chat" from="either" lifetime="persistent" {
-                send "Message" {
+                request "Message" {
                     field "text" type="string" required=#true
                     field "from" type="string"
+                    returns "Ack" {
+                        field "status" type="string"
+                    }
                 }
-                recv "Message"
+                event "Notice" {
+                    field "text" type="string"
+                }
             }
         }
     "#;
@@ -140,36 +129,38 @@ fn test_channel_parsing() {
     let result = parser.parse(schema).unwrap();
     let protocol = result.protocol.as_ref().unwrap();
 
-    // channelが4つパースされること
-    assert_eq!(protocol.channels.len(), 4);
+    // channelが3つパースされること
+    assert_eq!(protocol.channels.len(), 3);
 
-    // events channel
+    // events channel — event のみ
     let events = &protocol.channels[0];
     assert_eq!(events.name, "events");
     assert_eq!(events.from, ChannelFrom::Server);
     assert_eq!(events.lifetime, ChannelLifetime::Persistent);
-    assert!(events.send.is_some());
-    assert!(events.recv.is_none());
+    assert_eq!(events.events.len(), 1);
+    assert!(events.requests.is_empty());
 
-    // events.send のメッセージ名とフィールドを確認
-    let send_msg = events.send.as_ref().unwrap();
-    assert_eq!(send_msg.name, "Event");
-    assert_eq!(send_msg.fields.len(), 2);
+    let event = &events.events[0];
+    assert_eq!(event.name, "Event");
+    assert_eq!(event.fields.len(), 2);
 
-    // control channel
-    let control = &protocol.channels[1];
-    assert_eq!(control.from, ChannelFrom::Client);
-    assert!(control.send.is_some());
-    assert!(control.recv.is_some());
-
-    // query channel - with error
-    let query = &protocol.channels[2];
+    // query channel — request + returns
+    let query = &protocol.channels[1];
+    assert_eq!(query.from, ChannelFrom::Client);
     assert_eq!(query.lifetime, ChannelLifetime::Transient);
-    assert!(query.error.is_some());
+    assert_eq!(query.requests.len(), 1);
 
-    // chat channel
-    let chat = &protocol.channels[3];
+    let request = &query.requests[0];
+    assert_eq!(request.name, "Request");
+    let returns = request.returns.as_ref().unwrap();
+    assert_eq!(returns.name, "Response");
+    assert_eq!(returns.fields.len(), 1);
+
+    // chat channel — request と event の混在
+    let chat = &protocol.channels[2];
     assert_eq!(chat.from, ChannelFrom::Either);
+    assert_eq!(chat.requests.len(), 1);
+    assert_eq!(chat.events.len(), 1);
 }
 
 // === v0.10.0: datagram channel attributes (`backend` / `channel_id`) ===

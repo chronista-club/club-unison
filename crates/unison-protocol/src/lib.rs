@@ -45,14 +45,8 @@ pub mod codec;
 pub mod network;
 pub mod parser;
 
-// プロトコル定義のコアモジュール
-pub mod core;
-
 // フレーム層モジュール
 pub mod packet;
-
-// CGPベースのコンテキストモジュール
-pub mod context;
 
 // Wire format pluggable hook (v0.9.0 で導入、 v0.10+ で具体実装拡張)
 pub mod wire;
@@ -153,32 +147,6 @@ protocol "test" version="1.0.0" {
         }
         assert!(result.is_ok());
         assert_eq!(protocol.schemas.len(), 1);
-    }
-
-    #[test]
-    fn test_parse_legacy_service_schema() {
-        // 後方互換: パーサーは旧 service 構文もまだ受け付ける
-        let schema = r#"
-protocol "test" version="1.0.0" {
-    service "TestService" {
-        method "test_method" {
-            request {
-                field "id" type="string"
-            }
-            response {
-                field "id" type="string"
-            }
-        }
-    }
-}
-        "#;
-
-        let mut protocol = UnisonProtocol::new();
-        let result = protocol.load_schema(schema);
-        if let Err(e) = &result {
-            eprintln!("パースエラー: {:?}", e);
-        }
-        assert!(result.is_ok());
     }
 
     #[test]

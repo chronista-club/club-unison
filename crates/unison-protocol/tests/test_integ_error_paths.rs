@@ -1,8 +1,7 @@
 mod common;
 
 use bytes::Bytes;
-use unison::context::{HandlerRegistry, MessageDispatcher};
-use unison::network::{MessageType, NetworkError, ProtocolMessage};
+use unison::network::{MessageType, ProtocolMessage};
 use unison::packet::config::{CompressionConfig, PacketConfig};
 use unison::packet::header::{PacketType, UnisonPacketHeader};
 use unison::packet::serialization::PacketSerializer;
@@ -60,23 +59,6 @@ fn test_integ_invalid_json_payload() {
 
     let result = msg.payload_as_value();
     assert!(result.is_err());
-}
-
-/// HandlerRegistry で未登録メソッドに dispatch → NetworkError::HandlerNotFound
-#[tokio::test]
-async fn test_integ_handler_not_found_error() {
-    let registry = HandlerRegistry::new();
-
-    let msg = common::make_request("unknown_method", serde_json::json!({"key": "value"}));
-
-    let result = registry.dispatch(msg).await;
-    assert!(result.is_err());
-    match result.unwrap_err() {
-        NetworkError::HandlerNotFound { method } => {
-            assert_eq!(method, "unknown_method");
-        }
-        e => panic!("Expected HandlerNotFound, got: {:?}", e),
-    }
 }
 
 /// PacketConfig の max_payload_size を小さく設定して超過テスト

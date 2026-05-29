@@ -46,9 +46,6 @@ pub struct Protocol {
     #[kdl(child, unwrap_arg)]
     pub description: Option<String>,
 
-    #[kdl(children, name = "service")]
-    pub services: Vec<Service>,
-
     #[kdl(children, name = "message")]
     pub messages: Vec<Message>,
 
@@ -180,21 +177,9 @@ pub struct Channel {
     #[kdl(children, name = "request")]
     pub requests: Vec<ChannelRequest>,
 
-    /// Event 定義（新構文）
+    /// Event 定義
     #[kdl(children, name = "event")]
     pub events: Vec<ChannelEvent>,
-
-    /// 送信メッセージ型（旧 channel 構文）
-    #[kdl(child)]
-    pub send: Option<ChannelMessage>,
-
-    /// 受信メッセージ型（旧 channel 構文）
-    #[kdl(child)]
-    pub recv: Option<ChannelMessage>,
-
-    /// エラー型（旧 channel 構文）
-    #[kdl(child)]
-    pub error: Option<ChannelMessage>,
 }
 
 impl Channel {
@@ -237,61 +222,6 @@ impl Channel {
             ChannelBackend::Stream => Ok(()),
         }
     }
-}
-
-/// Service definition
-#[derive(Debug, Clone, KdlDeserialize)]
-#[kdl(name = "service")]
-pub struct Service {
-    #[kdl(argument)]
-    pub name: String,
-
-    #[kdl(child, unwrap_arg)]
-    pub description: Option<String>,
-
-    #[kdl(children, name = "method")]
-    pub methods: Vec<Method>,
-
-    #[kdl(children, name = "stream")]
-    pub streams: Vec<Stream>,
-}
-
-/// RPC Method definition
-#[derive(Debug, Clone, KdlDeserialize)]
-#[kdl(name = "method")]
-pub struct Method {
-    #[kdl(argument)]
-    pub name: String,
-
-    #[kdl(child, unwrap_arg)]
-    pub description: Option<String>,
-
-    #[kdl(child)]
-    pub request: Option<MethodMessage>,
-
-    #[kdl(child)]
-    pub response: Option<MethodMessage>,
-}
-
-/// Method request/response definition (without name argument)
-#[derive(Debug, Clone, KdlDeserialize)]
-pub struct MethodMessage {
-    #[kdl(children, name = "field")]
-    pub fields: Vec<Field>,
-}
-
-/// Streaming endpoint definition
-#[derive(Debug, Clone, KdlDeserialize)]
-#[kdl(name = "stream")]
-pub struct Stream {
-    #[kdl(argument)]
-    pub name: String,
-
-    #[kdl(child)]
-    pub request: Option<MethodMessage>,
-
-    #[kdl(child)]
-    pub response: Option<MethodMessage>,
 }
 
 /// Message/struct definition
