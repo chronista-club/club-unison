@@ -157,10 +157,7 @@ fn sni_server_name(addr: &str, resolved: SocketAddr) -> String {
     }
 
     // bracket なし IPv6 リテラル ("::1", "fd7a:115c::1")
-    if addr.contains(':')
-        && !addr.contains('.')
-        && addr.parse::<std::net::Ipv6Addr>().is_ok()
-    {
+    if addr.contains(':') && !addr.contains('.') && addr.parse::<std::net::Ipv6Addr>().is_ok() {
         return addr.to_string();
     }
 
@@ -986,10 +983,7 @@ mod tests {
     fn sni_ipv6_bracket_literal_uses_ip() {
         assert_eq!(sni_server_name("[::1]:8080", sa("[::1]:8080")), "::1");
         assert_eq!(
-            sni_server_name(
-                "[fd7a:115c::1]:4510",
-                sa("[fd7a:115c::1]:4510")
-            ),
+            sni_server_name("[fd7a:115c::1]:4510", sa("[fd7a:115c::1]:4510")),
             "fd7a:115c::1"
         );
     }

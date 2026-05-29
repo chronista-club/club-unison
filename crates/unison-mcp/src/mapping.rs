@@ -54,7 +54,13 @@ pub fn synth_tool_name(channel: &str, method: &str) -> String {
 fn sanitize_name_component(s: &str) -> String {
     let out: String = s
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .take(MAX_NAME_COMPONENT)
         .collect();
     if out.is_empty() { "_".to_string() } else { out }
@@ -81,7 +87,6 @@ fn sanitize_description(s: &str) -> String {
         .take(MAX_DESCRIPTION_LEN)
         .collect()
 }
-
 
 /// `ChannelRequest` を MCP `Tool` に変換する。
 ///
@@ -218,8 +223,7 @@ mod tests {
         // remote KDL が空白 / 記号 / 制御文字を仕込んでも [A-Za-z0-9_] に潰れる
         let name = synth_tool_name("ev il chan", "drop;tables");
         assert!(
-            name.chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_'),
+            name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
             "tool name must be [A-Za-z0-9_] only: {name}"
         );
         assert!(name.starts_with("unison_"));

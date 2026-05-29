@@ -124,8 +124,12 @@ fn is_loopback_endpoint(endpoint: &str) -> bool {
 
     host == "localhost"
         || host == "::1"
-        || host.parse::<std::net::Ipv4Addr>().is_ok_and(|ip| ip.is_loopback())
-        || host.parse::<std::net::Ipv6Addr>().is_ok_and(|ip| ip.is_loopback())
+        || host
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|ip| ip.is_loopback())
+        || host
+            .parse::<std::net::Ipv6Addr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// 明示指定が無いときの endpoint 由来 default trust。

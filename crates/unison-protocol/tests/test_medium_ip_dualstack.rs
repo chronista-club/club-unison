@@ -74,7 +74,10 @@ async fn start_echo_server_on(bind: &str) -> Result<(ServerHandle, ServerAddr)> 
 
     let handle = server.spawn_listen(bind).await?;
     let local = handle.local_addr();
-    info!("dualstack echo server listening on {} (bind={})", local, bind);
+    info!(
+        "dualstack echo server listening on {} (bind={})",
+        local, bind
+    );
     Ok((handle, ServerAddr(local)))
 }
 
@@ -158,7 +161,10 @@ async fn ipv4_loopback_roundtrip() -> Result<()> {
     init_tracing();
 
     let (handle, addr) = start_echo_server_on("127.0.0.1:0").await?;
-    assert!(handle.local_addr().is_ipv4(), "127.0.0.1 should bind as IPv4");
+    assert!(
+        handle.local_addr().is_ipv4(),
+        "127.0.0.1 should bind as IPv4"
+    );
 
     let client = ProtocolClient::new_default()?;
     client.connect(&addr.connect_str()).await?;

@@ -74,11 +74,7 @@ impl CertSource {
     /// dual-stack loopback に接続できるようにする。
     pub fn dev_localhost() -> Self {
         Self::SelfSigned {
-            subject_alt_names: vec![
-                "localhost".into(),
-                "::1".into(),
-                "127.0.0.1".into(),
-            ],
+            subject_alt_names: vec!["localhost".into(), "::1".into(), "127.0.0.1".into()],
         }
     }
 
