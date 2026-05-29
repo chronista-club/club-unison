@@ -237,11 +237,17 @@ impl UnisonPacketHeader {
     }
 
     /// buffa-generated 型から復元 (deserialization 用)
+    ///
+    /// proto 上は version/packet_type/flags が u32。 `as u8`/`as u16` の素朴な cast は
+    /// silently truncate するため、 例えば version=257 が 1 に化けて
+    /// [`Self::is_compatible`] の gate を素通りしてしまう。 範囲外は飽和 (u8::MAX /
+    /// u16::MAX) させ、 「正規の version/type を詐称できない」 = 確実に incompatible /
+    /// unknown と判定されるようにする (= untrusted wire 入力への堅牢化)。
     pub(crate) fn from_proto(p: &proto::PacketHeader) -> Self {
         Self {
-            version: p.version as u8,
-            packet_type: p.packet_type as u8,
-            flags: p.flags as u16,
+            version: u8::try_from(p.version).unwrap_or(u8::MAX),
+            packet_type: u8::try_from(p.packet_type).unwrap_or(u8::MAX),
+            flags: u16::try_from(p.flags).unwrap_or(u16::MAX),
             payload_length: p.payload_length,
             compressed_length: p.compressed_length,
             sequence_number: p.sequence_number,
@@ -389,6 +395,29 @@ mod tests {
         assert_eq!(restored.message_id, header.message_id);
         assert_eq!(restored.response_to, header.response_to);
         assert_eq!(restored.correlation_id, header.correlation_id);
+    }
+
+    #[test]
+    fn from_proto_saturates_out_of_range_fields() {
+        // proto は u32。 u8/u16 範囲外は truncate せず飽和させ、 正規値を詐称させない。
+        let mut p = UnisonPacketHeader::new(PacketType::Data).to_proto();
+        p.version = 257; // = 0x101、 truncate すると 1 (= CURRENT_VERSION) に化ける
+        p.packet_type = 300;
+        p.flags = 0x1_0000; // u16 範囲外
+
+        let h = UnisonPacketHeader::from_proto(&p);
+
+        assert_eq!(
+            h.version,
+            u8::MAX,
+            "範囲外 version は飽和すべき (truncate 不可)"
+        );
+        assert!(
+            !h.is_compatible(),
+            "範囲外 version は compat gate を通ってはならない"
+        );
+        assert_eq!(h.packet_type, u8::MAX);
+        assert_eq!(h.flags, u16::MAX);
     }
 
     #[test]

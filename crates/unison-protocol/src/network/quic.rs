@@ -11,7 +11,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::{ClientConfig as RustlsClientConfig, ServerConfig as RustlsServerConfig};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
+use tokio::sync::{Mutex, RwLock, oneshot};
 use tracing::{error, info, warn};
 
 use super::conn::UnisonConn;
@@ -174,8 +174,6 @@ fn sni_server_name(addr: &str, resolved: SocketAddr) -> String {
 pub struct QuicClient {
     endpoint: Mutex<Option<Endpoint>>,
     connection: Arc<RwLock<Option<Connection>>>,
-    rx: Arc<RwLock<Option<mpsc::UnboundedReceiver<ProtocolMessage>>>>,
-    tx: mpsc::UnboundedSender<ProtocolMessage>,
     /// Identity handshake 専用の oneshot チャネル（受信側）
     identity_rx: Arc<Mutex<Option<oneshot::Receiver<ProtocolMessage>>>>,
     /// Identity handshake 専用の oneshot チャネル（送信側、accept_bi_loop に渡す）
@@ -211,12 +209,9 @@ impl QuicClientBuilder {
         let trust_anchors = self
             .trust_anchors
             .unwrap_or(super::trust::TrustAnchors::SkipVerification);
-        let (tx, rx) = mpsc::unbounded_channel();
         Ok(QuicClient {
             endpoint: Mutex::new(None),
             connection: Arc::new(RwLock::new(None)),
-            rx: Arc::new(RwLock::new(Some(rx))),
-            tx,
             identity_rx: Arc::new(Mutex::new(None)),
             identity_tx: Arc::new(Mutex::new(None)),
             response_tasks: Arc::new(Mutex::new(Vec::new())),
@@ -249,12 +244,9 @@ impl QuicClient {
              verification). Use QuicClient::builder() with an explicit TrustAnchors for \
              the secure path."
         );
-        let (tx, rx) = mpsc::unbounded_channel();
         Ok(Self {
             endpoint: Mutex::new(None),
             connection: Arc::new(RwLock::new(None)),
-            rx: Arc::new(RwLock::new(Some(rx))),
-            tx,
             identity_rx: Arc::new(Mutex::new(None)),
             identity_tx: Arc::new(Mutex::new(None)),
             response_tasks: Arc::new(Mutex::new(Vec::new())),
@@ -303,17 +295,6 @@ impl QuicClient {
     /// サーバーアドレスを解析 (IPv4 / IPv6 / DNS hostname 対応)
     async fn parse_server_address(addr: &str) -> Result<SocketAddr> {
         resolve_socket_addr(addr).await
-    }
-
-    pub async fn receive(&self) -> Result<ProtocolMessage> {
-        let mut rx_guard = self.rx.write().await;
-        if let Some(rx) = rx_guard.as_mut() {
-            rx.recv()
-                .await
-                .context("Failed to receive message from channel")
-        } else {
-            Err(anyhow::anyhow!("Receiver not available"))
-        }
     }
 
     /// Identity 専用チャネルから identity メッセージを受信する（タイムアウト付き）
@@ -390,10 +371,9 @@ impl QuicClient {
         *self.identity_rx.lock().await = Some(id_rx);
 
         // サーバー発信ストリームを受け付けるバックグラウンドタスクを起動
-        let tx = self.tx.clone();
         let identity_tx = self.identity_tx.clone();
         let task = tokio::spawn(async move {
-            client_accept_bi_loop(connection_for_loop, tx, identity_tx).await;
+            client_accept_bi_loop(connection_for_loop, identity_tx).await;
         });
         self.response_tasks.lock().await.push(task);
 
@@ -742,57 +722,49 @@ mod tests {
         }
     }
 
-    /// identity メッセージ ("__identity") が oneshot チャネルにルーティングされ、
-    /// mpsc チャネルには流れないことを検証する。
-    #[tokio::test]
-    async fn test_identity_message_routed_to_oneshot() {
-        let (mpsc_tx, mut mpsc_rx) = mpsc::unbounded_channel::<ProtocolMessage>();
-        let (id_tx, id_rx) = oneshot::channel::<ProtocolMessage>();
-        let identity_tx = Arc::new(Mutex::new(Some(id_tx)));
-
-        let msg = make_message("__identity");
-
-        // client_accept_bi_loop 内の分岐ロジックを再現
+    /// client_accept_bi_loop の分岐ロジック (= identity_tx を消費するか否か) を再現。
+    /// `__identity` のみ oneshot を消費し、 それ以外は drop されること (= 旧 mpsc 経路撤去)。
+    fn route_like_accept_bi_loop(
+        method: &str,
+        identity_tx: &mut Option<oneshot::Sender<ProtocolMessage>>,
+    ) {
+        let msg = make_message(method);
         if msg.method == "__identity" {
-            if let Some(tx) = identity_tx.lock().await.take() {
+            if let Some(tx) = identity_tx.take() {
                 let _ = tx.send(msg);
             }
-        } else {
-            let _ = mpsc_tx.send(msg);
         }
-
-        // oneshot で受信できること
-        let received = id_rx.await.expect("oneshot から受信できるべき");
-        assert_eq!(received.method, "__identity");
-
-        // mpsc は空のままであること
-        assert!(
-            mpsc_rx.try_recv().is_err(),
-            "mpsc チャネルは空のままであるべき"
-        );
+        // else: server-initiated 非 identity frame は drop (= 何もしない)
     }
 
-    /// 非 identity メッセージ ("__channel:test") が mpsc チャネルにルーティングされることを検証する。
+    /// identity メッセージ ("__identity") が oneshot にルーティングされることを検証する。
     #[tokio::test]
-    async fn test_non_identity_message_routed_to_mpsc() {
-        let (mpsc_tx, mut mpsc_rx) = mpsc::unbounded_channel::<ProtocolMessage>();
-        let (id_tx, _id_rx) = oneshot::channel::<ProtocolMessage>();
-        let identity_tx = Arc::new(Mutex::new(Some(id_tx)));
+    async fn test_identity_message_routed_to_oneshot() {
+        let (id_tx, id_rx) = oneshot::channel::<ProtocolMessage>();
+        let mut identity_tx = Some(id_tx);
 
-        let msg = make_message("__channel:test");
+        route_like_accept_bi_loop("__identity", &mut identity_tx);
 
-        // client_accept_bi_loop 内の分岐ロジックを再現
-        if msg.method == "__identity" {
-            if let Some(tx) = identity_tx.lock().await.take() {
-                let _ = tx.send(msg);
-            }
-        } else {
-            let _ = mpsc_tx.send(msg);
-        }
+        let received = id_rx.await.expect("oneshot から受信できるべき");
+        assert_eq!(received.method, "__identity");
+    }
 
-        // mpsc で受信できること
-        let received = mpsc_rx.try_recv().expect("mpsc から受信できるべき");
-        assert_eq!(received.method, "__channel:test");
+    /// 非 identity メッセージは drop され、 identity oneshot を消費しないことを検証する。
+    #[tokio::test]
+    async fn test_non_identity_message_is_dropped() {
+        let (id_tx, id_rx) = oneshot::channel::<ProtocolMessage>();
+        let mut identity_tx = Some(id_tx);
+
+        route_like_accept_bi_loop("__channel:test", &mut identity_tx);
+
+        // identity oneshot は未消費のまま (= 非 identity は drop された)
+        assert!(
+            identity_tx.is_some(),
+            "非 identity メッセージは identity oneshot を消費すべきでない"
+        );
+        drop(identity_tx);
+        // sender が drop されたので rx は Err（送信されていない）
+        assert!(id_rx.await.is_err(), "identity は送信されていないべき");
     }
 
     /// receive_identity() が指定時間内に応答がない場合タイムアウトエラーを返すことを検証する。

@@ -23,16 +23,11 @@ pub enum ParseError {
 }
 
 /// Main schema parser for KDL protocol definitions
-pub struct SchemaParser {
-    #[allow(dead_code)]
-    type_registry: TypeRegistry,
-}
+pub struct SchemaParser;
 
 impl SchemaParser {
     pub fn new() -> Self {
-        Self {
-            type_registry: TypeRegistry::new(),
-        }
+        Self
     }
 
     /// Parse a KDL schema string into a ParsedSchema
