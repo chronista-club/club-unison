@@ -254,8 +254,8 @@ impl PacketDeserializer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::packet::config::{CompressionConfig, PacketConfig};
     use crate::packet::PacketType;
+    use crate::packet::config::{CompressionConfig, PacketConfig};
 
     #[test]
     fn deserialize_uncompressed_payload_bounded_by_max() {
