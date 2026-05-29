@@ -29,13 +29,14 @@ pub struct BridgeConfig {
 }
 
 /// Trust anchor mode (= unison::network::TrustAnchors に対応する serializable enum)
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
-)]
+///
+/// config / tool arg で未指定の場合、 bridge は endpoint が loopback なら
+/// `Skip`、 それ以外なら `System` を選ぶ (= secure-by-default、 [`crate::bridge`]
+/// 参照)。 ここに固定 default は持たせない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum TrustMode {
-    /// Skip cert verification (= dev only、 self-signed server 向け)
-    #[default]
+    /// Skip cert verification (= dev only、 loopback self-signed server 向け)
     Skip,
     /// OS / webpki-roots trust store (= public server 向け)
     System,
