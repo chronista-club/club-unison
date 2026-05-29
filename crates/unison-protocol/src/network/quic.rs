@@ -11,7 +11,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::{ClientConfig as RustlsClientConfig, ServerConfig as RustlsServerConfig};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
+use tokio::sync::{Mutex, RwLock, oneshot};
 use tracing::{error, info, warn};
 
 use super::conn::UnisonConn;
@@ -129,12 +129,51 @@ fn has_port(addr: &str) -> bool {
     false
 }
 
+/// TLS SNI / 証明書検証に渡す server name を URL から抽出する。
+///
+/// `Endpoint::connect` の server_name は rustls の証明書 **名前検証** に使われる。
+/// 以前はリテラル `"localhost"` 固定で、(a) mesh CA が実ホスト名で発行した
+/// 証明書への接続が常に名前不一致で失敗し、(b) `localhost` SAN を持つ証明書なら
+/// 任意のホストになりすませる name-pinning 不全を生んでいた。
+///
+/// 解決方針:
+/// - hostname 入力 (`example.com:443`) → hostname を SNI に (= DNS SAN 照合)
+/// - IP リテラル入力 (`[::1]:8080` / `127.0.0.1:8080` / `::1`) → IP 文字列を SNI に
+///   (rustls は `ServerName::IpAddress` として IP SAN を照合)
+/// - port のみ (`8080`) → 解決後の loopback IP を SNI に
+fn sni_server_name(addr: &str, resolved: SocketAddr) -> String {
+    let addr = strip_scheme(addr);
+
+    // IPv6 bracket リテラル ("[::1]:8080" / "[::1]") → 括弧内の IP
+    if let Some(rest) = addr.strip_prefix('[')
+        && let Some(end) = rest.find(']')
+    {
+        return rest[..end].to_string();
+    }
+
+    // port のみ ("8080") → 解決済み loopback IP
+    if addr.parse::<u16>().is_ok() {
+        return resolved.ip().to_string();
+    }
+
+    // bracket なし IPv6 リテラル ("::1", "fd7a:115c::1")
+    if addr.contains(':') && !addr.contains('.') && addr.parse::<std::net::Ipv6Addr>().is_ok() {
+        return addr.to_string();
+    }
+
+    // host:port → host 部分、port なし → そのまま (hostname or IPv4 リテラル)
+    if has_port(addr)
+        && let Some(colon) = addr.rfind(':')
+    {
+        return addr[..colon].to_string();
+    }
+    addr.to_string()
+}
+
 /// QUIC client implementation
 pub struct QuicClient {
     endpoint: Mutex<Option<Endpoint>>,
     connection: Arc<RwLock<Option<Connection>>>,
-    rx: Arc<RwLock<Option<mpsc::UnboundedReceiver<ProtocolMessage>>>>,
-    tx: mpsc::UnboundedSender<ProtocolMessage>,
     /// Identity handshake 専用の oneshot チャネル（受信側）
     identity_rx: Arc<Mutex<Option<oneshot::Receiver<ProtocolMessage>>>>,
     /// Identity handshake 専用の oneshot チャネル（送信側、accept_bi_loop に渡す）
@@ -170,12 +209,9 @@ impl QuicClientBuilder {
         let trust_anchors = self
             .trust_anchors
             .unwrap_or(super::trust::TrustAnchors::SkipVerification);
-        let (tx, rx) = mpsc::unbounded_channel();
         Ok(QuicClient {
             endpoint: Mutex::new(None),
             connection: Arc::new(RwLock::new(None)),
-            rx: Arc::new(RwLock::new(Some(rx))),
-            tx,
             identity_rx: Arc::new(Mutex::new(None)),
             identity_tx: Arc::new(Mutex::new(None)),
             response_tasks: Arc::new(Mutex::new(Vec::new())),
@@ -208,12 +244,9 @@ impl QuicClient {
              verification). Use QuicClient::builder() with an explicit TrustAnchors for \
              the secure path."
         );
-        let (tx, rx) = mpsc::unbounded_channel();
         Ok(Self {
             endpoint: Mutex::new(None),
             connection: Arc::new(RwLock::new(None)),
-            rx: Arc::new(RwLock::new(Some(rx))),
-            tx,
             identity_rx: Arc::new(Mutex::new(None)),
             identity_tx: Arc::new(Mutex::new(None)),
             response_tasks: Arc::new(Mutex::new(Vec::new())),
@@ -262,17 +295,6 @@ impl QuicClient {
     /// サーバーアドレスを解析 (IPv4 / IPv6 / DNS hostname 対応)
     async fn parse_server_address(addr: &str) -> Result<SocketAddr> {
         resolve_socket_addr(addr).await
-    }
-
-    pub async fn receive(&self) -> Result<ProtocolMessage> {
-        let mut rx_guard = self.rx.write().await;
-        if let Some(rx) = rx_guard.as_mut() {
-            rx.recv()
-                .await
-                .context("Failed to receive message from channel")
-        } else {
-            Err(anyhow::anyhow!("Receiver not available"))
-        }
     }
 
     /// Identity 専用チャネルから identity メッセージを受信する（タイムアウト付き）
@@ -326,8 +348,11 @@ impl QuicClient {
         let mut endpoint = Endpoint::client(bind_addr)?;
         endpoint.set_default_client_config(client_config);
 
+        // SNI / 証明書名前検証に渡す server name を実 URL から導出する
+        // (旧実装は "localhost" 固定で名前検証が機能していなかった)。
+        let server_name = sni_server_name(url, addr);
         let connection = endpoint
-            .connect(addr, "localhost")?
+            .connect(addr, &server_name)?
             .await
             .context("Failed to establish QUIC connection")?;
 
@@ -346,10 +371,9 @@ impl QuicClient {
         *self.identity_rx.lock().await = Some(id_rx);
 
         // サーバー発信ストリームを受け付けるバックグラウンドタスクを起動
-        let tx = self.tx.clone();
         let identity_tx = self.identity_tx.clone();
         let task = tokio::spawn(async move {
-            client_accept_bi_loop(connection_for_loop, tx, identity_tx).await;
+            client_accept_bi_loop(connection_for_loop, identity_tx).await;
         });
         self.response_tasks.lock().await.push(task);
 
@@ -698,57 +722,49 @@ mod tests {
         }
     }
 
-    /// identity メッセージ ("__identity") が oneshot チャネルにルーティングされ、
-    /// mpsc チャネルには流れないことを検証する。
-    #[tokio::test]
-    async fn test_identity_message_routed_to_oneshot() {
-        let (mpsc_tx, mut mpsc_rx) = mpsc::unbounded_channel::<ProtocolMessage>();
-        let (id_tx, id_rx) = oneshot::channel::<ProtocolMessage>();
-        let identity_tx = Arc::new(Mutex::new(Some(id_tx)));
-
-        let msg = make_message("__identity");
-
-        // client_accept_bi_loop 内の分岐ロジックを再現
+    /// client_accept_bi_loop の分岐ロジック (= identity_tx を消費するか否か) を再現。
+    /// `__identity` のみ oneshot を消費し、 それ以外は drop されること (= 旧 mpsc 経路撤去)。
+    fn route_like_accept_bi_loop(
+        method: &str,
+        identity_tx: &mut Option<oneshot::Sender<ProtocolMessage>>,
+    ) {
+        let msg = make_message(method);
         if msg.method == "__identity" {
-            if let Some(tx) = identity_tx.lock().await.take() {
+            if let Some(tx) = identity_tx.take() {
                 let _ = tx.send(msg);
             }
-        } else {
-            let _ = mpsc_tx.send(msg);
         }
-
-        // oneshot で受信できること
-        let received = id_rx.await.expect("oneshot から受信できるべき");
-        assert_eq!(received.method, "__identity");
-
-        // mpsc は空のままであること
-        assert!(
-            mpsc_rx.try_recv().is_err(),
-            "mpsc チャネルは空のままであるべき"
-        );
+        // else: server-initiated 非 identity frame は drop (= 何もしない)
     }
 
-    /// 非 identity メッセージ ("__channel:test") が mpsc チャネルにルーティングされることを検証する。
+    /// identity メッセージ ("__identity") が oneshot にルーティングされることを検証する。
     #[tokio::test]
-    async fn test_non_identity_message_routed_to_mpsc() {
-        let (mpsc_tx, mut mpsc_rx) = mpsc::unbounded_channel::<ProtocolMessage>();
-        let (id_tx, _id_rx) = oneshot::channel::<ProtocolMessage>();
-        let identity_tx = Arc::new(Mutex::new(Some(id_tx)));
+    async fn test_identity_message_routed_to_oneshot() {
+        let (id_tx, id_rx) = oneshot::channel::<ProtocolMessage>();
+        let mut identity_tx = Some(id_tx);
 
-        let msg = make_message("__channel:test");
+        route_like_accept_bi_loop("__identity", &mut identity_tx);
 
-        // client_accept_bi_loop 内の分岐ロジックを再現
-        if msg.method == "__identity" {
-            if let Some(tx) = identity_tx.lock().await.take() {
-                let _ = tx.send(msg);
-            }
-        } else {
-            let _ = mpsc_tx.send(msg);
-        }
+        let received = id_rx.await.expect("oneshot から受信できるべき");
+        assert_eq!(received.method, "__identity");
+    }
 
-        // mpsc で受信できること
-        let received = mpsc_rx.try_recv().expect("mpsc から受信できるべき");
-        assert_eq!(received.method, "__channel:test");
+    /// 非 identity メッセージは drop され、 identity oneshot を消費しないことを検証する。
+    #[tokio::test]
+    async fn test_non_identity_message_is_dropped() {
+        let (id_tx, id_rx) = oneshot::channel::<ProtocolMessage>();
+        let mut identity_tx = Some(id_tx);
+
+        route_like_accept_bi_loop("__channel:test", &mut identity_tx);
+
+        // identity oneshot は未消費のまま (= 非 identity は drop された)
+        assert!(
+            identity_tx.is_some(),
+            "非 identity メッセージは identity oneshot を消費すべきでない"
+        );
+        drop(identity_tx);
+        // sender が drop されたので rx は Err（送信されていない）
+        assert!(id_rx.await.is_err(), "identity は送信されていないべき");
     }
 
     /// receive_identity() が指定時間内に応答がない場合タイムアウトエラーを返すことを検証する。
@@ -912,5 +928,74 @@ mod tests {
     fn strip_scheme_keeps_address_when_no_prefix() {
         assert_eq!(strip_scheme("example.com:443"), "example.com:443");
         assert_eq!(strip_scheme("[::1]:8080"), "[::1]:8080");
+    }
+
+    // ─────────────────────────────────────────
+    // sni_server_name — SNI / 証明書名前検証に渡す名前の導出
+    // ─────────────────────────────────────────
+
+    fn sa(s: &str) -> SocketAddr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn sni_hostname_uses_hostname_not_resolved_ip() {
+        // hostname 入力は (DNS 解決後の IP ではなく) hostname を SNI にする
+        assert_eq!(
+            sni_server_name("example.com:443", sa("93.184.216.34:443")),
+            "example.com"
+        );
+        assert_eq!(
+            sni_server_name("localhost:8080", sa("127.0.0.1:8080")),
+            "localhost"
+        );
+    }
+
+    #[test]
+    fn sni_ipv6_bracket_literal_uses_ip() {
+        assert_eq!(sni_server_name("[::1]:8080", sa("[::1]:8080")), "::1");
+        assert_eq!(
+            sni_server_name("[fd7a:115c::1]:4510", sa("[fd7a:115c::1]:4510")),
+            "fd7a:115c::1"
+        );
+    }
+
+    #[test]
+    fn sni_bare_ipv6_literal_uses_ip() {
+        assert_eq!(sni_server_name("::1", sa("[::1]:8080")), "::1");
+    }
+
+    #[test]
+    fn sni_ipv4_literal_uses_ip() {
+        assert_eq!(
+            sni_server_name("127.0.0.1:8080", sa("127.0.0.1:8080")),
+            "127.0.0.1"
+        );
+    }
+
+    #[test]
+    fn sni_port_only_uses_resolved_loopback_ip() {
+        assert_eq!(sni_server_name("8080", sa("[::1]:8080")), "::1");
+    }
+
+    #[test]
+    fn sni_strips_scheme_first() {
+        assert_eq!(
+            sni_server_name("quic://example.com:4510", sa("10.0.0.1:4510")),
+            "example.com"
+        );
+        assert_eq!(
+            sni_server_name("https://[::1]:4510", sa("[::1]:4510")),
+            "::1"
+        );
+    }
+
+    #[test]
+    fn sni_is_never_hardcoded_localhost() {
+        // regression guard: 旧実装の "localhost" 固定に戻らないこと
+        assert_ne!(
+            sni_server_name("cp.fleetstage.cloud:4510", sa("10.1.2.3:4510")),
+            "localhost"
+        );
     }
 }

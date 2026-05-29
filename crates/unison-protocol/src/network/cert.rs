@@ -66,13 +66,15 @@ pub enum CertSource {
 }
 
 impl CertSource {
-    /// Dev quickstart: minimal self-signed cert for `localhost` + `[::1]`.
+    /// Dev quickstart: minimal self-signed cert for `localhost` + 両 family の loopback。
     ///
     /// **DEV ONLY**: Not suitable for production. The cert has only localhost
-    /// SANs and is regenerated every process start.
+    /// SANs and is regenerated every process start. IPv4 (`127.0.0.1`) /
+    /// IPv6 (`::1`) 両方を含め、実ホスト名 SNI 検証 (= System trust) でも
+    /// dual-stack loopback に接続できるようにする。
     pub fn dev_localhost() -> Self {
         Self::SelfSigned {
-            subject_alt_names: vec!["localhost".into(), "::1".into()],
+            subject_alt_names: vec!["localhost".into(), "::1".into(), "127.0.0.1".into()],
         }
     }
 

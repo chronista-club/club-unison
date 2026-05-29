@@ -19,7 +19,7 @@
 use std::ffi::c_void;
 use std::sync::OnceLock;
 
-use magnus::{Error, ExceptionClass, Ruby, Value, function, method, prelude::*};
+use magnus::{function, method, prelude::*, Error, ExceptionClass, Ruby, Value};
 use serde_json::Value as JsonValue;
 use tokio::runtime::Runtime;
 use unison::{NetworkError, ProtocolClient, UnisonChannel};
@@ -64,7 +64,10 @@ where
         // exactly once, on this thread, before `rb_thread_call_without_gvl`
         // returns.
         let payload = unsafe { &mut *(arg as *mut Payload<F, R>) };
-        let func = payload.func.take().expect("without_gvl closure already ran");
+        let func = payload
+            .func
+            .take()
+            .expect("without_gvl closure already ran");
         payload.result = Some(func());
         std::ptr::null_mut()
     }
@@ -115,7 +118,7 @@ fn net_err(e: NetworkError) -> Error {
 
 /// The Unison protocol generation this client is built against.
 fn protocol_target() -> &'static str {
-    "1.0.0-rc.1"
+    "1.0.0"
 }
 
 /// `Unison::Client` — a QUIC-backed Unison protocol client.
@@ -167,8 +170,8 @@ impl Client {
     /// `client.open_channel(name)` — opens a named channel, returning a
     /// `Unison::Channel`. Raises `Unison::Error` on failure.
     fn open_channel(&self, name: String) -> Result<Channel, Error> {
-        let inner = without_gvl(|| runtime().block_on(self.inner.open_channel(&name)))
-            .map_err(net_err)?;
+        let inner =
+            without_gvl(|| runtime().block_on(self.inner.open_channel(&name))).map_err(net_err)?;
         Ok(Channel { inner })
     }
 }
@@ -202,8 +205,7 @@ impl Channel {
     /// (no response is awaited).
     fn send_event(&self, method: String, payload: Value) -> Result<(), Error> {
         let event: JsonValue = serde_magnus::deserialize(&ruby(), payload)?;
-        without_gvl(|| runtime().block_on(self.inner.send_event(&method, &event)))
-            .map_err(net_err)
+        without_gvl(|| runtime().block_on(self.inner.send_event(&method, &event))).map_err(net_err)
     }
 
     /// `channel.recv` — blocks until the next inbound event (server push or

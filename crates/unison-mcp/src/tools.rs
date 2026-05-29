@@ -30,9 +30,12 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::bridge::UnisonBridge;
+use crate::bridge::{DiscoveredProtocol, UnisonBridge};
 use crate::config::TrustMode;
 use crate::mapping;
+
+/// remote KDL から synthesize する tool 数の上限 (= tool-list flooding / 資源消費の防御)
+const MAX_SYNTHESIZED_TOOLS: usize = 256;
 
 // ---------------------------------------------------------------------------
 // MCP server state
@@ -94,8 +97,19 @@ impl UnisonMcp {
             .collect();
 
         if let Some(disc) = self.bridge.discovered() {
-            for channel in disc.proto.registry().channels() {
+            let mut synthesized = 0usize;
+            'outer: for channel in disc.proto.registry().channels() {
                 for request in &channel.requests {
+                    // remote KDL 由来の tool 数に上限を設ける (= 悪意ある / 巨大な
+                    // discovery server による tool-list flooding / 資源消費を防ぐ)。
+                    if synthesized >= MAX_SYNTHESIZED_TOOLS {
+                        tracing::warn!(
+                            cap = MAX_SYNTHESIZED_TOOLS,
+                            "synthesized tool cap reached; remaining channel.requests are \
+                             not exposed (large or hostile discovery schema?)"
+                        );
+                        break 'outer;
+                    }
                     let tool = mapping::synthesize_tool(&channel.name, request);
                     let name = tool.name.to_string();
                     if !seen.insert(name.clone()) {
@@ -109,6 +123,7 @@ impl UnisonMcp {
                         continue;
                     }
                     tools.push(tool);
+                    synthesized += 1;
                 }
             }
         }
@@ -145,13 +160,7 @@ impl UnisonMcp {
             return Some(t.clone());
         }
         let disc = self.bridge.discovered()?;
-        let channel_names: Vec<&str> = disc
-            .proto
-            .registry()
-            .channels()
-            .map(|c| c.name.as_str())
-            .collect();
-        let (channel_name, method) = mapping::resolve_tool_name(name, channel_names)?;
+        let (channel_name, method) = resolve_synth_tool(disc, name)?;
         let request = disc
             .proto
             .registry()
@@ -228,7 +237,7 @@ async fn connect_client(
             None,
         )
     })?;
-    let trust = bridge.resolve_trust(trust_arg);
+    let trust = bridge.resolve_trust(trust_arg, endpoint);
 
     let quic = QuicClient::builder()
         .trust_anchors(trust.to_anchors())
@@ -246,7 +255,7 @@ async fn connect_client(
 
 async fn handle_ping(bridge: &UnisonBridge, args: PingArgs) -> Result<CallToolResult, McpError> {
     let (_client, endpoint) = connect_client(bridge, args.endpoint.as_deref(), args.trust).await?;
-    let trust = bridge.resolve_trust(args.trust);
+    let trust = bridge.resolve_trust(args.trust, &endpoint);
     let msg = format!("✅ connected to {endpoint} (trust={trust:?})");
     Ok(CallToolResult::success(vec![Content::text(msg)]))
 }
@@ -321,6 +330,24 @@ async fn handle_discover(
 
 /// Synthesized typed tool の dispatch。 bridge.discovered() の DynamicProtocol 経由で
 /// channel.request を実行し、 schema validation の error は MCP error として返す。
+/// tool_name → (channel, method) を解決する。
+///
+/// `all_tools()` の列挙と **同一の first-wins** ロジックで、 同じ synthesized 名を
+/// 生む最初の (channel, request) を返す。 list と dispatch が単一の解決規則を共有
+/// するため、 名前衝突 (= 異なる channel が同じ正規 tool 名に潰れる) 時でも
+/// 「list に出た tool」 と「dispatch される channel」 が必ず一致する
+/// (= silent wrong dispatch を構造的に排除)。 一致が無ければ `None`。
+fn resolve_synth_tool(disc: &DiscoveredProtocol, tool_name: &str) -> Option<(String, String)> {
+    for channel in disc.proto.registry().channels() {
+        for request in &channel.requests {
+            if mapping::synth_tool_name(&channel.name, &request.name) == tool_name {
+                return Some((channel.name.clone(), request.name.clone()));
+            }
+        }
+    }
+    None
+}
+
 async fn handle_synthesized(
     bridge: &UnisonBridge,
     tool_name: &str,
@@ -335,13 +362,7 @@ async fn handle_synthesized(
         )
     })?;
 
-    let channel_names: Vec<&str> = disc
-        .proto
-        .registry()
-        .channels()
-        .map(|c| c.name.as_str())
-        .collect();
-    let (channel_name, method) = mapping::resolve_tool_name(tool_name, channel_names)
+    let (channel_name, method) = resolve_synth_tool(disc, tool_name)
         .ok_or(McpError::method_not_found::<CallToolRequestMethod>())?;
 
     let chan = disc

@@ -37,6 +37,15 @@ pub async fn read_frame<R: AsyncRead + Unpin + ?Sized>(recv: &mut R) -> Result<b
 
 /// Length-prefixed フレームの書き込み
 pub async fn write_frame<W: AsyncWrite + Unpin + ?Sized>(send: &mut W, data: &[u8]) -> Result<()> {
+    // read 側と対称な上限。 これが無いと data.len() >= 4GiB で `as u32` が silently
+    // truncate し、 wire 上の length prefix が実データ長と食い違って frame が壊れる。
+    if data.len() > MAX_MESSAGE_SIZE {
+        return Err(anyhow::anyhow!(
+            "Frame too large to write: {} bytes (max {})",
+            data.len(),
+            MAX_MESSAGE_SIZE
+        ));
+    }
     let len = (data.len() as u32).to_be_bytes();
     send.write_all(&len)
         .await
@@ -158,4 +167,29 @@ pub(crate) async fn write_channel_ack<W: AsyncWrite + Unpin + ?Sized>(
         .into_frame()
         .map_err(|e| anyhow::anyhow!("Failed to encode open_ack frame: {}", e))?;
     write_typed_frame(send, FRAME_TYPE_PROTOCOL, &frame.to_bytes()).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn write_frame_rejects_oversized() {
+        // read 側の上限と対称: MAX_MESSAGE_SIZE 超は書き込み拒否し、 何も書かない
+        let mut sink: Vec<u8> = Vec::new();
+        let too_big = vec![0u8; MAX_MESSAGE_SIZE + 1];
+        let res = write_frame(&mut sink, &too_big).await;
+        assert!(res.is_err(), "8MB 超の frame は書き込み拒否されるべき");
+        assert!(sink.is_empty(), "拒否時は length prefix すら書かないべき");
+    }
+
+    #[tokio::test]
+    async fn write_then_read_frame_round_trip() {
+        let payload = b"hello frame";
+        let mut buf: Vec<u8> = Vec::new();
+        write_frame(&mut buf, payload).await.unwrap();
+        let mut cursor = std::io::Cursor::new(buf);
+        let got = read_frame(&mut cursor).await.unwrap();
+        assert_eq!(&got[..], payload);
+    }
 }

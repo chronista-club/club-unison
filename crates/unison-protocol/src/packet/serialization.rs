@@ -14,7 +14,7 @@
 //!   表現する。 `compressed_length > 0` かつ `flags::COMPRESSED` が立っているとき
 //!   zstd 圧縮されているとみなす。
 
-use ::buffa::Message;
+use buffa::Message;
 use bytes::{BufMut, Bytes, BytesMut};
 use thiserror::Error;
 use zstd::stream::{decode_all, encode_all};
@@ -236,6 +236,14 @@ impl PacketDeserializer {
 
             decompressed
         } else {
+            // 非圧縮 path も compressed path と対称に max_payload_size で上限チェック
+            // する (= でないと巨大な非圧縮 payload が制限を素通りする)。
+            if payload_bytes.len() > config.max_payload_size {
+                return Err(SerializationError::PacketTooLarge {
+                    size: payload_bytes.len(),
+                    max_size: config.max_payload_size,
+                });
+            }
             payload_bytes.to_vec()
         };
 
@@ -247,6 +255,29 @@ impl PacketDeserializer {
 mod tests {
     use super::*;
     use crate::packet::PacketType;
+    use crate::packet::config::{CompressionConfig, PacketConfig};
+
+    #[test]
+    fn deserialize_uncompressed_payload_bounded_by_max() {
+        // 圧縮無効 + 大きい max で serialize (= 非圧縮 packet を作る)
+        let big = PacketConfig::new()
+            .with_compression(CompressionConfig::disabled())
+            .with_max_payload_size(1024 * 1024);
+        let mut header = UnisonPacketHeader::new(PacketType::Data);
+        let payload = vec![0u8; 4096];
+        let packet = PacketSerializer::serialize_with_config(&mut header, &payload, &big).unwrap();
+        assert!(!header.is_compressed());
+
+        // 小さい max で deserialize → 非圧縮 path の上限チェックに当たるべき
+        let small = PacketConfig::new()
+            .with_compression(CompressionConfig::disabled())
+            .with_max_payload_size(1024);
+        let err = PacketDeserializer::parse_with_config(&packet, &small).unwrap_err();
+        assert!(
+            matches!(err, SerializationError::PacketTooLarge { .. }),
+            "非圧縮 payload も max_payload_size で bound されるべき: {err:?}"
+        );
+    }
 
     #[test]
     fn test_serialize_small_packet() {

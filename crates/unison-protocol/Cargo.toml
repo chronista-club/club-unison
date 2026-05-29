@@ -27,17 +27,9 @@ name = "unison"
 path = "src/lib.rs"
 
 [dependencies]
-miette.workspace = true
-
 # Serialization
 serde.workspace = true
 serde_json.workspace = true
-
-# Code generation
-proc-macro2.workspace = true
-quote.workspace = true
-syn.workspace = true
-convert_case.workspace = true
 
 # Async runtime
 tokio.workspace = true
@@ -58,10 +50,6 @@ wtransport.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 
-# Context-Generic Programming
-cgp.workspace = true
-cgp-component.workspace = true
-
 # Protocol Buffers
 buffa.workspace = true
 
@@ -71,7 +59,6 @@ sha2.workspace = true
 # Packet module dependencies
 bytes.workspace = true
 zstd.workspace = true
-crc32fast.workspace = true
 
 # Utilities
 chrono.workspace = true
@@ -79,23 +66,12 @@ uuid.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 async-stream.workspace = true
-indexmap.workspace = true
-scc.workspace = true
 tempfile.workspace = true
 kdl.workspace = true
 club-kdl.workspace = true
 
 [build-dependencies]
 buffa-build.workspace = true
-kdl.workspace = true
-miette.workspace = true
-proc-macro2.workspace = true
-quote.workspace = true
-syn.workspace = true
-convert_case.workspace = true
-anyhow.workspace = true
-rcgen.workspace = true
-tracing-subscriber.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true

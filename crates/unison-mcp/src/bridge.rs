@@ -38,7 +38,7 @@ impl UnisonBridge {
     pub async fn new(config: BridgeConfig) -> Result<Self> {
         let discovered = match config.endpoint.clone() {
             Some(endpoint) => {
-                let trust = config.trust.unwrap_or(TrustMode::Skip);
+                let trust = config.trust.unwrap_or_else(|| default_trust_for(&endpoint));
                 match try_discover(&endpoint, trust).await {
                     Ok(proto) => {
                         let channel_count = proto.registry().channels().count();
@@ -84,10 +84,60 @@ impl UnisonBridge {
         arg.or(self.config.endpoint.as_deref())
     }
 
-    /// Tool arg で trust が未指定の場合、 config の default trust を返す。
-    /// 両方とも未指定なら `TrustMode::Skip` (= dev default)。
-    pub fn resolve_trust(&self, arg: Option<TrustMode>) -> TrustMode {
-        arg.or(self.config.trust).unwrap_or(TrustMode::Skip)
+    /// trust を解決する。 優先順位: tool arg > config > endpoint 由来の default。
+    ///
+    /// 明示指定が無い場合、 endpoint が loopback なら [`TrustMode::Skip`]
+    /// (= dev self-signed server 向け)、 それ以外 (= remote) なら
+    /// [`TrustMode::System`] を default にする。 これにより remote への
+    /// 「無言の証明書検証スキップ」を防ぐ (= secure-by-default)。 connect() 側の
+    /// 「Skip は loopback 限定」 gate と同じ哲学。
+    pub fn resolve_trust(&self, arg: Option<TrustMode>, endpoint: &str) -> TrustMode {
+        arg.or(self.config.trust)
+            .unwrap_or_else(|| default_trust_for(endpoint))
+    }
+}
+
+/// endpoint の host 部分が loopback (= `localhost` / `127.x` / `::1`) か判定する。
+///
+/// scheme prefix と port を剥がして host を取り出す。 厳密な解決は connect() 側の
+/// `addr.ip().is_loopback()` gate が行うため、 ここは default 選択用の heuristic。
+fn is_loopback_endpoint(endpoint: &str) -> bool {
+    let host = endpoint
+        .strip_prefix("quic://")
+        .or_else(|| endpoint.strip_prefix("https://"))
+        .or_else(|| endpoint.strip_prefix("http://"))
+        .unwrap_or(endpoint);
+
+    // [::1]:port / [::1] → bracket 内
+    let host = if let Some(rest) = host.strip_prefix('[') {
+        rest.split(']').next().unwrap_or(rest)
+    } else if let Some(colon) = host.rfind(':') {
+        // host:port (host 側に ':' が無い = IPv6 リテラルではない場合のみ port を剥がす)
+        if host[..colon].contains(':') {
+            host
+        } else {
+            &host[..colon]
+        }
+    } else {
+        host
+    };
+
+    host == "localhost"
+        || host == "::1"
+        || host
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|ip| ip.is_loopback())
+        || host
+            .parse::<std::net::Ipv6Addr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+/// 明示指定が無いときの endpoint 由来 default trust。
+fn default_trust_for(endpoint: &str) -> TrustMode {
+    if is_loopback_endpoint(endpoint) {
+        TrustMode::Skip
+    } else {
+        TrustMode::System
     }
 }
 
@@ -171,16 +221,52 @@ mod tests {
             },
             discovered: None,
         };
-        assert_eq!(bridge.resolve_trust(Some(TrustMode::Skip)), TrustMode::Skip);
-        assert_eq!(bridge.resolve_trust(None), TrustMode::System);
+        // arg / config の明示は endpoint に関係なく優先される
+        assert_eq!(
+            bridge.resolve_trust(Some(TrustMode::Skip), "quic://example.com:7878"),
+            TrustMode::Skip
+        );
+        assert_eq!(
+            bridge.resolve_trust(None, "quic://example.com:7878"),
+            TrustMode::System
+        );
     }
 
     #[test]
-    fn trust_resolution_defaults_to_skip() {
+    fn trust_default_is_skip_for_loopback() {
         let bridge = UnisonBridge {
             config: BridgeConfig::default(),
             discovered: None,
         };
-        assert_eq!(bridge.resolve_trust(None), TrustMode::Skip);
+        // 明示なし + loopback → Skip (dev ergonomics)
+        assert_eq!(
+            bridge.resolve_trust(None, "quic://[::1]:7878"),
+            TrustMode::Skip
+        );
+        assert_eq!(
+            bridge.resolve_trust(None, "quic://127.0.0.1:7878"),
+            TrustMode::Skip
+        );
+        assert_eq!(
+            bridge.resolve_trust(None, "quic://localhost:7878"),
+            TrustMode::Skip
+        );
+    }
+
+    #[test]
+    fn trust_default_is_system_for_remote() {
+        let bridge = UnisonBridge {
+            config: BridgeConfig::default(),
+            discovered: None,
+        };
+        // 明示なし + remote → System (secure-by-default、 silent skip を防ぐ)
+        assert_eq!(
+            bridge.resolve_trust(None, "quic://cp.fleetstage.cloud:7878"),
+            TrustMode::System
+        );
+        assert_eq!(
+            bridge.resolve_trust(None, "quic://[2001:db8::1]:7878"),
+            TrustMode::System
+        );
     }
 }

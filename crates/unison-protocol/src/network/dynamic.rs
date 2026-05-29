@@ -57,6 +57,9 @@ pub enum DynamicError {
 
     #[error("serde error: {0}")]
     Serde(#[from] serde_json::Error),
+
+    #[error("integrity check failed: kdl の SHA-256 が advertised hash ({expected}) と不一致")]
+    Integrity { expected: String },
 }
 
 impl DynamicProtocol {
@@ -80,6 +83,14 @@ impl DynamicProtocol {
         let _ = channel.close().await;
 
         let document: ProtocolDocument = serde_json::from_value(value)?;
+        // 配信 KDL の integrity を検証する (= client は "kdl+hash" を要求しているので
+        // hash は必須)。 hash field を信頼した hot-reload 差分判定 (SchemaUpdated) の
+        // 前提でもあり、 改竄 / 破損の早期検出になる。
+        if !document.verify_integrity() {
+            return Err(DynamicError::Integrity {
+                expected: document.hash.to_string(),
+            });
+        }
         let registry = SchemaRegistry::from_kdl(&document.kdl)?;
 
         Ok(Self {

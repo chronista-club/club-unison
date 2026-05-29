@@ -26,9 +26,15 @@ use unison::parser::{ChannelRequest, Field, FieldType};
 /// MCP tool name の prefix (= 静的 escape hatch tool と衝突回避)
 pub const SYNTH_TOOL_PREFIX: &str = "unison_";
 
+/// tool 名 component の最大長 (= remote 由来の異常に長い名前を切り詰める)
+const MAX_NAME_COMPONENT: usize = 48;
+
 /// channel name と method から MCP tool name を組み立てる。
 ///
-/// 規約: `unison_<channel_safe>_<method>` where channel_safe は `.` と `-` を `_` に置換。
+/// 規約: `unison_<channel_safe>_<method_safe>`。 channel / method はいずれも
+/// remote KDL (= 信頼できない discovery server) 由来なので [`sanitize_name_component`]
+/// で `[A-Za-z0-9_]` に正規化してから組み立てる (= 不正文字による tool 名汚染 /
+/// 表示崩れ / injection を防ぐ)。
 ///
 /// # Example
 ///
@@ -37,74 +43,49 @@ pub const SYNTH_TOOL_PREFIX: &str = "unison_";
 /// assert_eq!(synth_tool_name("unison.discovery", "GetProtocol"), "unison_unison_discovery_GetProtocol");
 /// ```
 pub fn synth_tool_name(channel: &str, method: &str) -> String {
-    let safe = normalize_channel_name(channel);
-    format!("{SYNTH_TOOL_PREFIX}{safe}_{method}")
+    let safe_channel = sanitize_name_component(channel);
+    let safe_method = sanitize_name_component(method);
+    format!("{SYNTH_TOOL_PREFIX}{safe_channel}_{safe_method}")
 }
 
-/// channel name を tool name に使える形に正規化する (= `.` `-` → `_`)
-fn normalize_channel_name(channel: &str) -> String {
-    channel.replace(['.', '-'], "_")
-}
-
-/// tool name から (channel, method) を逆引きする。
-///
-/// 「合致する channel が registry に存在する」 ことを caller が確認する想定。 本関数は
-/// 文字列分解のみ行い、 妥当性検査は行わない。
-///
-/// 候補が複数ある場合 (= channel name に `_` が含まれて method 境界が曖昧)、
-/// 「channel が registry にある」 で絞り込む caller 側の責務。
-///
-/// # 戻り値
-/// 候補 (channel, method) の Vec (= prefix が `unison_` で始まる場合のみ)。 prefix
-/// なしや split できない名前は空 Vec。
-pub fn parse_tool_name(name: &str) -> Vec<(String, String)> {
-    let Some(rest) = name.strip_prefix(SYNTH_TOOL_PREFIX) else {
-        return Vec::new();
-    };
-    // 最後の `_` を method 境界とする 1 候補に加え、 すべての `_` 位置で split した
-    // 候補も含める (= 例えば "chat_Send" → ("chat", "Send"), "unison_discovery_GetProtocol"
-    // → ("unison_discovery", "GetProtocol"), ("unison", "discovery_GetProtocol") 等)
-    let mut out = Vec::new();
-    let positions: Vec<usize> = rest
-        .char_indices()
-        .filter(|(_, c)| *c == '_')
-        .map(|(i, _)| i)
-        .collect();
-    for &i in &positions {
-        let channel_normalized = &rest[..i];
-        let method = &rest[i + 1..];
-        if !channel_normalized.is_empty() && !method.is_empty() {
-            out.push((channel_normalized.to_string(), method.to_string()));
-        }
-    }
-    out
-}
-
-/// registry を見て、 候補 (channel, method) から実際に存在する組を選ぶ。
-///
-/// `parse_tool_name` の候補 Vec と、 registry の channel name 集合 (= 正規化前) を
-/// 受け取り、 「channel name を正規化したものが候補 channel と一致するもの」 で最初に
-/// マッチする (channel, method) を返す。
-pub fn resolve_tool_name<'a, I>(name: &str, channels: I) -> Option<(String, String)>
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    let candidates = parse_tool_name(name);
-    if candidates.is_empty() {
-        return None;
-    }
-    let channel_map: Vec<(&str, String)> = channels
-        .into_iter()
-        .map(|c| (c, normalize_channel_name(c)))
-        .collect();
-    for (candidate_chan_norm, method) in candidates {
-        for (raw, normalized) in &channel_map {
-            if *normalized == candidate_chan_norm {
-                return Some(((*raw).to_string(), method));
+/// tool 名 component を `[A-Za-z0-9_]` に正規化し、 長さを [`MAX_NAME_COMPONENT`] で
+/// 切り詰める。 remote 由来の任意文字列 (= 空白 / 制御文字 / 記号 / 超長文字列) が
+/// MCP tool 名にそのまま流れ込むのを防ぐ。 空になった場合は `_` を 1 個返す。
+fn sanitize_name_component(s: &str) -> String {
+    let out: String = s
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
             }
-        }
-    }
-    None
+        })
+        .take(MAX_NAME_COMPONENT)
+        .collect();
+    if out.is_empty() { "_".to_string() } else { out }
+}
+
+/// tool description の最大長 (= remote 由来の巨大 description による tool-list 肥大を防ぐ)
+const MAX_DESCRIPTION_LEN: usize = 1024;
+
+/// remote KDL 由来の description を sanitize する。
+///
+/// 制御文字 (= newline / tab を除く) を空白に置換し、 長さを [`MAX_DESCRIPTION_LEN`]
+/// で切り詰める。 description は LLM が読む untrusted な server 提供文字列なので、
+/// terminal/format injection と資源消費を抑える (= 自然言語レベルの prompt injection
+/// 自体は surface する性質上残るため、 LLM 側で server 提供データとして扱う前提)。
+fn sanitize_description(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_control() && c != '\n' && c != '\t' {
+                ' '
+            } else {
+                c
+            }
+        })
+        .take(MAX_DESCRIPTION_LEN)
+        .collect()
 }
 
 /// `ChannelRequest` を MCP `Tool` に変換する。
@@ -118,12 +99,16 @@ where
 /// `description="..."` を書くことで LLM が tool を正しく選びやすくなる。
 pub fn synthesize_tool(channel_name: &str, request: &ChannelRequest) -> Tool {
     let name = synth_tool_name(channel_name, &request.name);
-    let description = request.description.clone().unwrap_or_else(|| {
-        format!(
-            "Invoke the `{}` request on the `{}` Unison channel (= runtime-synthesized from server's KDL schema).",
-            request.name, channel_name
-        )
-    });
+    let description = request
+        .description
+        .as_deref()
+        .map(sanitize_description)
+        .unwrap_or_else(|| {
+            format!(
+                "Invoke the `{}` request on the `{}` Unison channel (= runtime-synthesized from server's KDL schema).",
+                request.name, channel_name
+            )
+        });
     let input_schema = fields_to_input_schema(&request.fields);
     Tool::new(
         Cow::Owned(name),
@@ -234,51 +219,53 @@ mod tests {
     }
 
     #[test]
-    fn parse_tool_name_returns_candidates() {
-        let candidates = parse_tool_name("unison_chat_Send");
-        assert!(candidates.contains(&("chat".to_string(), "Send".to_string())));
-    }
-
-    #[test]
-    fn parse_tool_name_handles_multi_underscore() {
-        let candidates = parse_tool_name("unison_unison_discovery_GetProtocol");
-        // 候補に ("unison_discovery", "GetProtocol") が含まれる
+    fn synth_tool_name_sanitizes_hostile_chars() {
+        // remote KDL が空白 / 記号 / 制御文字を仕込んでも [A-Za-z0-9_] に潰れる
+        let name = synth_tool_name("ev il chan", "drop;tables");
         assert!(
-            candidates
-                .iter()
-                .any(|(c, m)| c == "unison_discovery" && m == "GetProtocol")
+            name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+            "tool name must be [A-Za-z0-9_] only: {name}"
         );
+        assert!(name.starts_with("unison_"));
     }
 
     #[test]
-    fn parse_tool_name_no_prefix_returns_empty() {
-        // prefix なし
-        assert!(parse_tool_name("chat_Send").is_empty());
-        // prefix `unison_` 剥がし後の "ping" には `_` が無いので候補なし
-        // (= static escape hatch tool 名は parse_tool_name の対象外、 caller 側で先に
-        //    static 名を check してから synthesized lookup に進む dispatch 構造)
-        assert!(parse_tool_name("unison_ping").is_empty());
-        // prefix のみで body が空 → 空
-        assert!(parse_tool_name("unison_").is_empty());
+    fn synth_tool_name_truncates_overlong_component() {
+        let long = "a".repeat(500);
+        let name = synth_tool_name(&long, &long);
+        // prefix + 2 components (各 <= MAX_NAME_COMPONENT) + 区切り `_`
+        assert!(name.len() <= "unison_".len() + MAX_NAME_COMPONENT * 2 + 1);
     }
 
     #[test]
-    fn resolve_tool_name_against_registered_channels() {
-        let channels = ["chat", "unison.discovery", "metrics"];
-        let resolved = resolve_tool_name("unison_unison_discovery_GetProtocol", channels)
-            .expect("should resolve");
-        assert_eq!(resolved.0, "unison.discovery");
-        assert_eq!(resolved.1, "GetProtocol");
-
-        let resolved = resolve_tool_name("unison_chat_Send", channels).expect("should resolve");
-        assert_eq!(resolved.0, "chat");
-        assert_eq!(resolved.1, "Send");
+    fn synth_tool_name_empty_component_falls_back() {
+        // sanitize 後に空になっても `_` で埋まり、 空 component で壊れない
+        // ("unison_" prefix) + ("_" channel) + ("_" 区切り) + ("_" method)
+        let name = synth_tool_name("", "");
+        assert_eq!(name, "unison____");
     }
 
     #[test]
-    fn resolve_tool_name_unknown_channel_returns_none() {
-        let channels = ["chat"];
-        assert!(resolve_tool_name("unison_ghost_X", channels).is_none());
+    fn sanitize_description_strips_control_and_caps_len() {
+        let dirty = format!("hello\x07\x1bworld{}", "x".repeat(2000));
+        let clean = sanitize_description(&dirty);
+        assert!(!clean.contains('\x07'));
+        assert!(!clean.contains('\x1b'));
+        assert!(clean.len() <= MAX_DESCRIPTION_LEN);
+        // newline / tab は保持
+        assert_eq!(sanitize_description("a\nb\tc"), "a\nb\tc");
+    }
+
+    #[test]
+    fn synthesize_tool_sanitizes_server_description() {
+        let req = ChannelRequest {
+            name: "Send".to_string(),
+            description: Some("evil\x1b[2Jclear".to_string()),
+            fields: vec![],
+            returns: None,
+        };
+        let tool = synthesize_tool("chat", &req);
+        assert!(!tool.description.as_deref().unwrap_or("").contains('\x1b'));
     }
 
     #[test]

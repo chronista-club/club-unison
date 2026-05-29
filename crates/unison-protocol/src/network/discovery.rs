@@ -61,6 +61,14 @@ impl ProtocolDocument {
             codecs: cache.codecs.iter().cloned().collect(),
         }
     }
+
+    /// `kdl` の SHA-256 が `hash` field と一致するか検証する (= 配信 KDL の integrity)。
+    ///
+    /// client は `unison.discovery` を `"kdl+hash"` で叩くので hash は必須。 server 側
+    /// [`ProtocolCache`] と同一の `sha256_hex` で再計算して突き合わせる。
+    pub fn verify_integrity(&self) -> bool {
+        super::protocol_cache::sha256_hex(self.kdl.as_bytes()) == self.hash
+    }
 }
 
 /// `SchemaUpdated` event payload (server → client、 v0.1.0 では emit されない)
@@ -155,6 +163,25 @@ protocol "demo" version="0.1.0" {
         assert_eq!(doc.hash.len(), 64);
         assert_eq!(doc.codecs, vec!["json".to_string()]);
         assert!(doc.kdl.contains("protocol \"demo\""));
+    }
+
+    /// verify_integrity: cache 由来の document は整合、 hash 改竄 / kdl 改竄は検出
+    #[test]
+    fn protocol_document_verify_integrity() {
+        let kdl = "protocol \"demo\" version=\"0.1.0\" { }";
+        let cache = ProtocolCache::new(kdl).unwrap();
+        let doc = ProtocolDocument::from_cache(&cache);
+        assert!(doc.verify_integrity(), "正規 document は整合すべき");
+
+        // hash を改竄 → 不整合
+        let mut tampered_hash = doc.clone();
+        tampered_hash.hash = "0".repeat(64);
+        assert!(!tampered_hash.verify_integrity());
+
+        // kdl を改竄 (hash 据え置き) → 不整合
+        let mut tampered_kdl = doc.clone();
+        tampered_kdl.kdl.push_str("\n// injected");
+        assert!(!tampered_kdl.verify_integrity());
     }
 
     /// ProtocolDocument の JSON serde round-trip

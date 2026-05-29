@@ -16,39 +16,39 @@ export { ERROR_CATEGORIES } from "./error/category.js";
 
 // === Phase 2b: transport === (= 実装中)
 export type {
-  BidiStream,
-  Connection,
-  ConnectionEvent,
-  ConnectOptions,
-  Transport,
-  TrustMode,
+	BidiStream,
+	Connection,
+	ConnectionEvent,
+	ConnectOptions,
+	Transport,
+	TrustMode,
 } from "./transport/types.js";
 export {
-  UnisonTransportError,
-  WebTransportUnsupportedError,
+	UnisonTransportError,
+	WebTransportUnsupportedError,
 } from "./transport/errors.js";
 export {
-  WebTransportClient,
-  WebTransportConnection,
-  // transport-level の低レベル connect (= URL 直結、 facade を介さない)。
-  // caller-facing entry は client.ts の `connect` (下記参照)。
-  connect as connectTransport,
+	WebTransportClient,
+	WebTransportConnection,
+	// transport-level の低レベル connect (= URL 直結、 facade を介さない)。
+	// caller-facing entry は client.ts の `connect` (下記参照)。
+	connect as connectTransport,
 } from "./transport/web_transport.js";
 
 // === Phase 2c: channel ===
 export type {
-  ChannelMeta,
-  ChannelPayload,
-  ChannelTypeMap,
-  DatagramChannel,
-  DatagramChannelMeta,
-  EventName,
-  EventPayload,
-  EventType,
-  RequestName,
-  RequestType,
-  ResponseType,
-  UnisonChannel,
+	ChannelMeta,
+	ChannelPayload,
+	ChannelTypeMap,
+	DatagramChannel,
+	DatagramChannelMeta,
+	EventName,
+	EventPayload,
+	EventType,
+	RequestName,
+	RequestType,
+	ResponseType,
+	UnisonChannel,
 } from "./channel/types.js";
 export { UnisonChannelImpl } from "./channel/unison_channel.js";
 export { DatagramChannelImpl } from "./channel/datagram_channel.js";
@@ -56,45 +56,48 @@ export { DatagramDispatcher, DispatcherInner } from "./channel/dispatcher.js";
 
 // === Phase 6b: Rust-compatible wire format ===
 export {
-  FRAME_TYPE_PROTOCOL,
-  FRAME_TYPE_RAW,
-  decodeTypedFrame,
-  encodeProtocolFrame,
-  encodeRawFrame,
+	FRAME_TYPE_PROTOCOL,
+	FRAME_TYPE_RAW,
+	decodeTypedFrame,
+	encodeProtocolFrame,
+	encodeRawFrame,
 } from "./channel/frame.js";
 export type { DecodedFrame } from "./channel/frame.js";
 export { decodePacket, encodePacket } from "./wire/packet.js";
 export type { DecodedPacket, PacketOptions } from "./wire/packet.js";
 export {
-  PACKET_VERSION,
-  decodePacketHeader,
-  encodePacketHeader,
-  newPacketHeader,
+	PACKET_VERSION,
+	decodePacketHeader,
+	encodePacketHeader,
+	newPacketHeader,
 } from "./wire/packet_header.js";
 export type { PacketHeader } from "./wire/packet_header.js";
 export {
-  MSG_TYPE_ERROR,
-  MSG_TYPE_EVENT,
-  MSG_TYPE_REQUEST,
-  MSG_TYPE_RESPONSE,
-  decodeProtocolMessage,
-  encodeProtocolMessage,
-  messageTypeName,
-  messageTypeValue,
+	MSG_TYPE_ERROR,
+	MSG_TYPE_EVENT,
+	MSG_TYPE_REQUEST,
+	MSG_TYPE_RESPONSE,
+	decodeProtocolMessage,
+	encodeProtocolMessage,
+	messageTypeName,
+	messageTypeValue,
 } from "./wire/protocol_message.js";
-export type { MessageTypeName, ProtocolMessage } from "./wire/protocol_message.js";
+export type {
+	MessageTypeName,
+	ProtocolMessage,
+} from "./wire/protocol_message.js";
 
 // === Phase 6b: identity handshake ===
 export {
-  DEFAULT_IDENTITY_TIMEOUT_MS,
-  performIdentityHandshake,
-  readIdentity,
+	DEFAULT_IDENTITY_TIMEOUT_MS,
+	performIdentityHandshake,
+	readIdentity,
 } from "./channel/identity.js";
 export type {
-  ChannelDirection,
-  ChannelInfo,
-  ChannelStatus,
-  ServerIdentity,
+	ChannelDirection,
+	ChannelInfo,
+	ChannelStatus,
+	ServerIdentity,
 } from "./channel/identity.js";
 
 // === Phase 2d: codec ===
@@ -109,4 +112,4 @@ export type { UnisonConnectOptions } from "./client.js";
 export { UnisonClient, connect } from "./client.js";
 
 // SDK version (= package.json と同期)
-export const VERSION = "1.0.0-rc.1";
+export const VERSION = "1.0.0";

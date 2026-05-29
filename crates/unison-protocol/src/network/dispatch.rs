@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, oneshot};
 use tracing::{debug, error, info, warn};
 
 use super::conn::UnisonConn;
@@ -18,16 +18,19 @@ use super::{ProtocolFrame, ProtocolMessage, context::ConnectionContext, server::
 ///
 /// サーバーが `connection.open_bi()` で開いたストリーム（Identity 送信等）を
 /// `accept_bi()` で受信し、ProtocolMessage に変換する。
-/// `__identity` メッセージは専用の oneshot チャネルに送り、それ以外は既存の mpsc に送る。
+/// `__identity` メッセージは専用の oneshot チャネルに送る。
+///
+/// Unified Channel 設計では server→client 通信は client が開いた channel 上で
+/// 行うため、 server-initiated bi stream の非 identity frame は想定外。 旧実装は
+/// これを無制限 mpsc に積んでいたが drain されず (= dead path + 悪意ある server に
+/// よる OOM ベクタ) だったので、 warn して drop する。
 pub(crate) async fn client_accept_bi_loop(
     connection: quinn::Connection,
-    tx: mpsc::UnboundedSender<ProtocolMessage>,
     identity_tx: Arc<Mutex<Option<oneshot::Sender<ProtocolMessage>>>>,
 ) {
     loop {
         match connection.accept_bi().await {
             Ok((_send_stream, mut recv_stream)) => {
-                let tx = tx.clone();
                 let identity_tx = identity_tx.clone();
                 tokio::spawn(async move {
                     match read_typed_frame(&mut recv_stream).await {
@@ -45,8 +48,11 @@ pub(crate) async fn client_accept_bi_loop(
                                         );
                                     }
                                 } else {
-                                    // それ以外は既存の mpsc チャネルに送信
-                                    let _ = tx.send(message);
+                                    // 想定外: server-initiated stream の非 identity frame は drop
+                                    warn!(
+                                        method = %message.method,
+                                        "unexpected non-identity frame on server-initiated stream; dropping"
+                                    );
                                 }
                             }
                         }
