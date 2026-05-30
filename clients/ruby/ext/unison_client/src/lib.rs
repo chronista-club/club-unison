@@ -19,9 +19,10 @@
 use std::ffi::c_void;
 use std::sync::OnceLock;
 
-use magnus::{function, method, prelude::*, Error, ExceptionClass, Ruby, Value};
+use magnus::{Error, ExceptionClass, Ruby, Value, function, method, prelude::*};
 use serde_json::Value as JsonValue;
 use tokio::runtime::Runtime;
+use unison::network::ProtocolMessage;
 use unison::{NetworkError, ProtocolClient, UnisonChannel};
 
 /// Process-wide multi-thread tokio runtime backing every blocking bridge.
@@ -40,20 +41,26 @@ fn runtime() -> &'static Runtime {
 /// GVL. It runs on the *calling* thread (`rb_thread_call_without_gvl` does not
 /// move work elsewhere), so non-`Send` captures are fine.
 ///
-/// Limitations, both future refinements:
-/// - No unblock function is registered, so a blocked call cannot be
-///   interrupted by Ruby (e.g. `Thread#kill`).
-/// - A panic inside `f` crosses an `extern "C"` boundary and aborts the
-///   process. The closures here (`block_on` of QUIC ops) are not expected to
-///   panic.
-fn without_gvl<F, R>(f: F) -> R
+/// A panic inside `f` would otherwise unwind across the `extern "C"`
+/// trampoline boundary (= UB / process abort). We [`catch_unwind`] it and
+/// surface it as a `Unison::Error` on the calling Ruby thread instead, so a
+/// bug in the native layer raises a Ruby exception rather than killing the
+/// host process. The exception is built *after* the GVL is reacquired.
+///
+/// [`catch_unwind`]: std::panic::catch_unwind
+///
+/// Remaining future refinement: no unblock function is registered, so a
+/// blocked call cannot be interrupted by `Thread#kill`. Callers that need a
+/// bound can use the explicit-timeout variants (e.g. `Channel#recv_timeout`).
+fn without_gvl<F, R>(f: F) -> Result<R, Error>
 where
     F: FnOnce() -> R,
 {
-    /// Carries the closure in and its result out across the C boundary.
+    /// Carries the closure in and its (panic-checked) result out across the C
+    /// boundary.
     struct Payload<F, R> {
         func: Option<F>,
-        result: Option<R>,
+        result: Option<Result<R, String>>,
     }
 
     unsafe extern "C" fn trampoline<F, R>(arg: *mut c_void) -> *mut c_void
@@ -68,7 +75,10 @@ where
             .func
             .take()
             .expect("without_gvl closure already ran");
-        payload.result = Some(func());
+        // panic を C 境界の手前で捕まえる。 AssertUnwindSafe: クロージャは &self 等を
+        // 借用するが、 panic 後にそれらを再利用しないので unwind safety は破られない。
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(func));
+        payload.result = Some(caught.map_err(panic_message));
         std::ptr::null_mut()
     }
 
@@ -87,7 +97,22 @@ where
             std::ptr::null_mut(),
         );
     }
-    payload.result.expect("without_gvl closure did not run")
+    // ここでは GVL を再取得済みなので `unison_error` (= Ruby API) を呼んでよい。
+    match payload.result.expect("without_gvl closure did not run") {
+        Ok(value) => Ok(value),
+        Err(msg) => Err(unison_error(format!("panic in native Unison call: {msg}"))),
+    }
+}
+
+/// Extracts a human-readable message from a panic payload.
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic".to_string()
+    }
 }
 
 /// Current `Ruby` handle.
@@ -114,6 +139,20 @@ fn unison_error(msg: impl Into<String>) -> Error {
 /// Turns a `NetworkError` into a `Unison::Error`.
 fn net_err(e: NetworkError) -> Error {
     unison_error(e.to_string())
+}
+
+/// Serializes an inbound `ProtocolMessage` into the Ruby `Hash` shape returned
+/// by `Channel#recv` / `#recv_timeout` (`"id"` / `"type"` / `"method"` /
+/// `"payload"`).
+fn msg_to_ruby(msg: &ProtocolMessage) -> Result<Value, Error> {
+    let payload = msg.payload_as_value().map_err(net_err)?;
+    let out = serde_json::json!({
+        "id": msg.id,
+        "type": msg.msg_type,
+        "method": msg.method,
+        "payload": payload,
+    });
+    serde_magnus::serialize(&ruby(), &out)
 }
 
 /// The Unison protocol generation this client is built against.
@@ -152,11 +191,11 @@ impl Client {
     /// released, so other Ruby threads keep running). Raises `Unison::Error`
     /// on failure.
     fn connect(&self, url: String) -> Result<(), Error> {
-        without_gvl(|| runtime().block_on(self.inner.connect(&url))).map_err(net_err)
+        without_gvl(|| runtime().block_on(self.inner.connect(&url)))?.map_err(net_err)
     }
 
     /// `client.connected?` — whether the QUIC connection is currently open.
-    fn connected(&self) -> bool {
+    fn connected(&self) -> Result<bool, Error> {
         without_gvl(|| runtime().block_on(self.inner.is_connected()))
     }
 
@@ -164,14 +203,14 @@ impl Client {
     ///
     /// Raises `Unison::Error` only if the close itself errors.
     fn disconnect(&self) -> Result<(), Error> {
-        without_gvl(|| runtime().block_on(self.inner.disconnect())).map_err(net_err)
+        without_gvl(|| runtime().block_on(self.inner.disconnect()))?.map_err(net_err)
     }
 
     /// `client.open_channel(name)` — opens a named channel, returning a
     /// `Unison::Channel`. Raises `Unison::Error` on failure.
     fn open_channel(&self, name: String) -> Result<Channel, Error> {
         let inner =
-            without_gvl(|| runtime().block_on(self.inner.open_channel(&name))).map_err(net_err)?;
+            without_gvl(|| runtime().block_on(self.inner.open_channel(&name)))?.map_err(net_err)?;
         Ok(Channel { inner })
     }
 }
@@ -196,7 +235,7 @@ impl Channel {
         let req: JsonValue = serde_magnus::deserialize(&ruby, payload)?;
         let resp: JsonValue = without_gvl(|| {
             runtime().block_on(self.inner.request::<JsonValue, JsonValue>(&method, &req))
-        })
+        })?
         .map_err(net_err)?;
         serde_magnus::serialize(&ruby, &resp)
     }
@@ -205,30 +244,39 @@ impl Channel {
     /// (no response is awaited).
     fn send_event(&self, method: String, payload: Value) -> Result<(), Error> {
         let event: JsonValue = serde_magnus::deserialize(&ruby(), payload)?;
-        without_gvl(|| runtime().block_on(self.inner.send_event(&method, &event))).map_err(net_err)
+        without_gvl(|| runtime().block_on(self.inner.send_event(&method, &event)))?.map_err(net_err)
     }
 
     /// `channel.recv` — blocks until the next inbound event (server push or
     /// other non-response message), returned as a Ruby `Hash` with keys
     /// `"id"`, `"type"`, `"method"`, `"payload"`.
     ///
-    /// The GVL is released while waiting, so other Ruby threads run; the call
-    /// itself is not interruptible and has no timeout (future refinements).
+    /// The GVL is released while waiting, so other Ruby threads run. This form
+    /// blocks indefinitely; use [`Self::recv_timeout`] for a bounded wait.
+    /// (Interruption via `Thread#kill` is a remaining future refinement.)
     fn recv(&self) -> Result<Value, Error> {
-        let msg = without_gvl(|| runtime().block_on(self.inner.recv())).map_err(net_err)?;
-        let payload = msg.payload_as_value().map_err(net_err)?;
-        let out = serde_json::json!({
-            "id": msg.id,
-            "type": msg.msg_type,
-            "method": msg.method,
-            "payload": payload,
-        });
-        serde_magnus::serialize(&ruby(), &out)
+        let msg = without_gvl(|| runtime().block_on(self.inner.recv()))?.map_err(net_err)?;
+        msg_to_ruby(&msg)
+    }
+
+    /// `channel.recv_timeout(seconds)` — like [`Self::recv`] but raises
+    /// `Unison::Error` if no message arrives within `seconds`.
+    ///
+    /// 無期限 block を避けたい caller 向けの bounded 版。 timeout は
+    /// `tokio::time::timeout` で実装し、 GVL は同様に解放する。
+    fn recv_timeout(&self, seconds: f64) -> Result<Value, Error> {
+        let dur = std::time::Duration::from_secs_f64(seconds);
+        let msg = without_gvl(|| {
+            runtime().block_on(async { tokio::time::timeout(dur, self.inner.recv()).await })
+        })?
+        .map_err(|_elapsed| unison_error(format!("recv timed out after {seconds}s")))?
+        .map_err(net_err)?;
+        msg_to_ruby(&msg)
     }
 
     /// `channel.close` — closes the channel and stops its receive loop.
     fn close(&self) -> Result<(), Error> {
-        without_gvl(|| runtime().block_on(self.inner.close())).map_err(net_err)
+        without_gvl(|| runtime().block_on(self.inner.close()))?.map_err(net_err)
     }
 }
 
@@ -251,6 +299,7 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     channel.define_method("request", method!(Channel::request, 2))?;
     channel.define_method("send_event", method!(Channel::send_event, 2))?;
     channel.define_method("recv", method!(Channel::recv, 0))?;
+    channel.define_method("recv_timeout", method!(Channel::recv_timeout, 1))?;
     channel.define_method("close", method!(Channel::close, 0))?;
 
     Ok(())
