@@ -7,7 +7,7 @@ require "unison"
 # サーバ相手の connect 成功パスは E2E テスト（次フェーズ）で扱う。
 class UnisonTest < Minitest::Test
   def test_protocol_target_matches_the_built_generation
-    assert_equal "1.0.0-rc.1", Unison.protocol_target
+    assert_equal "1.0.0", Unison.protocol_target
   end
 
   def test_client_new_returns_a_client
