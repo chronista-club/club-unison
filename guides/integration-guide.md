@@ -164,10 +164,11 @@ Unison は **KDL スキーマが型の SSOT**。コード生成は `club-kdl-cod
 - `as const` の `ChannelMeta`（`__types` phantom carrier 込み — これにより
   `events()` / `request()` が生成 interface に型 narrow される）
 
-> **rc 段階の制約**: v1.0 の codegen は **stream channel まで**。datagram channel の
-> TS codegen は v1.x deferred のため、datagram の `ChannelMeta` は当面**手書き**する。
-> 手書きの形は [`vp-dashboard.ts` example](../clients/typescript/examples/vp-dashboard.ts)
-> がそのまま範になる（`as const satisfies DatagramChannelMeta` + `__types`）。
+> **codegen の対応範囲**: `club-kdl-codegen 0.9.0` で stream channel + datagram channel
+> どちらも codegen 動く。 datagram channel は専用 field `channelId` も含めて完璧に生成される
+> （[`dogfood/vp-2026-05-26.md`](../dogfood/vp-2026-05-26.md) signal #2 で VP dogfood の
+> 検証 trail）。 datagram の `ChannelMeta` 手書きは [`vp-dashboard.ts` example](../clients/typescript/examples/vp-dashboard.ts)
+> に教材として残っているが、実 use では codegen 経由を推奨。
 
 ### ④ 呼び出し側コードを書く
 
