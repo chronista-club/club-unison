@@ -12,20 +12,20 @@
  * [UnisonPacket]`) で Rust `quic.rs` と byte 一致する。
  */
 
-import type { BidiStream, Connection } from "../../src/transport/types.js";
+import type { BidiStream, Connection } from "../transport/types.js";
 import {
   decodeTypedFrame,
   encodeProtocolFrame,
   readFrames,
-} from "../../src/channel/frame.js";
+} from "../channel/frame.js";
 import {
   MSG_TYPE_ERROR,
   MSG_TYPE_EVENT,
   MSG_TYPE_REQUEST,
   MSG_TYPE_RESPONSE,
-} from "../../src/wire/protocol_message.js";
-import { JsonCodec } from "../../src/codec/json_codec.js";
-import type { ServerIdentity } from "../../src/channel/identity.js";
+} from "../wire/protocol_message.js";
+import { JsonCodec } from "../codec/json_codec.js";
+import type { ServerIdentity } from "../channel/identity.js";
 
 const codec = JsonCodec.shared;
 const textEncoder = new TextEncoder();

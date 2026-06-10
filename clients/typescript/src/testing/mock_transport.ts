@@ -15,8 +15,8 @@ import type {
   ConnectionEvent,
   ConnectOptions,
   Transport,
-} from "../../src/transport/types.js";
-import { AsyncQueue } from "../../src/channel/async_queue.js";
+} from "../transport/types.js";
+import { AsyncQueue } from "../channel/async_queue.js";
 
 /** 片方向 byte pipe。 `endReadable` で読み手側を即終端できる (= reader cancel 相当) */
 interface BytePipe {

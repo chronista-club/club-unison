@@ -6,7 +6,7 @@
  * - `DatagramChannel` の event 配送 throughput (= dispatcher demux → codec decode
  *   → AsyncQueue 配送) を計測する。
  *
- * 実 WebTransport は使わず `tests/integration/mock_transport.ts` の in-memory pipe
+ * 実 WebTransport は使わず `src/testing/` の in-memory pipe
  * を再利用する。 transport は memory pipe なので I/O コストはほぼゼロ、 計測対象は
  * SDK 側の frame encode/decode + codec + recv loop dispatch である点に注意。
  */
@@ -21,8 +21,7 @@ import type {
 } from "../src/channel/types.js";
 import { UnisonChannelImpl } from "../src/channel/unison_channel.js";
 import { JsonCodec } from "../src/codec/json_codec.js";
-import { MockConnection } from "../tests/integration/mock_transport.js";
-import { StreamServerStub } from "../tests/integration/server_stub.js";
+import { MockConnection, StreamServerStub } from "../src/testing/index.js";
 
 const codec = JsonCodec.shared as JsonCodec<ChannelPayload>;
 

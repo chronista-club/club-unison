@@ -1,6 +1,6 @@
 {
   "name": "@chronista-club/unison-client",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "TypeScript client SDK for the Unison protocol (= polyglot client base, server stays Rust)",
   "license": "MIT",
   "type": "module",
@@ -11,6 +11,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing.js"
     }
   },
   "files": [

@@ -3,7 +3,7 @@
 > TypeScript client SDK for the [Unison protocol](https://github.com/chronista-club/club-unison).
 > Part of the **v1.0 polyglot client base** (= server stays Rust, client polyglot for adoption surface).
 
-**Status**: `1.0.0` — v1.0 GA. Protocol API is frozen and the SDK is shipped to npm. It talks to the Rust server over **real WebTransport** (verified by `tests/integration/webtransport_e2e.test.ts`). See [design/typescript-client-api.md](../../design/typescript-client-api.md) for the SDK design contract.
+**Status**: `1.1.0` — v1.0 GA + `/testing` subpath. Protocol API is frozen and the SDK is shipped to npm. It talks to the Rust server over **real WebTransport** (verified by `tests/integration/webtransport_e2e.test.ts`). See [design/typescript-client-api.md](../../design/typescript-client-api.md) for the SDK design contract.
 
 ---
 
@@ -72,6 +72,43 @@ await echo.close();
 await client.disconnect();
 ```
 
+## Testing utilities (`/testing` subpath)
+
+Drive the SDK end-to-end without a real WebTransport stack or a Rust server —
+`MockTransport` pairs in-memory endpoints and `StreamServerStub` speaks the same
+byte-compatible frame protocol as the Rust server:
+
+```typescript
+import { connect } from "@chronista-club/unison-client";
+import {
+  MockTransport,
+  StreamServerStub,
+} from "@chronista-club/unison-client/testing";
+
+const transport = new MockTransport();
+const { server } = transport.prepare(); // server-side endpoint of the memory pipe
+
+const client = await connect({
+  url: "https://mock.local", // any URL — never dialed with a mock transport
+  transport,
+  awaitIdentity: false,
+});
+
+// Server side: accept the stream and answer with an echo handler.
+const serverSide = (async () => {
+  const accepted = await server.acceptStream();
+  if (accepted.done) throw new Error("no stream");
+  return new StreamServerStub(accepted.value, (_method, payload) => payload);
+})();
+```
+
+`examples/vp-dashboard.ts` and `tests/integration/beta_freeze.test.ts` show the
+full pattern (datagram channels, identity handshake via `sendIdentity`, nack
+injection with `rejectOpen`).
+
+The SDK's own integration tests (`tests/integration/`) import the same module,
+so the published harness can never drift from what CI verifies.
+
 ## Architecture
 
 ```
@@ -83,7 +120,8 @@ clients/typescript/
 │   ├── channel/           ← UnisonChannel / DatagramChannel + dispatcher + frame
 │   ├── codec/             ← JsonCodec + ProtoCodec
 │   ├── wire/              ← Rust-compatible packet / protocol-message encode/decode
-│   └── error/             ← ErrorCategory framework
+│   ├── error/             ← ErrorCategory framework
+│   └── testing/           ← /testing subpath (MockTransport + StreamServerStub)
 ├── examples/              ← vp-dashboard.ts (Vantage Point proof point demo)
 ├── tests/                 ← vitest unit + integration tests (incl. real WebTransport E2E)
 ├── package.json
@@ -105,7 +143,7 @@ npm run typecheck      # tsc --noEmit (= type safety verification)
 ## Versioning policy
 
 - TS package version is kept in **major.minor sync** with the Rust crate `club-unison`
-- `1.0.0` (current) — protocol API frozen, stability committed; breaking changes to the public surface require v2.0
+- `1.1.0` (current) — adds the `/testing` subpath + channel util re-exports; protocol API remains frozen since `1.0.0`; breaking changes to the public surface require v2.0
 - `1.x.0` — additive features (channels, codecs, error codes) that preserve API compatibility
 - `1.0.x` — patch fixes
 
