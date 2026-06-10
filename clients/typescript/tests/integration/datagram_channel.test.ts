@@ -11,7 +11,7 @@ import { DatagramDispatcher } from "../../src/channel/dispatcher.js";
 import type { DatagramChannelMeta } from "../../src/channel/types.js";
 import type { ChannelPayload } from "../../src/channel/types.js";
 import { JsonCodec } from "../../src/codec/json_codec.js";
-import { MockConnection } from "./mock_transport.js";
+import { MockConnection } from "../../src/testing/index.js";
 
 function datagramMeta<const Id extends number, const Name extends string>(
   name: Name,

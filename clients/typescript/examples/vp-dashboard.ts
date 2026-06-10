@@ -16,8 +16,12 @@
 import { connect, type ChannelMeta, type DatagramChannelMeta } from "../src/index.js";
 import { JsonCodec } from "../src/codec/json_codec.js";
 import { encodeVarint } from "../src/channel/varint.js";
-import { MockTransport, type MockConnection } from "../tests/integration/mock_transport.js";
-import { StreamServerStub, sendIdentity } from "../tests/integration/server_stub.js";
+import {
+  type MockConnection,
+  MockTransport,
+  sendIdentity,
+  StreamServerStub,
+} from "../src/testing/index.js";
 import type { BidiStream } from "../src/transport/types.js";
 
 // ============================================================

@@ -61,8 +61,12 @@ export {
 	decodeTypedFrame,
 	encodeProtocolFrame,
 	encodeRawFrame,
+	readFrames,
 } from "./channel/frame.js";
 export type { DecodedFrame } from "./channel/frame.js";
+// channel 実装 util (= dogfood signal #1: 範の写経で internal copy させない)
+export { AsyncQueue } from "./channel/async_queue.js";
+export { encodeVarint } from "./channel/varint.js";
 export { decodePacket, encodePacket } from "./wire/packet.js";
 export type { DecodedPacket, PacketOptions } from "./wire/packet.js";
 export {
@@ -112,4 +116,4 @@ export type { UnisonConnectOptions } from "./client.js";
 export { UnisonClient, connect } from "./client.js";
 
 // SDK version (= package.json と同期)
-export const VERSION = "1.0.0";
+export const VERSION = "1.1.0";

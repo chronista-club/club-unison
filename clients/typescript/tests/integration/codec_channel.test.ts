@@ -9,8 +9,7 @@ import { describe, expect, it } from "vitest";
 import { UnisonChannelImpl } from "../../src/channel/unison_channel.js";
 import type { ChannelMeta, ChannelPayload } from "../../src/channel/types.js";
 import { JsonCodec } from "../../src/codec/json_codec.js";
-import { MockConnection } from "./mock_transport.js";
-import { StreamServerStub } from "./server_stub.js";
+import { MockConnection, StreamServerStub } from "../../src/testing/index.js";
 
 const EchoMeta = {
   name: "echo",

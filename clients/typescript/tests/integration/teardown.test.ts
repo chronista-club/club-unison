@@ -12,8 +12,7 @@ import { DatagramDispatcher } from "../../src/channel/dispatcher.js";
 import type { ChannelMeta, DatagramChannelMeta, ChannelPayload } from "../../src/channel/types.js";
 import type { ConnectionEvent } from "../../src/transport/types.js";
 import { JsonCodec } from "../../src/codec/json_codec.js";
-import { MockConnection } from "./mock_transport.js";
-import { StreamServerStub } from "./server_stub.js";
+import { MockConnection, StreamServerStub } from "../../src/testing/index.js";
 
 const StreamMeta = {
   name: "ctl",

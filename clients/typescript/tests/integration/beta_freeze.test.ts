@@ -20,8 +20,11 @@ import type {
   ResponseType,
 } from "../../src/channel/types.js";
 import { JsonCodec } from "../../src/codec/json_codec.js";
-import { MockConnection, MockTransport } from "./mock_transport.js";
-import { StreamServerStub } from "./server_stub.js";
+import {
+  MockConnection,
+  MockTransport,
+  StreamServerStub,
+} from "../../src/testing/index.js";
 
 // --- 生成 meta の代用 (= codegen 出力相当、 `__types` phantom carrier 込み) ---
 
