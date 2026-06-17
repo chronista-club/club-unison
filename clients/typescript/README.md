@@ -3,7 +3,7 @@
 > TypeScript client SDK for the [Unison protocol](https://github.com/chronista-club/club-unison).
 > Part of the **v1.0 polyglot client base** (= server stays Rust, client polyglot for adoption surface).
 
-**Status**: `1.1.0` — v1.0 GA + `/testing` subpath. Protocol API is frozen and the SDK is shipped to npm. It talks to the Rust server over **real WebTransport** (verified by `tests/integration/webtransport_e2e.test.ts`). See [design/typescript-client-api.md](../../design/typescript-client-api.md) for the SDK design contract.
+**Status**: `1.1.1` — v1.0 GA + `/testing` subpath. Protocol API is frozen and the SDK is shipped to npm. It talks to the Rust server over **real WebTransport** (verified by `tests/integration/webtransport_e2e.test.ts`). See [design/typescript-client-api.md](../../design/typescript-client-api.md) for the SDK design contract.
 
 ---
 
