@@ -22,8 +22,14 @@ const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 /**
  * cert pinning は loopback host にのみ許可する hard gate。
  * 非 loopback への pinning は本番想定の誤用なので throw。
+ *
+ * @internal export は単体テスト用 (= WebTransport 不在の node 環境では
+ * `connect()` 経由でゲートに到達できないため、 gate を直接検証する)。
  */
-function enforceTrustGate(url: string, trust: TrustMode | undefined): void {
+export function enforceTrustGate(
+  url: string,
+  trust: TrustMode | undefined,
+): void {
   if (trust === undefined || trust === "system") return;
   let host: string;
   try {
@@ -31,7 +37,10 @@ function enforceTrustGate(url: string, trust: TrustMode | undefined): void {
   } catch {
     throw new Error(`invalid connection URL: ${url}`);
   }
-  if (!LOOPBACK_HOSTS.has(host)) {
+  // URL.hostname は IPv6 を角括弧付きで返す (= `[::1]`) が LOOPBACK_HOSTS は
+  // 括弧なし (= `::1`) で保持するため、 比較前に外側の角括弧を剥がして正規化。
+  const normalizedHost = host.replace(/^\[|\]$/g, "");
+  if (!LOOPBACK_HOSTS.has(normalizedHost)) {
     throw new Error(
       `cert pinning (skip-verify) is restricted to localhost; got host "${host}"`,
     );
