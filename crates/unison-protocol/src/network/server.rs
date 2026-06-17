@@ -482,15 +482,49 @@ impl ProtocolServer {
     /// `spawn_listen` が `self` を consume するため、 broadcast 等で server へ
     /// outside reference を保ちたい caller は本 method を使う。 caller が `Arc::clone`
     /// を保持してそれを通して `server.broadcast(...)` を呼べる。
+    ///
+    /// cert は `dev_localhost` 既定 (= DEV ONLY、 loopback のみ)。 非 loopback で
+    /// 公開する場合は [`spawn_listen_shared_with_cert`](Self::spawn_listen_shared_with_cert)。
     pub async fn spawn_listen_shared(
         self: Arc<Self>,
         addr: &str,
+    ) -> Result<ServerHandle, NetworkError> {
+        self.spawn_listen_shared_with_cert(addr, super::cert::CertSource::dev_localhost())
+            .await
+    }
+
+    /// [`spawn_listen`](Self::spawn_listen) の cert 指定版 (v1.2.0 で追加)。
+    ///
+    /// `self` を consume する。 cert を明示することで非 loopback アドレスでの
+    /// 公開 (tailnet / public federation) が可能になる。 cert を渡さない既定
+    /// 経路は [`spawn_listen`](Self::spawn_listen) (= `dev_localhost`)。
+    pub async fn spawn_listen_with_cert(
+        self,
+        addr: &str,
+        cert: super::cert::CertSource,
+    ) -> Result<ServerHandle, NetworkError> {
+        Arc::new(self)
+            .spawn_listen_shared_with_cert(addr, cert)
+            .await
+    }
+
+    /// [`spawn_listen_shared`](Self::spawn_listen_shared) の cert 指定版 (v1.2.0 で追加)。
+    ///
+    /// `spawn_listen_shared` / `spawn_listen` / `spawn_listen_with_cert` の
+    /// 共通実装。 `QuicServer::builder().cert_source(cert)` 経由で TLS を構成する
+    /// 点だけが `QuicServer::new` 固定だった旧実装と異なる。
+    pub async fn spawn_listen_shared_with_cert(
+        self: Arc<Self>,
+        addr: &str,
+        cert: super::cert::CertSource,
     ) -> Result<ServerHandle, NetworkError> {
         use super::quic::QuicServer;
 
         let protocol_server = self;
 
-        let mut quic_server = QuicServer::new(Arc::clone(&protocol_server));
+        let mut quic_server = QuicServer::builder(Arc::clone(&protocol_server))
+            .cert_source(cert)
+            .build();
         quic_server
             .bind(addr)
             .await
