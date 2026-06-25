@@ -4,11 +4,22 @@
 
 本ドキュメントでは、Unison ProtocolにおけるQUIC Runtime統合の設計を記述する。QUICトランスポート層は以下の要素で構成される:
 
+- **ALPN**: raw QUIC は ALPN `"unison"` を negotiate（`network::UNISON_ALPN`）
 - **ConnectionContext**: 接続ごとの状態管理（identity、チャネル追跡）
 - **Identity Handshake**: 接続直後のサーバー自己紹介プロトコル
 - **チャネルルーティング**: `__channel:` プレフィックスによるチャネル多重化
 - **Length-Prefixed Framing**: 4バイトBE長プレフィックスによるフレーム境界
 - **UnisonChannel**: 統合チャネル型（request/response + event push）
+
+### ALPN（v1.3.0+）
+
+QUIC は仕様（RFC 9001 §8.1）で ALPN を必須とする。raw QUIC の server
+（`quic.rs`）と client（`trust.rs`）は SSOT である `network::UNISON_ALPN`
+（= `"unison"`）を negotiate する。空 ALPN は仕様逸脱であり、Apple
+`NWProtocolQUIC` 等の厳格実装（Swift client）と interop できないため v1.3.0 で
+明示設定した。server / client が同 label で合意するため Rust↔Rust / Ruby（FFI）は
+後方互換。WebTransport 経路は HTTP/3 上のため ALPN は `"h3"` 固定（`wtransport`
+依存が内部設定）で、本 const は適用されない（別 ingress）。
 
 全体のアーキテクチャ層における位置付け:
 

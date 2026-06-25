@@ -222,3 +222,24 @@ jobs:
       - name: Run TS test suite (incl. cross-lang E2E)
         working-directory: clients/typescript
         run: npm test
+
+  # ===========================================
+  # Swift client (clients/swift)
+  # ===========================================
+  # NWProtocolQUIC / swift-protobuf を使う SPM package。生成 wire コードは
+  # コミット済みなので protoc 不要。LiveE2ETests は UNISON_LIVE 環境変数で gate
+  # され (mock server 必須)、ここでは未設定なので skip される。
+  swift:
+    name: Swift Client
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: clients/swift
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: swift build
+
+      - name: Test (live e2e は UNISON_LIVE gate で skip)
+        run: swift test
