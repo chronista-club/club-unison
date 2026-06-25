@@ -59,8 +59,10 @@ struct Ping: UnisonRequest {
 | Package / 公開 API surface | ✅ |
 | wire 型(swift-protobuf 生成) | ✅ |
 | QUIC transport / handshake(ALPN "unison" + trust policy) | ✅ (`NWProtocolQUIC`、spike で quinn 疎通実証済み) |
+| wire framing(typed frame / UnisonPacket / ProtocolMessage encode・decode）| ✅ (Rust golden fixture と **byte 一致**検証済み) |
+| `FrameReader`（chunk 跨ぎ frame 再構成） | ✅ |
 | `Endpoint.bonjour` discovery | ⬜ TODO |
-| framing(4B BE length-prefix)/ `__channel:` mux | ⬜ TODO |
+| `__channel:` mux（open frame → open_ack 待ち） | ⬜ TODO |
 | identity handshake / `serverIdentity()` | ⬜ TODO |
 | `StreamChannel.request` / `events` 実配線 | ⬜ TODO |
 | `DatagramChannel.events`(QUIC datagram demux) | ⬜ TODO |
