@@ -225,6 +225,22 @@ cargo run -p unison-agent --example simple_query        # one-shot query
 cargo run -p unison-agent --example interactive_chat    # multi-turn conversation
 ```
 
+## Polyglot clients
+
+The server stays Rust; clients are first-class siblings under [`clients/`](https://github.com/chronista-club/club-unison/tree/main/clients). Wire-format conformance and protocol semantics are owned by this framework, so each client interops byte-for-byte with the Rust server.
+
+| Client | Transport | Distribution |
+|--------|-----------|--------------|
+| [`clients/typescript`](https://github.com/chronista-club/club-unison/tree/main/clients/typescript) | WebTransport (HTTP/3) | npm `@chronista-club/unison-client` |
+| [`clients/ruby`](https://github.com/chronista-club/club-unison/tree/main/clients/ruby) | raw QUIC (FFI → Rust) | RubyGems `unison-client` |
+| [`clients/swift`](https://github.com/chronista-club/club-unison/tree/main/clients/swift) | raw QUIC (Apple `NWProtocolQUIC`, ALPN `"unison"`) | SPM (monorepo path / git) — see note |
+
+> **Swift package consumption**: `clients/swift` の `Package.swift` は repo の
+> サブディレクトリにあり、SPM の version 指定 remote 依存 (`.package(url:from:)`)
+> は repo root の `Package.swift` を前提とするため使えない。consumer (例: VP) は
+> **path 依存** (`.package(path: "../club-unison/clients/swift")`、monorepo 隣接)
+> で参照する。将来 versioned 配布が要るなら別 repo 切り出しを検討。
+
 ---
 
 ## Development

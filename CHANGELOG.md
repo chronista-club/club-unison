@@ -7,6 +7,46 @@
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-06-25 — raw QUIC ALPN "unison" + Swift client SDK
+
+> Apple `NWProtocolQUIC` との interop のため raw QUIC に ALPN を追加し
+> (RFC 9001 §8.1 — QUIC は ALPN 必須)、Swift native client SDK (`clients/swift`)
+> を新設。SemVer minor (= additive)。raw QUIC は server/client 両端が同 label を
+> negotiate するため後方互換。
+
+### Added
+
+- **raw QUIC ALPN** (`network::UNISON_ALPN = "unison"`): server (`quic.rs`) /
+  client (`trust.rs` 全 trust mode) が ALPN を negotiate。空 ALPN で handshake
+  していた従来は QUIC 仕様逸脱で、Apple `NWProtocolQUIC` 等の厳格実装と interop
+  できなかった。WebTransport 経路は HTTP/3 の `"h3"` 固定 (別 ingress) で無影響。
+  PR: [#74](https://github.com/chronista-club/club-unison/pull/74)
+- **Swift client SDK** (`clients/swift` — new): Apple `Network.framework`
+  (`NWProtocolQUIC`) + `swift-protobuf`。`clients/{ruby,typescript}` の swift
+  sibling。stream channel (connect / openChannel / request-response / event /
+  identity handshake) が実 quinn server 相手に live e2e 済み。API は
+  `design/typescript-client-api.md` と同形式 (`AsyncStream` / `async throws` /
+  `actor`)。PR: [#75](https://github.com/chronista-club/club-unison/pull/75)–[#78](https://github.com/chronista-club/club-unison/pull/78)
+
+### Notes
+
+- Swift client の datagram channel / `Endpoint.bonjour` discovery / KDL→Swift
+  codegen は後続。現状 stream channel が GA。
+
+## [1.2.0] - 2026-06-18 — ProtocolServer cert 指定 spawn (federation API gap)
+
+> chronista-hub の world federation 要件で判明した API gap の解消。spawn 経路が
+> `dev_localhost` cert 固定で非 loopback 公開 (tailnet / public federation) が
+> できなかった問題を、cert 指定 spawn variant の追加で解決。SemVer minor (= additive)。
+
+### Added
+
+- `ProtocolServer::spawn_listen_with_cert` / `spawn_listen_shared_with_cert`:
+  `CertSource` を受ける spawn variant。`QuicServer::builder().cert_source()` を
+  経由し、非 loopback アドレスでの公開が可能に。既存 `spawn_listen` /
+  `spawn_listen_shared` は `dev_localhost` 既定へ委譲し後方互換維持。
+  PR: [#73](https://github.com/chronista-club/club-unison/pull/73)
+
 ## [1.1.0] - 2026-05-28 — Hailing α: runtime protocol discovery + AI-native MCP tools
 
 > Hailing α Epic の minor release。 `unison.discovery` channel で server が自身の
