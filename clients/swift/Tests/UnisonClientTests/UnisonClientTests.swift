@@ -25,13 +25,13 @@ import Testing
 // 例: consumer が定義する channel meta はこう書ける (= 生成 or 手書きの形)。
 private struct PingPongMeta: StreamChannelMeta {
     static let name = "ping-pong"
-    struct Tick: Sendable, Equatable {}
+    struct Tick: Codable, Sendable, Equatable {}
     typealias Event = Tick
 }
 
 private struct Ping: UnisonRequest {
     static let method = "Ping"
-    struct Pong: Sendable, Equatable { let reply: String }
+    struct Pong: Codable, Sendable, Equatable { let reply: String }
     typealias Response = Pong
     let message: String
 }

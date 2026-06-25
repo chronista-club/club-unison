@@ -61,11 +61,15 @@ struct Ping: UnisonRequest {
 | QUIC transport / handshake(ALPN "unison" + trust policy) | ✅ (`NWProtocolQUIC`、spike で quinn 疎通実証済み) |
 | wire framing(typed frame / UnisonPacket / ProtocolMessage encode・decode）| ✅ (Rust golden fixture と **byte 一致**検証済み) |
 | `FrameReader`（chunk 跨ぎ frame 再構成） | ✅ |
+| `ChannelStream` / `ChannelTransport` 抽象 | ✅ (transport をロジックから分離) |
+| `__channel:` mux（open frame → open_ack 待ち） | ✅ (in-memory test 済み) |
+| identity handshake / `serverIdentity()` | ✅ (in-memory test 済み) |
+| `StreamChannel.request` / `events` 実配線 | ✅ (request/response + event push、in-memory test 済み) |
+| **NWProtocolQUIC stream adapter**（`QUICTransport.openStream`/`acceptStream`） | ⬜ TODO (= 抽象を実 QUIC stream に接続、live e2e) |
 | `Endpoint.bonjour` discovery | ⬜ TODO |
-| `__channel:` mux（open frame → open_ack 待ち） | ⬜ TODO |
-| identity handshake / `serverIdentity()` | ⬜ TODO |
-| `StreamChannel.request` / `events` 実配線 | ⬜ TODO |
 | `DatagramChannel.events`(QUIC datagram demux) | ⬜ TODO |
+
+> **テスト戦略**: channel 状態機械(open / request-response / event / identity)は `ChannelStream` 抽象 + in-memory paired stream で決定論的に検証(`ChannelTests`)。NWProtocolQUIC の実 stream は次 pass でこの抽象に adapt し、`unison mock` 相手の live e2e を通す。
 
 ## 開発
 

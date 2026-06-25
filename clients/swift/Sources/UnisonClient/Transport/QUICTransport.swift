@@ -6,7 +6,7 @@ import Security
 ///
 /// ALPN は `"unison"` 固定 (= Rust 側 `network::UNISON_ALPN` と一致。 QUIC は
 /// RFC 9001 §8.1 で ALPN 必須)。 framing / channel mux はこの上の層が担う。
-actor QUICTransport {
+actor QUICTransport: ChannelTransport {
     /// raw QUIC 経路の ALPN。 Rust `network::UNISON_ALPN` と一致させること。
     static let alpn = "unison"
 
@@ -57,6 +57,24 @@ actor QUICTransport {
 
     /// 接続を閉じる。
     func cancel() {
+        connection.cancel()
+    }
+
+    // MARK: - ChannelTransport 適合
+
+    /// client 起点の bidi QUIC stream を開く。
+    /// TODO(next pass): NWMultiplexGroup / NWConnectionGroup で stream を払い出す。
+    func openStream() async throws -> any ChannelStream {
+        throw UnisonError.notImplemented("QUICTransport.openStream (NWProtocolQUIC stream は次 pass)")
+    }
+
+    /// server 起点の bidi QUIC stream を受け入れる (= identity stream)。
+    /// TODO(next pass): group の newConnectionHandler から払い出す。
+    func acceptStream() async throws -> (any ChannelStream)? {
+        throw UnisonError.notImplemented("QUICTransport.acceptStream (NWProtocolQUIC stream は次 pass)")
+    }
+
+    func close() async {
         connection.cancel()
     }
 

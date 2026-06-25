@@ -10,15 +10,17 @@ public protocol ChannelMeta: Sendable {
 }
 
 /// stream backend の channel meta (= request/response + server push event)。
+///
+/// `Event` は wire payload (= 既定 JSON codec) から decode するため `Decodable`。
 public protocol StreamChannelMeta: ChannelMeta {
     /// この channel が server から push する event の型。
-    associatedtype Event: Sendable
+    associatedtype Event: Sendable & Decodable
 }
 
 /// datagram backend の channel meta (= unreliable な server push event 専用)。
 public protocol DatagramChannelMeta: ChannelMeta {
     /// この channel が server から push する event の型。
-    associatedtype Event: Sendable
+    associatedtype Event: Sendable & Decodable
 }
 
 /// channel 上で送る request。 method 名と response 型を静的に紐づける。
@@ -27,9 +29,11 @@ public protocol DatagramChannelMeta: ChannelMeta {
 /// `request<R: M.Request>` を `request<R: UnisonRequest>` に置き換えている
 /// (= associatedtype を generic constraint に使えない Swift の制約を、 caller 体験を
 /// 損なわず回避)。
-public protocol UnisonRequest: Sendable {
+///
+/// wire は既定 JSON codec のため request は `Encodable`、 response は `Decodable`。
+public protocol UnisonRequest: Sendable & Encodable {
     /// この request に対する response の型。
-    associatedtype Response: Sendable
+    associatedtype Response: Sendable & Decodable
     /// wire 上の method 名。
     static var method: String { get }
 }
