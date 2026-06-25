@@ -570,9 +570,13 @@ impl QuicServer {
 
         // CertifiedKey holds both cert chain and signing key in a single Arc,
         // avoiding any clone_key() of the private key (zeroize-friendlier).
-        let rustls_server_config = RustlsServerConfig::builder()
+        let mut rustls_server_config = RustlsServerConfig::builder()
             .with_no_client_auth()
             .with_cert_resolver(Arc::new(SingleCertResolver(certified_key)));
+
+        // QUIC は ALPN 必須 (RFC 9001 §8.1)。 client (trust.rs) と同一 label で
+        // 合意する。 SSOT は `super::UNISON_ALPN`。
+        rustls_server_config.alpn_protocols = vec![super::UNISON_ALPN.to_vec()];
 
         let crypto = quinn::crypto::rustls::QuicServerConfig::try_from(rustls_server_config)?;
         let mut server_config = ServerConfig::with_crypto(Arc::new(crypto));
