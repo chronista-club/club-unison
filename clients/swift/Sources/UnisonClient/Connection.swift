@@ -27,11 +27,11 @@ public struct ServerIdentity: Sendable, Equatable {
 
 /// 確立済みの Unison 接続。 channel の open と lifecycle event を提供する。
 public actor Connection {
-    private let transport: QUICTransport
-    private let events: AsyncStream<ConnectionEvent>
-    private let eventSink: AsyncStream<ConnectionEvent>.Continuation
+    private let transport: any ChannelTransport
+    private nonisolated let events: AsyncStream<ConnectionEvent>
+    private nonisolated let eventSink: AsyncStream<ConnectionEvent>.Continuation
 
-    init(transport: QUICTransport) {
+    init(transport: any ChannelTransport) {
         self.transport = transport
         let (stream, sink) = AsyncStream<ConnectionEvent>.makeStream()
         self.events = stream
@@ -44,31 +44,34 @@ public actor Connection {
         events
     }
 
-    /// server の自己記述を取得する。
+    /// server の自己記述を取得する (= identity stream を accept して読む)。
     public func serverIdentity() async throws -> ServerIdentity {
-        // TODO(next pass): identity handshake frame を読んで decode する。
-        throw UnisonError.notImplemented("Connection.serverIdentity")
+        guard let stream = try await transport.acceptStream() else {
+            throw UnisonError.notConnected
+        }
+        return try await IdentityHandshake.read(from: stream)
     }
 
-    /// stream channel を開く。
+    /// stream channel を開く (= 新 stream → `__channel:{name}` open → open_ack 待ち)。
     public func openChannel<M: StreamChannelMeta>(_ meta: M) async throws -> StreamChannel<M> {
         _ = meta
-        // TODO(next pass): `__channel:{name}` open frame 送信 → open_ack 待ち。
-        let core = ChannelCore(name: M.name)
+        let stream = try await transport.openStream()
+        let core = StreamChannelCore(name: M.name, stream: stream)
+        await core.start()
+        try await core.open()
         return StreamChannel(core: core)
     }
 
     /// datagram channel を開く。
     public func openDatagramChannel<M: DatagramChannelMeta>(_ meta: M) async throws -> DatagramChannel<M> {
         _ = meta
-        // TODO(next pass): datagram channel 登録 + channelId 紐づけ。
-        let core = ChannelCore(name: M.name)
-        return DatagramChannel(core: core)
+        // TODO(next pass): datagram channel 登録 + channelId 紐づけ (QUIC datagram)。
+        return DatagramChannel(name: M.name)
     }
 
     /// 接続を切断する。
     public func disconnect() async {
-        await transport.cancel()
+        await transport.close()
         eventSink.yield(.disconnected(reason: nil))
         eventSink.finish()
     }

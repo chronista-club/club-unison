@@ -4,25 +4,44 @@ import Foundation
 ///
 /// `Connection.openChannel(_:)` が返す。 `M` で event / request の型が静的に決まる。
 public struct StreamChannel<M: StreamChannelMeta>: Sendable {
-    private let core: ChannelCore
+    private let core: StreamChannelCore
 
-    init(core: ChannelCore) {
+    init(core: StreamChannelCore) {
         self.core = core
     }
 
-    /// server → client の push event ストリーム。
+    /// server → client の push event ストリーム。 wire payload を `M.Event` へ
+    /// JSON decode する。 decode 不能な event は skip する。
     public var events: AsyncStream<M.Event> {
-        // TODO(next pass): typed-frame dispatch を decode して M.Event を流す。
-        // scaffold 段階では即終端の空ストリームを返す。
-        AsyncStream { $0.finish() }
+        let raw = core.eventStream
+        return AsyncStream { continuation in
+            let task = Task {
+                let decoder = JSONDecoder()
+                for await msg in raw {
+                    if let event = try? decoder.decode(M.Event.self, from: msg.payload) {
+                        continuation.yield(event)
+                    }
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 
     /// request を 1 本送り、 対応する response を待つ。
     public func request<R: UnisonRequest>(_ request: R) async throws -> R.Response {
-        // TODO(next pass): R.method + payload を typed frame に乗せて送信し、
-        // 同 id の response frame を await して R.Response に decode する。
-        _ = request
-        throw UnisonError.notImplemented("StreamChannel.request")
+        let payload: Data
+        do {
+            payload = try JSONEncoder().encode(request)
+        } catch {
+            throw UnisonError.codec("request encode 失敗: \(error)")
+        }
+        let responseBytes = try await core.request(method: R.method, payload: payload)
+        do {
+            return try JSONDecoder().decode(R.Response.self, from: responseBytes)
+        } catch {
+            throw UnisonError.codec("response decode 失敗: \(error)")
+        }
     }
 
     /// channel を閉じる。
@@ -32,14 +51,16 @@ public struct StreamChannel<M: StreamChannelMeta>: Sendable {
 }
 
 /// datagram channel ハンドル (= unreliable な server push event 専用)。
+///
+/// QUIC datagram (RFC9221) の demux は後続 pass。 現状は型 surface のみ。
 public struct DatagramChannel<M: DatagramChannelMeta>: Sendable {
-    private let core: ChannelCore
+    private let name: String
 
-    init(core: ChannelCore) {
-        self.core = core
+    init(name: String) {
+        self.name = name
     }
 
-    /// server → client の push event ストリーム (QUIC datagram, RFC9221)。
+    /// server → client の push event ストリーム (QUIC datagram)。
     public var events: AsyncStream<M.Event> {
         // TODO(next pass): datagram demux → M.Event decode。
         AsyncStream { $0.finish() }
@@ -47,23 +68,6 @@ public struct DatagramChannel<M: DatagramChannelMeta>: Sendable {
 
     /// channel を閉じる。
     public func close() async {
-        await core.close()
-    }
-}
-
-/// channel の内部状態 (transport stream / datagram subscription の保持先)。
-///
-/// scaffold 段階では close のみ。 後続 pass で send/recv loop と frame dispatch を持つ。
-actor ChannelCore {
-    let name: String
-    private var closed = false
-
-    init(name: String) {
-        self.name = name
-    }
-
-    func close() {
-        closed = true
-        // TODO(next pass): 紐づく QUIC stream / datagram subscription を tear down。
+        // TODO(next pass): datagram subscription tear down。
     }
 }
