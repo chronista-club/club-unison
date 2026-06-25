@@ -2,7 +2,7 @@
 
 Unison protocol の **Swift client SDK**。`clients/ruby` / `clients/typescript` の swift sibling で、wire-format conformance / protocol semantics / version 互換は club-unison framework 側が owns する。consumer (例: Vantage Point の macOS menu bar agent / visionOS app) はこの package を SPM 依存として使う。
 
-> **Status**: `scaffold` — package 構造 / 公開 API contract / wire 型 / NWProtocolQUIC transport (handshake) まで。framing / channel mux / identity handshake は後続 pass。下記「実装状況」参照。
+> **Status**: `alpha` — stream channel が実 QUIC で動作(connect / openChannel / request-response / event / identity、`unison mock` 相手の live e2e 済み)。残り: datagram channel / bonjour discovery。下記「実装状況」参照。
 
 ## アーキテクチャ
 
@@ -65,11 +65,24 @@ struct Ping: UnisonRequest {
 | `__channel:` mux（open frame → open_ack 待ち） | ✅ (in-memory test 済み) |
 | identity handshake / `serverIdentity()` | ✅ (in-memory test 済み) |
 | `StreamChannel.request` / `events` 実配線 | ✅ (request/response + event push、in-memory test 済み) |
-| **NWProtocolQUIC stream adapter**（`QUICTransport.openStream`/`acceptStream`） | ⬜ TODO (= 抽象を実 QUIC stream に接続、live e2e) |
+| **NWProtocolQUIC stream adapter**（`NWMultiplexGroup`/`NWConnectionGroup`） | ✅ (実 quinn 相手の **live e2e** 済み) |
 | `Endpoint.bonjour` discovery | ⬜ TODO |
 | `DatagramChannel.events`(QUIC datagram demux) | ⬜ TODO |
 
-> **テスト戦略**: channel 状態機械(open / request-response / event / identity)は `ChannelStream` 抽象 + in-memory paired stream で決定論的に検証(`ChannelTests`)。NWProtocolQUIC の実 stream は次 pass でこの抽象に adapt し、`unison mock` 相手の live e2e を通す。
+> **テスト戦略**: channel 状態機械(open / request-response / event / identity)は `ChannelStream` 抽象 + in-memory paired stream で決定論的に検証(`ChannelTests`)。実 NWProtocolQUIC stream はこの抽象に adapt 済み(`NWStreamChannel` / `QUICTransport`)。
+
+### live e2e
+
+`LiveE2ETests` は CI 非対象(環境変数で gate)。`unison mock`(quinn)相手に実 QUIC round-trip を確認する:
+
+```bash
+# 1) Rust 側で mock server を起動
+target/debug/unison mock --schema schemas/ping_pong.kdl --addr '[::1]:7878'
+# 2) Swift 側で live test
+cd clients/swift && UNISON_LIVE=1 swift test --filter LiveE2E
+```
+
+connect(ALPN "unison")→ openChannel → request → response decode が **Apple NWProtocolQUIC ↔ Rust quinn** で interop することの最終証明。
 
 ## 開発
 
