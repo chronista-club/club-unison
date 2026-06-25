@@ -6,6 +6,16 @@ use crate::codec::{CodecError, Decodable, Encodable, JsonCodec};
 use crate::packet::{SerializationError, UnisonPacket};
 use crate::proto;
 
+/// raw QUIC 経路の ALPN protocol id。
+///
+/// QUIC は ALPN を必須とする (RFC 9001 §8.1 — endpoints MUST use ALPN)。
+/// raw QUIC の server ([`quic::QuicServer`]) と client ([`trust::TrustAnchors`])
+/// は同一 label で合意する必要があるため、 ここを SSOT とする。
+///
+/// WebTransport 経路 ([`webtransport`]) は HTTP/3 上に乗るため ALPN は `"h3"`
+/// 固定 (`wtransport` 依存が内部で設定) であり、 本 const は適用されない。
+pub const UNISON_ALPN: &[u8] = b"unison";
+
 pub mod cert;
 pub mod channel;
 pub mod client;

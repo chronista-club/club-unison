@@ -52,14 +52,13 @@ pub enum TrustAnchors {
 impl TrustAnchors {
     /// Build the underlying [`rustls::ClientConfig`] for this trust mode.
     pub fn build_client_config(self) -> Result<Arc<rustls::ClientConfig>> {
-        match self {
+        let mut config = match self {
             Self::System => {
                 let mut roots = RootCertStore::empty();
                 roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-                let config = rustls::ClientConfig::builder()
+                rustls::ClientConfig::builder()
                     .with_root_certificates(roots)
-                    .with_no_client_auth();
-                Ok(Arc::new(config))
+                    .with_no_client_auth()
             }
             Self::Custom(certs) => {
                 let mut roots = RootCertStore::empty();
@@ -68,23 +67,27 @@ impl TrustAnchors {
                         .add(cert)
                         .context("failed to add custom CA certificate to root store")?;
                 }
-                let config = rustls::ClientConfig::builder()
+                rustls::ClientConfig::builder()
                     .with_root_certificates(roots)
-                    .with_no_client_auth();
-                Ok(Arc::new(config))
+                    .with_no_client_auth()
             }
             Self::SkipVerification => {
                 tracing::warn!(
                     "TrustAnchors::SkipVerification — server certificates will NOT be \
                      verified. DEV / TEST ONLY, never use in production."
                 );
-                let config = rustls::ClientConfig::builder()
+                rustls::ClientConfig::builder()
                     .dangerous()
                     .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
-                    .with_no_client_auth();
-                Ok(Arc::new(config))
+                    .with_no_client_auth()
             }
-        }
+        };
+
+        // QUIC は ALPN 必須 (RFC 9001 §8.1)。 server (quic.rs) と同一 label で
+        // 合意する。 全 trust mode 共通。 SSOT は `super::UNISON_ALPN`。
+        config.alpn_protocols = vec![super::UNISON_ALPN.to_vec()];
+
+        Ok(Arc::new(config))
     }
 }
 
@@ -140,5 +143,29 @@ impl ServerCertVerifier for SkipServerVerification {
             SignatureScheme::ED25519,
             SignatureScheme::ED448,
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// QUIC は ALPN 必須 (RFC 9001 §8.1)。 全 trust mode が `super::UNISON_ALPN` を
+    /// client config に設定すること = server (quic.rs) と確実に label 合意できること
+    /// を回帰として担保する (Apple `NWProtocolQUIC` 等の厳格実装との interop 前提)。
+    #[test]
+    fn every_trust_mode_advertises_unison_alpn() {
+        let expected = vec![super::super::UNISON_ALPN.to_vec()];
+        for anchors in [
+            TrustAnchors::System,
+            TrustAnchors::Custom(vec![]),
+            TrustAnchors::SkipVerification,
+        ] {
+            let config = anchors.build_client_config().expect("build client config");
+            assert_eq!(
+                config.alpn_protocols, expected,
+                "client config must advertise the unison ALPN"
+            );
+        }
     }
 }
