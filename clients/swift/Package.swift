@@ -27,7 +27,10 @@ let package = Package(
         ),
         .testTarget(
             name: "UnisonClientTests",
-            dependencies: ["UnisonClient"]
+            dependencies: ["UnisonClient"],
+            // Rust `tests/fixtures/wire/` の golden byte vector を取り込み、
+            // Swift encoder の出力が Rust と byte 一致することを検証する。
+            resources: [.copy("Fixtures")]
         ),
     ]
 )
