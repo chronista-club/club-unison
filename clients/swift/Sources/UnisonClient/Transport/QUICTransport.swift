@@ -4,78 +4,95 @@ import Security
 
 /// Apple `Network.framework` の `NWProtocolQUIC` を使う raw QUIC transport。
 ///
-/// ALPN は `"unison"` 固定 (= Rust 側 `network::UNISON_ALPN` と一致。 QUIC は
-/// RFC 9001 §8.1 で ALPN 必須)。 framing / channel mux はこの上の層が担う。
+/// `NWMultiplexGroup` + `NWConnectionGroup` で 1 本の QUIC 接続に複数 stream を
+/// 多重化する。 client 起点 stream は `NWConnection(from: group)`、 server 起点
+/// stream (= identity) は `newConnectionHandler` 経由で受ける。
+///
+/// ALPN は `"unison"` 固定 (= Rust `network::UNISON_ALPN` と一致。 QUIC は
+/// RFC 9001 §8.1 で ALPN 必須)。
 actor QUICTransport: ChannelTransport {
     /// raw QUIC 経路の ALPN。 Rust `network::UNISON_ALPN` と一致させること。
     static let alpn = "unison"
 
-    private let connection: NWConnection
+    private let multiplex: NWMultiplexGroup
+    private let group: NWConnectionGroup
+    private let callbackQueue = DispatchQueue(label: "club.chronista.unison.quic")
+    private let accepted = PendingStreams()
 
-    private init(connection: NWConnection) {
-        self.connection = connection
+    private init(multiplex: NWMultiplexGroup, group: NWConnectionGroup) {
+        self.multiplex = multiplex
+        self.group = group
     }
 
-    /// QUIC 接続を確立し、 `.ready` (handshake 完了) まで待つ。
+    /// QUIC 接続を確立し、 group が `.ready` になるまで待つ。
     static func connect(to endpoint: Endpoint, trust: TrustPolicy) async throws -> QUICTransport {
-        let nwEndpoint = try Self.resolve(endpoint)
+        let nwEndpoint = try resolve(endpoint)
 
-        let quic = NWProtocolQUIC.Options(alpn: [Self.alpn])
-        Self.applyTrust(trust, to: quic.securityProtocolOptions)
-
+        let quic = NWProtocolQUIC.Options(alpn: [alpn])
+        applyTrust(trust, to: quic.securityProtocolOptions)
         let params = NWParameters(quic: quic)
-        let connection = NWConnection(to: nwEndpoint, using: params)
-        let transport = QUICTransport(connection: connection)
-        try await transport.start()
+
+        let multiplex = NWMultiplexGroup(to: nwEndpoint)
+        let group = NWConnectionGroup(with: multiplex, using: params)
+        let transport = QUICTransport(multiplex: multiplex, group: group)
+        try await transport.startGroup()
         return transport
     }
 
-    private func start() async throws {
+    private func startGroup() async throws {
+        let resumed = ResumeOnce()
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            // continuation を 1 回だけ resume する guard。
-            let resumed = LockedBox(false)
-            connection.stateUpdateHandler = { state in
+            group.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
-                    if resumed.swap(true) == false { cont.resume() }
+                    if resumed.tryResume() { cont.resume() }
                 case .failed(let error):
-                    if resumed.swap(true) == false {
-                        cont.resume(throwing: UnisonError.transport("\(error)"))
-                    }
-                case .waiting(let error):
-                    // server 不在等。 ここで諦める (auto-reconnect は caller 責務)。
-                    if resumed.swap(true) == false {
-                        cont.resume(throwing: UnisonError.transport("waiting: \(error)"))
-                    }
+                    if resumed.tryResume() { cont.resume(throwing: UnisonError.transport("group failed: \(error)")) }
+                case .cancelled:
+                    if resumed.tryResume() { cont.resume(throwing: UnisonError.notConnected) }
                 default:
+                    // `.waiting` は ready 後にも (loopback で ENETDOWN として) 出るが
+                    // stream は正常に開けるため無視する。 真の接続不能は下の timeout で拾う。
                     break
                 }
             }
-            connection.start(queue: .global())
+            // server 起点 stream (= identity) を受ける。
+            group.newConnectionHandler = { [weak self] conn in
+                guard let self else { return }
+                Task { await self.handleIncoming(conn) }
+            }
+            group.start(queue: callbackQueue)
+            // ready が来ない (= server 不在等) 場合の脱出。
+            callbackQueue.asyncAfter(deadline: .now() + 10) {
+                if resumed.tryResume() {
+                    cont.resume(throwing: UnisonError.transport("QUIC connect timeout"))
+                }
+            }
         }
     }
 
-    /// 接続を閉じる。
-    func cancel() {
-        connection.cancel()
+    private func handleIncoming(_ conn: NWConnection) async {
+        if let stream = try? await NWStreamChannel.start(conn, queue: callbackQueue) {
+            await accepted.push(stream)
+        }
     }
 
     // MARK: - ChannelTransport 適合
 
-    /// client 起点の bidi QUIC stream を開く。
-    /// TODO(next pass): NWMultiplexGroup / NWConnectionGroup で stream を払い出す。
     func openStream() async throws -> any ChannelStream {
-        throw UnisonError.notImplemented("QUICTransport.openStream (NWProtocolQUIC stream は次 pass)")
+        guard let conn = NWConnection(from: group) else {
+            throw UnisonError.transport("openStream: NWConnection(from: group) が nil")
+        }
+        return try await NWStreamChannel.start(conn, queue: callbackQueue)
     }
 
-    /// server 起点の bidi QUIC stream を受け入れる (= identity stream)。
-    /// TODO(next pass): group の newConnectionHandler から払い出す。
     func acceptStream() async throws -> (any ChannelStream)? {
-        throw UnisonError.notImplemented("QUICTransport.acceptStream (NWProtocolQUIC stream は次 pass)")
+        await accepted.pop()
     }
 
     func close() async {
-        connection.cancel()
+        group.cancel()
+        await accepted.finish()
     }
 
     // MARK: - Endpoint / trust 解決
@@ -83,23 +100,21 @@ actor QUICTransport: ChannelTransport {
     private static func resolve(_ endpoint: Endpoint) throws -> NWEndpoint {
         switch endpoint {
         case .localDaemon(let port):
-            return .hostPort(host: "::1", port: Self.port(port))
+            return .hostPort(host: "::1", port: nwPort(port))
         case .host(let host, let port):
-            return .hostPort(host: NWEndpoint.Host(host), port: Self.port(port))
+            return .hostPort(host: NWEndpoint.Host(host), port: nwPort(port))
         case .bonjour:
-            // TODO(next pass): NWEndpoint.service / NWBrowser による discovery。
             throw UnisonError.notImplemented("Endpoint.bonjour")
         }
     }
 
-    private static func port(_ raw: UInt16) -> NWEndpoint.Port {
+    private static func nwPort(_ raw: UInt16) -> NWEndpoint.Port {
         NWEndpoint.Port(rawValue: raw)!
     }
 
     private static func applyTrust(_ trust: TrustPolicy, to options: sec_protocol_options_t) {
         switch trust {
         case .system:
-            // default 検証 (verify block を設定しない)。
             break
         case .skipVerify:
             sec_protocol_options_set_verify_block(
@@ -127,17 +142,32 @@ actor QUICTransport: ChannelTransport {
     }
 }
 
-/// continuation の二重 resume を防ぐ最小の同期 box。
-private final class LockedBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: Bool
-    init(_ value: Bool) { self.value = value }
-    /// 旧値を返しつつ新値を入れる。
-    func swap(_ new: Bool) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        let old = value
-        value = new
-        return old
+/// accept 待ち server-起点 stream の continuation ベース queue。
+actor PendingStreams {
+    private var buffer: [any ChannelStream] = []
+    private var finished = false
+    private var waiter: CheckedContinuation<(any ChannelStream)?, Never>?
+
+    func push(_ stream: any ChannelStream) {
+        if let w = waiter {
+            waiter = nil
+            w.resume(returning: stream)
+        } else {
+            buffer.append(stream)
+        }
+    }
+
+    func finish() {
+        finished = true
+        if let w = waiter {
+            waiter = nil
+            w.resume(returning: nil)
+        }
+    }
+
+    func pop() async -> (any ChannelStream)? {
+        if !buffer.isEmpty { return buffer.removeFirst() }
+        if finished { return nil }
+        return await withCheckedContinuation { cont in waiter = cont }
     }
 }
