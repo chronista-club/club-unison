@@ -9,6 +9,11 @@
  */
 
 import type { Codec } from "./codec/codec.js";
+import {
+  AUTH_CHANNEL_META,
+  AUTHENTICATE_METHOD,
+  toAuthenticateRequest,
+} from "./channel/auth.js";
 import { defaultCodec } from "./channel/default_codec.js";
 import { DatagramChannelImpl } from "./channel/datagram_channel.js";
 import { DatagramDispatcher } from "./channel/dispatcher.js";
@@ -48,6 +53,13 @@ export interface UnisonConnectOptions extends ConnectOptions {
   awaitIdentity?: boolean;
   /** identity handshake の timeout ms (= default: 5000) */
   identityTimeoutMs?: number;
+  /**
+   * 接続直後に 1 回提示する credential (= connection-level auth、 v1.4.0)。指定すると
+   * identity handshake 後に `unison.auth` で Authenticate し、 拒否 (ok=false) なら
+   * connect が throw する。server が `enable_auth` 未設定なら open が reject される。
+   * 設計: `design/connection-auth.md` §5.8。
+   */
+  credential?: Uint8Array;
 }
 
 /**
@@ -117,6 +129,35 @@ export class UnisonClient {
     return new DatagramChannelImpl(meta, this.#connection, this.#dispatcher, this.#codec);
   }
 
+  /**
+   * credential を提示して connection を認証する (= connection-level authN、 v1.4.0)。
+   *
+   * `unison.auth` channel を open して `Authenticate` request を 1 回送り、 server の
+   * verifier 結果を待つ。`ok=false` (= 拒否) なら throw。認証成功後は server 側が
+   * この connection の principal を立てるので、 以降 open する channel は per-message
+   * gate を通過できる。**他 channel を open する前に呼ぶこと** (= 未認証だと principal
+   * None で app handler に gate される)。
+   *
+   * server が `enable_auth` 未設定なら `unison.auth` が未登録で open が reject される。
+   * `connect({ credential })` は内部でこれを呼ぶ。設計: `design/connection-auth.md` §5.8。
+   */
+  async authenticate(credential: Uint8Array): Promise<void> {
+    if (this.#closed) throw new Error("client is closed");
+    const channel = await this.openChannel(AUTH_CHANNEL_META);
+    try {
+      // response は ChannelPayload (= Record<string, unknown>)。ok!==true を拒否扱い。
+      const result = await channel.request(
+        AUTHENTICATE_METHOD,
+        toAuthenticateRequest(credential),
+      );
+      if (result["ok"] !== true) {
+        throw new Error("authentication denied by server verifier");
+      }
+    } finally {
+      await channel.close().catch(() => undefined);
+    }
+  }
+
   /** Connection を閉じる (= dispatcher 停止 + 配下 channel を tear down) */
   async disconnect(reason?: string): Promise<void> {
     if (this.#closed) return;
@@ -151,5 +192,17 @@ export async function connect(opts: UnisonConnectOptions): Promise<UnisonClient>
       identity = undefined;
     }
   }
-  return new UnisonClient(connection, codec, identity);
+  const client = new UnisonClient(connection, codec, identity);
+
+  // connection-level auth (= opts.credential 指定時、 identity handshake 後に 1 回認証)。
+  // 拒否なら connection を畳んで throw する (= 認証必須を caller に伝える)。
+  if (opts.credential !== undefined) {
+    try {
+      await client.authenticate(opts.credential);
+    } catch (err) {
+      await client.disconnect().catch(() => undefined);
+      throw err;
+    }
+  }
+  return client;
 }

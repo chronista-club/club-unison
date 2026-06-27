@@ -18,4 +18,24 @@ public enum UnisonClient {
         let transport = try await QUICTransport.connect(to: endpoint, trust: trust)
         return Connection(transport: transport)
     }
+
+    /// endpoint へ接続し、 接続直後に credential を提示して認証してから [`Connection`] を
+    /// 返す (= Rust `connect_with_credential` の対応物、 v1.4.0)。
+    ///
+    /// 認証が拒否された場合は connection を畳んで throw する。設計:
+    /// `design/connection-auth.md` §5.8。
+    public static func connect(
+        to endpoint: Endpoint,
+        trust: TrustPolicy,
+        credential: [UInt8]
+    ) async throws -> Connection {
+        let conn = try await connect(to: endpoint, trust: trust)
+        do {
+            try await conn.authenticate(credential)
+        } catch {
+            await conn.disconnect()
+            throw error
+        }
+        return conn
+    }
 }

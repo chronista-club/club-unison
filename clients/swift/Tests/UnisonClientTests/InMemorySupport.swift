@@ -76,7 +76,8 @@ enum EchoServerStub {
     static func serve(
         _ stream: any ChannelStream,
         rejectOpen: Bool = false,
-        pushEvents: [Data] = []
+        pushEvents: [Data] = [],
+        respond: (@Sendable (String, Data) -> Data?)? = nil
     ) -> Task<Void, Never> {
         Task {
             var reader = FrameReader()
@@ -109,7 +110,8 @@ enum EchoServerStub {
                         resp.id = msg.id
                         resp.method = msg.method
                         resp.msgType = .response
-                        resp.payload = msg.payload // echo
+                        // respond クロージャがあればその応答、 無ければ echo (= 同 payload)。
+                        resp.payload = respond?(msg.method, msg.payload) ?? msg.payload
                         await sendFrame(stream, resp)
                     }
                 }
@@ -145,20 +147,23 @@ final class StubTransport: ChannelTransport, @unchecked Sendable {
     let rejectOpen: Bool
     let pushEvents: [Data]
     let identityJSON: String
+    let respond: (@Sendable (String, Data) -> Data?)?
 
     init(
         rejectOpen: Bool = false,
         pushEvents: [Data] = [],
-        identityJSON: String = #"{"name":"stub","version":"1.0.0","namespace":"test","channels":[{"name":"ping-pong"}]}"#
+        identityJSON: String = #"{"name":"stub","version":"1.0.0","namespace":"test","channels":[{"name":"ping-pong"}]}"#,
+        respond: (@Sendable (String, Data) -> Data?)? = nil
     ) {
         self.rejectOpen = rejectOpen
         self.pushEvents = pushEvents
         self.identityJSON = identityJSON
+        self.respond = respond
     }
 
     func openStream() async throws -> any ChannelStream {
         let (client, server) = InMemoryPair.make()
-        _ = EchoServerStub.serve(server, rejectOpen: rejectOpen, pushEvents: pushEvents)
+        _ = EchoServerStub.serve(server, rejectOpen: rejectOpen, pushEvents: pushEvents, respond: respond)
         return client
     }
 

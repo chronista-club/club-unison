@@ -54,6 +54,15 @@ export { UnisonChannelImpl } from "./channel/unison_channel.js";
 export { DatagramChannelImpl } from "./channel/datagram_channel.js";
 export { DatagramDispatcher, DispatcherInner } from "./channel/dispatcher.js";
 
+// === v1.4.0: connection-level auth ===
+export {
+	AUTH_CHANNEL_META,
+	AUTH_CHANNEL_NAME,
+	AUTHENTICATE_METHOD,
+	toAuthenticateRequest,
+} from "./channel/auth.js";
+export type { AuthResult, AuthenticateRequest } from "./channel/auth.js";
+
 // === Phase 6b: Rust-compatible wire format ===
 export {
 	FRAME_TYPE_PROTOCOL,
@@ -116,4 +125,4 @@ export type { UnisonConnectOptions } from "./client.js";
 export { UnisonClient, connect } from "./client.js";
 
 // SDK version (= package.json と同期)
-export const VERSION = "1.1.1";
+export const VERSION = "1.2.0";
