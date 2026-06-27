@@ -67,8 +67,11 @@ async fn start_auth_server() -> Result<(ServerHandle, String)> {
     let server = ProtocolServer::with_identity("test-auth-srv", "0.1.0", "test");
     server
         .enable_auth(|credential: Vec<u8>| async move {
-            (credential == GOOD_TOKEN)
-                .then(|| Arc::new(TestUser { name: "alice".into() }) as Principal)
+            (credential == GOOD_TOKEN).then(|| {
+                Arc::new(TestUser {
+                    name: "alice".into(),
+                }) as Principal
+            })
         })
         .await;
     server.register_channel(SECRET_CHANNEL, handle_secret).await;
@@ -97,7 +100,11 @@ async fn test_e2e_auth_valid_credential_passes_gate() -> Result<()> {
     .await??;
 
     assert_eq!(resp["authed"], json!(true), "authed should be true");
-    assert_eq!(resp["whoami"], json!("alice"), "principal name should leak through downcast");
+    assert_eq!(
+        resp["whoami"],
+        json!("alice"),
+        "principal name should leak through downcast"
+    );
 
     channel.close().await?;
     client.disconnect().await?;

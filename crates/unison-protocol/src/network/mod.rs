@@ -42,9 +42,9 @@ pub mod webtransport;
 pub use auth::{AUTH_CHANNEL_NAME, AUTHENTICATE_METHOD, AuthResult, AuthenticateRequest, Verifier};
 pub use cert::CertSource;
 pub use channel::UnisonChannel;
-pub use context::Principal;
 pub use client::{ClientConnectionEvent, ClientConnectionEventReceiver, ProtocolClient};
 pub use conn::UnisonConn;
+pub use context::Principal;
 pub use datagram_channel::DatagramChannel;
 pub use discovery::{
     DISCOVERY_CHANNEL_NAME, GET_PROTOCOL_METHOD, GetProtocolRequest, ProtocolDocument,
