@@ -236,6 +236,32 @@ channel "unison.auth" from="client" lifetime="persistent" {
 }
 ```
 
+### 5.8 クライアント API contract（言語横断 SSOT）
+
+auth はクライアント側に専用 transport を要求しない。**`unison.auth` channel を open して
+`Authenticate` request を送るだけ**で、stream channel + request を持つ全クライアントが認証できる
+（Rust の `connect_with_credential` は便利ラッパー）。各言語 client はこの contract に従う。
+
+#### Wire 不変条件（全クライアント共通・最重要）
+- channel 名 = `unison.auth` / request method = `Authenticate`
+- request payload = `{ "credential": <number[]> }` — credential は **u8 の JSON 数値配列**（各要素 0–255）。
+  - ⚠️ **言語の「バイト列デフォルト JSON 表現」に任せないこと**。Rust 側は `Vec<u8>` = `serde_json`
+    の数値配列 `[104,101,...]` を期待する。
+    - **TS**: `Uint8Array` を直接入れると `{"0":104,...}` object 化 → `Array.from(bytes)` で `number[]` に。
+    - **Swift**: `Data` を `Codable` に入れると **base64 string** 化 → `[UInt8]` 配列にして送る。
+    - **Ruby**: binding 経由で Rust の `Vec<u8>` に直接渡るので native（String / bytes）でよい。
+- response payload = `{ "ok": boolean }`。`ok == false` → 認証拒否（throw / Err）、principal は立たない。
+
+#### 各言語の API 形（Rust `connect_with_credential` の対応物）
+| 言語 | API |
+|------|-----|
+| Rust | `client.connect_with_credential(url, &[u8]) -> Result<()>` |
+| TypeScript | `connect({ ..., credential: Uint8Array })` + `client.authenticate(credential: Uint8Array)` |
+| Swift | `UnisonClient.connect(to:trust:credential:)` + `Connection.authenticate(_ credential: [UInt8])` |
+| Ruby | `client.connect_with_credential(url, credential)`（pure Ruby で `Client` 再オープン、 `open_channel`+`request` の上に実装。native ext は公開版 club-unison に対しビルドされるため、 未公開 Rust `connect_with_credential` に依存しない） |
+
+詳細は各 client design doc の auth 節（`design/typescript-client-api.md` / `design/swift-client-api.md`）。
+
 ---
 
 ## 6. 型・API の確定事項（実装済）

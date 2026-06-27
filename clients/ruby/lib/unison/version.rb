@@ -3,5 +3,5 @@
 module Unison
   # Gem version. The gem is in scaffold stage; the Unison protocol generation
   # it targets is reported by the native extension (`Unison.protocol_target`).
-  VERSION = "0.1.0"
+  VERSION = "0.2.0"
 end

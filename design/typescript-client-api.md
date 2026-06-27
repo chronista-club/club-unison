@@ -267,6 +267,37 @@ export interface ConnectionEventEmitter {
 }
 ```
 
+### 4.5 Auth API (connection-level、 v1.4.0)
+
+connection-level auth primitive（Rust `enable_auth` / `connect_with_credential`、設計
+`design/connection-auth.md`）の TS 対応。auth は `unison.auth` channel を open して
+`Authenticate` request を送るだけなので、専用 transport は不要。
+
+```typescript
+// connect-time auth (= Rust connect_with_credential の対応物)
+export interface UnisonConnectOptions {
+  // ...既存...
+  /** 接続直後に 1 回提示する credential。指定すると identity handshake 後に
+   *  unison.auth で Authenticate し、拒否 (ok=false) なら connect が throw する。 */
+  credential?: Uint8Array;
+}
+
+export interface UnisonClient {
+  // ...既存...
+  /** post-connect / re-auth 用。unison.auth を open して Authenticate を送り、
+   *  ok=false なら throw。connect({credential}) は内部でこれを呼ぶ。 */
+  authenticate(credential: Uint8Array): Promise<void>;
+}
+```
+
+**wire 不変条件**（`design/connection-auth.md` §5.8 が SSOT）:
+- request payload = `{ credential: number[] }`。`Uint8Array` は **`Array.from(bytes)` で `number[]`
+  に変換**してから送る（直接入れると JSON が `{"0":..}` object 化して Rust の `Vec<u8>` と非互換）。
+- response = `{ ok: boolean }`。`ok === false` → `authenticate` / `connect` が throw。
+
+reserved channel meta（`AUTH_CHANNEL` const）と定数（`AUTH_CHANNEL_NAME` = `"unison.auth"` /
+`AUTHENTICATE_METHOD` = `"Authenticate"`）は SDK が内蔵し、codegen 不要。
+
 ---
 
 ## 5. Codec 戦略

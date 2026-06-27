@@ -62,6 +62,31 @@ public actor Connection {
         return StreamChannel(core: core)
     }
 
+    /// credential を提示して connection を認証する (= connection-level authN、 v1.4.0)。
+    ///
+    /// `unison.auth` channel を open して `Authenticate` request を 1 回送り、 server の
+    /// verifier 結果を待つ。`ok == false` (= 拒否) なら `UnisonError.authenticationDenied`
+    /// を throw する。認証成功後は server 側がこの connection の principal を立てるので、
+    /// 以降 open する channel は per-message gate を通過できる。**他 channel を open する前に
+    /// 呼ぶこと**。
+    ///
+    /// server が `enable_auth` 未設定なら `unison.auth` が未登録で open が reject される。
+    /// 設計: `design/connection-auth.md` §5.8。
+    public func authenticate(_ credential: [UInt8]) async throws {
+        let channel = try await openChannel(AuthChannelMeta())
+        let result: AuthResult
+        do {
+            result = try await channel.request(AuthenticateRequest(credential: credential))
+        } catch {
+            await channel.close()
+            throw error
+        }
+        await channel.close()
+        guard result.ok else {
+            throw UnisonError.authenticationDenied
+        }
+    }
+
     /// datagram channel を開く。
     public func openDatagramChannel<M: DatagramChannelMeta>(_ meta: M) async throws -> DatagramChannel<M> {
         _ = meta

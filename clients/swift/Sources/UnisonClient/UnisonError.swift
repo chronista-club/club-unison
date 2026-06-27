@@ -12,6 +12,8 @@ public enum UnisonError: Error, Sendable {
     case codec(String)
     /// request がタイムアウトした。
     case timeout
+    /// connection-level auth が server の verifier に拒否された (= AuthResult.ok == false)。
+    case authenticationDenied
     /// 未実装 (= scaffold 段階の stub 境界。 後続 pass で解消)。
     case notImplemented(String)
 }
