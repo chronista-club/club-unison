@@ -261,6 +261,51 @@ impl ProtocolServer {
         Ok(())
     }
 
+    /// connection-level 認証を有効化する (= `unison.auth` channel を登録)。
+    ///
+    /// client が接続直後に `unison.auth` を open して credential を1回提示すると、
+    /// `verifier` (= app 注入の policy) で検証し、 成功なら principal を **その connection の
+    /// [`ConnectionContext`](super::context::ConnectionContext)** に立てる。以降、 各 channel
+    /// handler は `ctx.principal()` を引いて authZ gate できる (= per-message scope check、
+    /// per-frame に auth byte 0)。
+    ///
+    /// `enable_discovery` と同型の opt-in API。呼ばなければ認証は無効 (= 従来通り・非破壊)。
+    ///
+    /// # mechanism / policy 分離
+    /// このメソッドは「credential を受け取り verifier に渡し principal を立てる」配管
+    /// (= mechanism) のみを提供する。credential / principal の中身 (Creo ID JWT 等) は
+    /// `verifier` (= policy) が解釈し、 library は一切関知しない
+    /// ([`CertSource`](super::cert::CertSource) が trust model を選ばないのと同型)。
+    ///
+    /// 設計: `design/connection-auth.md`
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let server = ProtocolServer::new();
+    /// server.enable_auth(|credential: Vec<u8>| async move {
+    ///     verify_creo_id(&credential).await   // app の policy
+    ///         .map(|user| std::sync::Arc::new(user) as Principal)
+    /// }).await;
+    /// ```
+    pub async fn enable_auth<V, Fut>(&self, verifier: V)
+    where
+        V: Fn(Vec<u8>) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Option<super::context::Principal>> + Send + 'static,
+    {
+        let verifier: super::auth::Verifier = Arc::new(move |credential| {
+            Box::pin(verifier(credential))
+                as std::pin::Pin<
+                    Box<dyn std::future::Future<Output = Option<super::context::Principal>> + Send>,
+                >
+        });
+        self.register_channel(super::auth::AUTH_CHANNEL_NAME, move |ctx, stream| {
+            let verifier = Arc::clone(&verifier);
+            async move { super::auth::handle_channel(verifier, ctx, stream).await }
+        })
+        .await;
+    }
+
     /// チャネルハンドラーを登録
     pub async fn register_channel<F, Fut>(&self, name: &str, handler: F)
     where

@@ -7,6 +7,34 @@
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-06-27 — connection-level auth primitive (mechanism/policy 分離)
+
+> 全エンドポイント間通信 (federation worlds channel / 連邦 wire / live streaming) の認証を
+> connection 確立時に1回行う primitive を追加。authN を connection に、authZ を per-message
+> に分離し per-frame 0 bytes。mechanism (= club-unison) と policy (= app の verifier) を分離
+> し、library は特定の認証エコシステムに依存しない (OSS ecosystem-neutral)。SemVer minor
+> (= additive、opt-in、既存 API 不変・非破壊)。
+
+### Added
+
+- **connection-level auth primitive** (`network::auth` — new): 全エンドポイント間通信
+  (federation worlds channel / 連邦 wire / live streaming) の認証を **connection 確立時に
+  1 回** 行う primitive。authN を connection に、authZ を per-message (`ctx.principal()` を
+  引く app 側 gate) に分離し、**per-frame に auth byte 0**。live streaming の小フレーム
+  fan-out / datagram を auth コストで殺さないための設計。SemVer minor (= additive、opt-in)。
+  - `ProtocolServer::enable_auth(verifier)`: `enable_discovery` と同型の opt-in API。
+    reserved channel `unison.auth` を登録。verifier (= app 注入の policy) は async
+    (`Fn(Vec<u8>) -> Future<Option<Principal>>`)。
+  - `ProtocolClient::connect_with_credential(url, credential)`: 接続直後に credential を
+    1 回提示して認証する helper。
+  - `ConnectionContext::{set_principal, principal}` + `Principal = Arc<dyn Any + Send + Sync>`:
+    認証済み client の **opaque** な principal を connection に保持。app が downcast する。
+  - **mechanism / policy 分離** (`cert::CertSource` 哲学の踏襲): library は credential /
+    principal の中身 (Creo ID JWT 等) を一切解釈しない → 特定の認証エコシステムに依存
+    しない (= OSS として ecosystem-neutral)。`enable_auth` を呼ばない server は従来通り
+    (非破壊)。
+  - 設計: `design/connection-auth.md` / E2E: `tests/test_integ_auth.rs` (4 ケース)。
+
 ## [1.3.0] - 2026-06-25 — raw QUIC ALPN "unison" + Swift client SDK
 
 > Apple `NWProtocolQUIC` との interop のため raw QUIC に ALPN を追加し

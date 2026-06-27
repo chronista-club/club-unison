@@ -16,6 +16,7 @@ use crate::proto;
 /// 固定 (`wtransport` 依存が内部で設定) であり、 本 const は適用されない。
 pub const UNISON_ALPN: &[u8] = b"unison";
 
+pub mod auth;
 pub mod cert;
 pub mod channel;
 pub mod client;
@@ -38,10 +39,12 @@ pub mod stream;
 pub mod trust;
 pub mod webtransport;
 
+pub use auth::{AUTH_CHANNEL_NAME, AUTHENTICATE_METHOD, AuthResult, AuthenticateRequest, Verifier};
 pub use cert::CertSource;
 pub use channel::UnisonChannel;
 pub use client::{ClientConnectionEvent, ClientConnectionEventReceiver, ProtocolClient};
 pub use conn::UnisonConn;
+pub use context::Principal;
 pub use datagram_channel::DatagramChannel;
 pub use discovery::{
     DISCOVERY_CHANNEL_NAME, GET_PROTOCOL_METHOD, GetProtocolRequest, ProtocolDocument,

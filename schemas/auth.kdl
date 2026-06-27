@@ -1,0 +1,44 @@
+// Unison Auth — connection-level authentication channel schema.
+//
+// 設計: design/connection-auth.md
+// 起源: chronista-hub federation (ADR-020) の S3 discovery auth を詰める過程で確定。
+//       federation worlds channel / 連邦 wire / live streaming の認証を connection
+//       確立時に1回行う primitive として club-unison に入れる。
+//
+// 目的:
+//   client が接続直後に credential を1回提示し、 server 側 verifier (= app 注入の
+//   policy) が検証して principal を connection に立てる (= authN)。以降の authZ
+//   (= per-message scope check) は app 側が ConnectionContext::principal を引いて
+//   行い、 フレームには auth byte を 1 つも足さない (= per-frame 0 bytes)。
+//
+// mechanism / policy 分離:
+//   このスキーマは mechanism (= credential を運ぶ配管) のみを定義する。credential /
+//   principal の中身 (Creo ID JWT / API キー / 独自トークン) は verifier (= policy)
+//   が解釈し、 library は一切関知しない。これにより club-unison は特定の認証
+//   エコシステムに依存しない (= cert.rs CertSource が trust model を選ばないのと同型)。
+//
+// スコープ外 (= 別レイヤー / 後続):
+//   - verifier の実装 (= Creo ID JWKS 等は app 側、 policy)
+//   - E2E content 署名 (= distribution が untrusted な場合のみ、 transport auth と直交)
+//   - re-authentication / credential rotation (= 必要兆候が出たら別 request method で)
+
+protocol "unison-auth" version="0.1.0" {
+    namespace "club.chronista.unison.auth"
+
+    channel "unison.auth" from="client" lifetime="persistent" {
+
+        // Client → Server: 接続直後に credential を1回提示して認証する。
+        request "Authenticate" {
+            // opaque な credential。 library は中身を解釈せず verifier にそのまま渡す。
+            // wire 上は JSON codec で byte 配列 (= [u8]) として運ばれる。接続時1回のみで
+            // per-frame ではないので array 表現のコストは問題にならない。
+            field "credential" type="json" required=#true
+
+            returns "AuthResult" {
+                // verifier が principal を返した (= 認証成功) なら true。
+                // false の場合 principal は立たず、 app handler が gated method を拒否する。
+                field "ok" type="bool" required=#true
+            }
+        }
+    }
+}

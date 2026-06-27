@@ -17,6 +17,7 @@
 |------------|------|----------|
 | [architecture.md](architecture.md) | 全体アーキテクチャ設計詳細 | [spec/01](../spec/01-core-concept/SPEC.md) |
 | [packet.md](packet.md) | UnisonPacket実装仕様 | [spec/01](../spec/01-core-concept/SPEC.md) |
+| [connection-auth.md](connection-auth.md) | Connection-level auth primitive（mechanism/policy 分離） | — |
 | [test-strategy.md](test-strategy.md) | テスト戦略（3x3マトリクス） | — |
 
 ## 設計ドキュメントの書き方
