@@ -7,6 +7,14 @@
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-06-27 — connection-level auth primitive (mechanism/policy 分離)
+
+> 全エンドポイント間通信 (federation worlds channel / 連邦 wire / live streaming) の認証を
+> connection 確立時に1回行う primitive を追加。authN を connection に、authZ を per-message
+> に分離し per-frame 0 bytes。mechanism (= club-unison) と policy (= app の verifier) を分離
+> し、library は特定の認証エコシステムに依存しない (OSS ecosystem-neutral)。SemVer minor
+> (= additive、opt-in、既存 API 不変・非破壊)。
+
 ### Added
 
 - **connection-level auth primitive** (`network::auth` — new): 全エンドポイント間通信
