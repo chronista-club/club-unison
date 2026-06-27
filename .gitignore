@@ -2,6 +2,11 @@
 /target/
 Cargo.lock
 
+# Swift Package Manager (root Package.swift; sources live under clients/swift/)
+/.build/
+/.swiftpm/
+/Package.resolved
+
 # IDE
 .vscode/
 .idea/

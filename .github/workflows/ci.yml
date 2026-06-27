@@ -229,12 +229,11 @@ jobs:
   # NWProtocolQUIC / swift-protobuf を使う SPM package。生成 wire コードは
   # コミット済みなので protoc 不要。LiveE2ETests は UNISON_LIVE 環境変数で gate
   # され (mock server 必須)、ここでは未設定なので skip される。
+  # Package.swift は repo root (SPM の version 指定 remote 依存が root manifest を
+  # 要求するため)、source 実体は clients/swift/ 配下。よって build/test は root で実行。
   swift:
     name: Swift Client
     runs-on: macos-latest
-    defaults:
-      run:
-        working-directory: clients/swift
     steps:
       - uses: actions/checkout@v4
 

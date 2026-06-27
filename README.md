@@ -233,13 +233,20 @@ The server stays Rust; clients are first-class siblings under [`clients/`](https
 |--------|-----------|--------------|
 | [`clients/typescript`](https://github.com/chronista-club/club-unison/tree/main/clients/typescript) | WebTransport (HTTP/3) | npm `@chronista-club/unison-client` |
 | [`clients/ruby`](https://github.com/chronista-club/club-unison/tree/main/clients/ruby) | raw QUIC (FFI → Rust) | RubyGems `unison-client` |
-| [`clients/swift`](https://github.com/chronista-club/club-unison/tree/main/clients/swift) | raw QUIC (Apple `NWProtocolQUIC`, ALPN `"unison"`) | SPM (monorepo path / git) — see note |
+| [`clients/swift`](https://github.com/chronista-club/club-unison/tree/main/clients/swift) | raw QUIC (Apple `NWProtocolQUIC`, ALPN `"unison"`) | SPM (`Package.swift` at repo root) — see note |
 
-> **Swift package consumption**: `clients/swift` の `Package.swift` は repo の
-> サブディレクトリにあり、SPM の version 指定 remote 依存 (`.package(url:from:)`)
-> は repo root の `Package.swift` を前提とするため使えない。consumer (例: VP) は
-> **path 依存** (`.package(path: "../club-unison/clients/swift")`、monorepo 隣接)
-> で参照する。将来 versioned 配布が要るなら別 repo 切り出しを検討。
+> **Swift package consumption**: `Package.swift` は **repo root** にあり (SPM の
+> version 指定 remote 依存 `.package(url:from:)` は root manifest を要求するため)。
+> source 実体は `clients/swift/` 配下で、root manifest が `path:` で参照する
+> (= monorepo にコード集約しつつ SPM 配布も成立)。版数は monorepo の git tag
+> (`vX.Y.Z` = Rust workspace 版) に連動する (Swift client は独立 versioning しない)。
+>
+> ```swift
+> .package(url: "https://github.com/chronista-club/club-unison.git", from: "1.4.0")
+> // target: .product(name: "UnisonClient", package: "club-unison")
+> ```
+>
+> monorepo 隣接の開発なら path 依存も可: `.package(path: "../club-unison")`。
 
 ---
 
