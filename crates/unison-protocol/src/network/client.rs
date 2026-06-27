@@ -358,6 +358,47 @@ impl ProtocolClient {
         Ok(())
     }
 
+    /// Unisonサーバーへ接続し、 接続直後に credential を1回提示して認証する
+    /// (= connection-level authN)。
+    ///
+    /// [`connect`](Self::connect) → `unison.auth` channel を open → `Authenticate`
+    /// request で credential を送り、 server の verifier 結果を待つ。認証が拒否された
+    /// (= `AuthResult { ok: false }`) 場合は [`NetworkError::Protocol`] で reject する。
+    ///
+    /// 認証成功後、 server 側はこの connection の principal を立てているので、 以降
+    /// open する worlds/wire/datagram 等の channel は per-message gate を通過できる。
+    /// **他 channel を open する前に本メソッドを呼ぶこと** (= 未認証だと principal=None で
+    /// app handler に gate される)。
+    ///
+    /// server が `enable_auth` を呼んでいない場合は `unison.auth` が未登録のため open が
+    /// reject される。認証不要の server には [`connect`](Self::connect) を使う。
+    ///
+    /// 設計: `design/connection-auth.md`
+    pub async fn connect_with_credential(
+        &self,
+        url: &str,
+        credential: &[u8],
+    ) -> Result<(), NetworkError> {
+        self.connect(url).await?;
+
+        let channel = self.open_channel(super::auth::AUTH_CHANNEL_NAME).await?;
+        let response: serde_json::Value = channel
+            .request(
+                super::auth::AUTHENTICATE_METHOD,
+                &serde_json::json!({ "credential": credential }),
+            )
+            .await?;
+        let result: super::auth::AuthResult = serde_json::from_value(response)?;
+        let _ = channel.close().await;
+
+        if !result.ok {
+            return Err(NetworkError::Protocol(
+                "authentication denied by server verifier".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Connection の `closed()` future を await して Disconnected event を fire する task
     /// を spawn (v0.10.0 Step 2)
     ///

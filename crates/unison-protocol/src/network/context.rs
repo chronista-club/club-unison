@@ -3,12 +3,25 @@
 //! 各接続に対して、Identity情報とアクティブチャネルを追跡する。
 //! 複数のストリームハンドラーから並行アクセスされるため Arc<RwLock<>> で保護。
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use super::identity::{ChannelDirection, ServerIdentity};
+
+/// 認証済み client の principal。
+///
+/// connection-level auth (= `unison.auth` channel) で verifier が返した値を保持する。
+/// **opaque** — このライブラリは中身の型を一切解釈しない。policy (= app) が
+/// [`ConnectionContext::principal`] で取り出して `downcast_ref::<MyPrincipal>()` する。
+///
+/// この opacity が、ライブラリが特定の認証エコシステム (Creo ID / JWKS 等) に
+/// 依存しないことを型レベルで保証する (= mechanism/policy 分離、`cert::CertSource` と同型)。
+///
+/// 設計: `design/connection-auth.md`
+pub type Principal = Arc<dyn Any + Send + Sync>;
 
 /// 接続ごとの状態を管理する構造体
 #[derive(Debug)]
@@ -19,6 +32,12 @@ pub struct ConnectionContext {
     identity: Arc<RwLock<Option<ServerIdentity>>>,
     /// アクティブなチャネルのマップ（チャネル名 → ハンドル）
     channels: Arc<RwLock<HashMap<String, ChannelHandle>>>,
+    /// 認証済み client principal（未認証なら None）。
+    ///
+    /// `unison.auth` handler が verifier の結果を [`set_principal`](Self::set_principal) で
+    /// 立て、 worlds/wire/datagram 等 **同一 connection の全 channel handler** が
+    /// [`principal`](Self::principal) で読んで authZ gate に使う。
+    principal: Arc<RwLock<Option<Principal>>>,
 }
 
 /// チャネルのメタデータ
@@ -36,6 +55,7 @@ impl ConnectionContext {
             connection_id: Uuid::new_v4(),
             identity: Arc::new(RwLock::new(None)),
             channels: Arc::new(RwLock::new(HashMap::new())),
+            principal: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -48,6 +68,20 @@ impl ConnectionContext {
     /// Identity情報を取得
     pub async fn identity(&self) -> Option<ServerIdentity> {
         self.identity.read().await.clone()
+    }
+
+    /// 認証済み principal を設定する（`unison.auth` handler が verifier 成功時に呼ぶ）。
+    pub async fn set_principal(&self, principal: Principal) {
+        let mut guard = self.principal.write().await;
+        *guard = Some(principal);
+    }
+
+    /// 認証済み principal を取得する（未認証なら None）。
+    ///
+    /// app handler は `ctx.principal().await.and_then(|p| p.downcast_ref::<T>().cloned())`
+    /// のように自分の型へ downcast して authZ gate に使う。
+    pub async fn principal(&self) -> Option<Principal> {
+        self.principal.read().await.clone()
     }
 
     /// チャネルを登録
@@ -90,6 +124,35 @@ mod tests {
         let ctx = ConnectionContext::new();
         assert!(ctx.identity().await.is_none());
         assert!(ctx.channel_names().await.is_empty());
+        assert!(ctx.principal().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_principal_set_and_downcast() {
+        #[derive(Debug, PartialEq)]
+        struct MyPrincipal {
+            user_id: String,
+        }
+
+        let ctx = ConnectionContext::new();
+        // 未認証は None
+        assert!(ctx.principal().await.is_none());
+
+        // opaque な型を set
+        ctx.set_principal(Arc::new(MyPrincipal {
+            user_id: "alice".to_string(),
+        }))
+        .await;
+
+        // app は自分の型へ downcast して取り出せる
+        let principal = ctx.principal().await.expect("principal should be set");
+        let typed = principal
+            .downcast_ref::<MyPrincipal>()
+            .expect("downcast should succeed");
+        assert_eq!(typed.user_id, "alice");
+
+        // 異なる型への downcast は失敗する（opacity の確認）
+        assert!(principal.downcast_ref::<String>().is_none());
     }
 
     #[tokio::test]
