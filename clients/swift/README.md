@@ -75,11 +75,15 @@ struct Ping: UnisonRequest {
 
 `LiveE2ETests` は CI 非対象(環境変数で gate)。`unison mock`(quinn)相手に実 QUIC round-trip を確認する:
 
+`Package.swift` は **repo root** にあり (SPM の version 指定 remote 依存が root manifest を
+要求するため)。source 実体はこの `clients/swift/` 配下で、root manifest が `path:` で参照する。
+よって `swift build` / `swift test` は **repo root** で実行する。
+
 ```bash
 # 1) Rust 側で mock server を起動
 target/debug/unison mock --schema schemas/ping_pong.kdl --addr '[::1]:7878'
-# 2) Swift 側で live test
-cd clients/swift && UNISON_LIVE=1 swift test --filter LiveE2E
+# 2) Swift 側で live test (repo root で)
+UNISON_LIVE=1 swift test --filter LiveE2E
 ```
 
 connect(ALPN "unison")→ openChannel → request → response decode が **Apple NWProtocolQUIC ↔ Rust quinn** で interop することの最終証明。
@@ -87,7 +91,7 @@ connect(ALPN "unison")→ openChannel → request → response decode が **Appl
 ## 開発
 
 ```bash
-cd clients/swift
+# repo root で (Package.swift は root、source は clients/swift/ 配下)
 swift build
 swift test          # scaffold smoke test (型 + 純粋ロジック)
 ```
