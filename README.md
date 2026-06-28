@@ -11,7 +11,7 @@ A type-safe QUIC communication framework, defined by KDL schema.
 ```toml
 [dependencies]
 # crates.io package = `club-unison`, Rust crate identifier = `unison`
-club-unison = "1.1.0"
+club-unison = "1.5.0"
 tokio = { version = "1.52", features = ["full"] }
 ```
 
@@ -242,7 +242,7 @@ The server stays Rust; clients are first-class siblings under [`clients/`](https
 > (`vX.Y.Z` = Rust workspace 版) に連動する (Swift client は独立 versioning しない)。
 >
 > ```swift
-> .package(url: "https://github.com/chronista-club/club-unison.git", from: "1.4.0")
+> .package(url: "https://github.com/chronista-club/club-unison.git", from: "1.5.0")
 > // target: .product(name: "UnisonClient", package: "club-unison")
 > ```
 >

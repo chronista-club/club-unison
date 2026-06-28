@@ -1,6 +1,6 @@
 # Server-Initiated Stream — `ServerToClient` 方向を起こす（reliable server→client）
 
-**status**: 設計確定 2026-06-28 / 対称化路線へ再構成 2026-06-28 / 1.5.0 実装中
+**status**: 設計確定 2026-06-28 / 対称化路線へ再構成 2026-06-28 / **1.5.0 released 2026-06-28**（PR #83 merged → crates.io publish → tag `v1.5.0`）
 **動機元**: chronista-hub federation relay（ADR-020 §S4）— hub が world A の bytes を world B の既存 connection へ **reliable** に forward する floor が要る。
 **原則**: Occam — 新 transport 概念を増やさず、**既に宣言されているが眠っている `ChannelDirection::ServerToClient` を honor する**だけ。さらに本改訂では、reliable を「新しい配送 mode」ではなく **server / client の受信 handler を対称化する**ことで構造的に得る。
 
@@ -147,16 +147,18 @@ where F: Fn(UnisonStream) -> BoxFuture<'static, Result<()>> + Send + Sync + 'sta
 ## 10. 実装 checklist（1.5.0、この repo で実施）
 
 > handoff 元: chronista-hub federation session（2026-06-28）。本 doc が SSOT。下流 = chronista-hub relay（§S4）/ VP dialer は 1.5.0 release 後に乗る。
+>
+> **✅ 完了 2026-06-28**（PR #83 → main `1202622` → crates.io `club-unison 1.5.0` → tag `v1.5.0`）。下記 1/2/3/5/6 を実装、4 は二次的で本リリース見送り（direction source 整備待ち）。
 
-1. **`network/context.rs`** — `ConnectionContext` に `conn: Arc<RwLock<Option<Arc<dyn UnisonConn>>>>`（init None）+ `set_conn(conn)` + `open_server_stream(channel) -> Result<UnisonStream>`。`open_server_stream` = `conn.open_bi()` →（宣言 frame を `write_typed_frame` で 1 本書く、`__identity` 送信と同形 = `dispatch.rs::handle_connection` 参照、**`finish()` しない**）→ `UnisonStream::from_streams`。conn が None なら error（client 誤用）。`#[derive(Debug)]` → conn を skip した**手書き Debug**へ。
-2. **`network/dispatch.rs`** — `handle_connection` 冒頭で `ctx.set_conn(Arc::clone(&connection)).await`（**server 側のみ・1 行**）。`client_accept_bi_loop` を一般化: 先頭 frame の method が `__identity` → 従来 oneshot、それ以外 → client 側 server-channel registry を引いて handler へ **`UnisonStream` を渡す**（**send_stream を保持**し、`Arc::new(connection.clone())` で `Arc<dyn UnisonConn>` を作って `from_streams`）、**未登録なら drop+warn**（無回帰）。
-3. **`network/client.rs`** — `ProtocolClient` に server-channel handler registry（`Arc<RwLock<HashMap<String, Handler>>>`、`Handler = Fn(UnisonStream) -> BoxFuture<...>`）+ `register_server_channel(channel, handler)`。`client_accept_bi_loop` 起動箇所（`quic.rs:376`）へ registry を渡す。
-4. **`network/identity.rs` / `server.rs`** — `build_identity()` が `from="server"` を honor して `ChannelDirection::ServerToClient` を返す（**二次的**、direction の read 元整備が前提）。
-5. **tests** —
+1. ✅ **`network/context.rs`** — `ConnectionContext` に `conn: Arc<RwLock<Option<Arc<dyn UnisonConn>>>>`（init None）+ `set_conn(conn)` + `open_server_stream(channel) -> Result<UnisonStream>`。`open_server_stream` = `conn.open_bi()` →（宣言 frame を `write_typed_frame` で 1 本書く、`__identity` 送信と同形 = `dispatch.rs::handle_connection` 参照、**`finish()` しない**）→ `UnisonStream::from_streams`。conn が None なら error（client 誤用）。`#[derive(Debug)]` → conn を skip した**手書き Debug**へ。
+2. ✅ **`network/dispatch.rs`** — `handle_connection` 冒頭で `ctx.set_conn(Arc::clone(&connection)).await`（**server 側のみ・1 行**）。`client_accept_bi_loop` を一般化: 先頭 frame の method が `__identity` → 従来 oneshot、それ以外 → client 側 server-channel registry を引いて handler へ **`UnisonStream` を渡す**（**send_stream を保持**し、`Arc::new(connection.clone())` で `Arc<dyn UnisonConn>` を作って `from_streams`）、**未登録なら drop+warn**（無回帰）。
+3. ✅ **`network/client.rs`** — `ProtocolClient` に server-channel handler registry（`Arc<RwLock<HashMap<String, Handler>>>`、`Handler = Fn(UnisonStream) -> BoxFuture<...>`）+ `register_server_channel(channel, handler)`。`client_accept_bi_loop` 起動箇所（`quic.rs:376`）へ registry を渡す。
+4. ⏸ **`network/identity.rs` / `server.rs`** — `build_identity()` が `from="server"` を honor して `ChannelDirection::ServerToClient` を返す（**二次的・本リリース見送り**、direction の read 元整備が前提。`register_channel` に direction 引数が無く advertise 元が無いため。schema↔runtime 齟齬は残置だが relay 機能には影響なし）。
+5. ✅ **tests** —（`tests/test_server_initiated_stream.rs`）
    - server が `open_server_stream("x")` → client の `register_server_channel("x", ...)` handler が **reliable に受信**（取りこぼし無し round-trip）。
    - **backpressure**: handler が読まないと送信側 write が throttle され、**drop が起きない**（unbounded 成長もしない）。
    - 後方互換: handler 未登録 client は従来 drop+warn。
-6. **version** — workspace `Cargo.toml` 1.4.0 → **1.5.0**（minor・additive）。CHANGELOG。
+6. ✅ **version** — workspace `Cargo.toml` 1.4.0 → **1.5.0**（minor・additive）。CHANGELOG。crates.io publish + tag `v1.5.0` 済み。
 
 **剃刀の不変条件**（実装中に侵さないこと）: `get_connection_by_principal` 等の lookup table を substrate に置かない（利用側=hub が `wld_id→ctx` map を持つ）。relay 専用 API も置かない。新 transport 動詞を増やさない（`open_bi` 既存）。aggregate / 既存 `UnisonChannel` の global reliable 化はスコープ外。
 
