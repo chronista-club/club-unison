@@ -5,33 +5,58 @@
 //! もここに置く。
 
 use anyhow::Result;
+use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{Mutex, RwLock, oneshot};
 use tracing::{debug, error, info, warn};
 
 use super::conn::UnisonConn;
 use super::frame::{FRAME_TYPE_PROTOCOL, read_typed_frame, write_channel_ack, write_typed_frame};
 use super::stream::UnisonStream;
-use super::{ProtocolFrame, ProtocolMessage, context::ConnectionContext, server::ProtocolServer};
+use super::{
+    NetworkError, ProtocolFrame, ProtocolMessage, context::ConnectionContext,
+    server::ProtocolServer,
+};
+
+/// client 側 server-initiated channel handler。
+///
+/// server 側の [`ChannelHandler`](super::server::ChannelHandler) と対称だが、client 側は
+/// ctx を持たず raw [`UnisonStream`] のみを受け取る。handler はこの stream を**直読**して
+/// reliable に payload を受ける（recv ループ／中継 mpsc を挟まない = 取りこぼし無し）。
+pub type ClientServerChannelHandler = Arc<
+    dyn Fn(UnisonStream) -> Pin<Box<dyn Future<Output = Result<(), NetworkError>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// channel 名 → handler の registry（client 側、[`register_server_channel`] で登録）。
+///
+/// [`register_server_channel`]: super::client::ProtocolClient::register_server_channel
+pub type ClientServerChannelRegistry = Arc<RwLock<HashMap<String, ClientServerChannelHandler>>>;
 
 /// クライアント側: サーバー発信の双方向ストリームを受け付けるループ
 ///
-/// サーバーが `connection.open_bi()` で開いたストリーム（Identity 送信等）を
-/// `accept_bi()` で受信し、ProtocolMessage に変換する。
-/// `__identity` メッセージは専用の oneshot チャネルに送る。
-///
-/// Unified Channel 設計では server→client 通信は client が開いた channel 上で
-/// 行うため、 server-initiated bi stream の非 identity frame は想定外。 旧実装は
-/// これを無制限 mpsc に積んでいたが drain されず (= dead path + 悪意ある server に
-/// よる OOM ベクタ) だったので、 warn して drop する。
+/// サーバーが `connection.open_bi()` で開いたストリームを `accept_bi()` で受信し、
+/// **先頭 frame の method** で振り分ける:
+/// - `__identity` → Identity 専用の oneshot チャネルへ（従来どおり）。
+/// - それ以外（= server-initiated channel）→ `server_channels` registry を引き、登録 handler へ
+///   raw [`UnisonStream`] を渡す。宣言 frame は routing で消費済みなので、handler は後続
+///   payload を **直読** して reliable に受ける（recv ループ／中継 mpsc を挟まない =
+///   遅い consumer には QUIC backpressure が掛かり、取りこぼしも OOM も起きない）。
+/// - 未登録 channel → 従来どおり drop + warn（無回帰）。
 pub(crate) async fn client_accept_bi_loop(
     connection: quinn::Connection,
     identity_tx: Arc<Mutex<Option<oneshot::Sender<ProtocolMessage>>>>,
+    server_channels: ClientServerChannelRegistry,
 ) {
     loop {
         match connection.accept_bi().await {
-            Ok((_send_stream, mut recv_stream)) => {
+            Ok((send_stream, mut recv_stream)) => {
                 let identity_tx = identity_tx.clone();
+                let server_channels = Arc::clone(&server_channels);
+                let connection = connection.clone();
                 tokio::spawn(async move {
                     match read_typed_frame(&mut recv_stream).await {
                         Ok((FRAME_TYPE_PROTOCOL, frame_bytes)) => {
@@ -48,11 +73,48 @@ pub(crate) async fn client_accept_bi_loop(
                                         );
                                     }
                                 } else {
-                                    // 想定外: server-initiated stream の非 identity frame は drop
-                                    warn!(
-                                        method = %message.method,
-                                        "unexpected non-identity frame on server-initiated stream; dropping"
-                                    );
+                                    // server-initiated channel: registry を引いて handler へ
+                                    // raw UnisonStream を渡す（= server handler と対称、直読 reliable）。
+                                    let handler = {
+                                        let reg = server_channels.read().await;
+                                        reg.get(&message.method).cloned()
+                                    };
+                                    match handler {
+                                        Some(handler) => {
+                                            // client 側 quinn::Connection を transport 非依存の
+                                            // trait object へ box する（client.rs の channel open と同形）。
+                                            let conn_arc: Arc<dyn UnisonConn> =
+                                                Arc::new(connection.clone());
+                                            let stream = UnisonStream::from_streams(
+                                                0,
+                                                message.method.clone(),
+                                                conn_arc,
+                                                Box::new(send_stream),
+                                                Box::new(recv_stream),
+                                            );
+                                            if let Err(e) = handler(stream).await {
+                                                if e.is_normal_close() {
+                                                    debug!(
+                                                        channel = %message.method,
+                                                        "server channel closed normally (end of stream)"
+                                                    );
+                                                } else {
+                                                    error!(
+                                                        channel = %message.method,
+                                                        "server channel handler error: {}",
+                                                        e
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        None => {
+                                            // 未登録: 従来どおり drop + warn（無回帰）。
+                                            warn!(
+                                                method = %message.method,
+                                                "no server-channel handler registered; dropping server-initiated stream"
+                                            );
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -90,6 +152,10 @@ pub(crate) async fn handle_connection(
     ctx: Arc<ConnectionContext>,
 ) -> Result<()> {
     let remote_addr = connection.remote_address();
+
+    // server-initiated stream (= ServerToClient) を handler が開けるよう、ctx に conn を渡す。
+    // server 側のみ・1 行（ctx/conn はここで同居しているので call-site ripple ゼロ）。
+    ctx.set_conn(Arc::clone(&connection)).await;
 
     // v0.10.0: active connection に登録 (= server.broadcast の配信先)
     let connection_arc = Arc::clone(&connection);

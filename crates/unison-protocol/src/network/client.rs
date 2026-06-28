@@ -145,6 +145,24 @@ impl ProtocolClient {
         self.context.identity().await
     }
 
+    /// server-initiated channel (= `from="server"`) の handler を登録する。
+    ///
+    /// server が [`ConnectionContext::open_server_stream`](super::context::ConnectionContext::open_server_stream)
+    /// で開いた server→client の reliable push stream を、宣言 frame の method (= `channel`) で
+    /// この handler に routing する。handler は渡された raw [`UnisonStream`] を **直読** して
+    /// payload を取りこぼし無く受ける（recv ループ／中継 mpsc を挟まない = QUIC backpressure）。
+    ///
+    /// `connect` 前に登録しておくこと。同 `channel` で再登録すると古い handler を replace する。
+    pub async fn register_server_channel<F, Fut>(&self, channel: &str, handler: F)
+    where
+        F: Fn(UnisonStream) -> Fut + Send + Sync + 'static,
+        Fut: futures_util::Future<Output = Result<(), NetworkError>> + Send + 'static,
+    {
+        self.transport
+            .register_server_channel(channel, handler)
+            .await;
+    }
+
     /// チャネルを開く（UnisonChannel を返す）
     ///
     /// `__channel:{name}` メソッドで新しいQUICストリームを開き、 サーバーが返す
