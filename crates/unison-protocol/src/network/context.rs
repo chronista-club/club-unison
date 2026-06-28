@@ -123,7 +123,8 @@ impl ConnectionContext {
     pub async fn open_server_stream(&self, channel: &str) -> Result<UnisonStream, NetworkError> {
         let conn = self.conn.read().await.clone().ok_or_else(|| {
             NetworkError::Connection(
-                "open_server_stream requires a server-side connection (client-side ctx?)".to_string(),
+                "open_server_stream requires a server-side connection (client-side ctx?)"
+                    .to_string(),
             )
         })?;
 

@@ -158,7 +158,9 @@ impl ProtocolClient {
         F: Fn(UnisonStream) -> Fut + Send + Sync + 'static,
         Fut: futures_util::Future<Output = Result<(), NetworkError>> + Send + 'static,
     {
-        self.transport.register_server_channel(channel, handler).await;
+        self.transport
+            .register_server_channel(channel, handler)
+            .await;
     }
 
     /// チャネルを開く（UnisonChannel を返す）

@@ -109,7 +109,10 @@ async fn test_server_initiated_reliable_ordered_delivery() -> Result<()> {
         got.len()
     );
     let expected: Vec<i64> = (0..N).collect();
-    assert_eq!(got, expected, "同順で届くべき（単一 QUIC stream の順序保証）");
+    assert_eq!(
+        got, expected,
+        "同順で届くべき（単一 QUIC stream の順序保証）"
+    );
 
     // ─── Cleanup ───────────────────────────────────────
     client.disconnect().await?;
