@@ -125,6 +125,7 @@ where F: Fn(UnisonStream) -> BoxFuture<'static, Result<()>> + Send + Sync + 'sta
 - **新しい transport 動詞（`open_bi` 以外）を増やさない。**
 - **aggregate（1 request → N response 等の多重相関）は作らない**。pending を `oneshot | mpsc` に一般化する必要が出るが、consumer が現れるまで保留。本 primitive のスコープ外。
 - **既存 client `UnisonChannel` の global reliable 化（actor/直読への全面 unification）はやらない**。relay でパターンが実証できた後の north star。1.5.0 は server-initiated handler の対称化に閉じる。
+- **WebTransport（browser）client の server-initiated 受理は意図的に defer**（§8 の制約は「考慮漏れ」でなく剃刀による保留）。理由: federation の relay target は **常に native World**（home-World daemon = federation peer）で、browser は peer でなく **World の client** → relay の server 発信 push が browser に直接届く経路は構造上存在しない。browser↔World hop も persistent channel 1 本で足りる（reliable = request/response 脚、best-effort = event）→「browser が World 発信 reliable stream を unsolicited に受ける」consumer が不在。必要が出た時の解消は **additive**（TS client に `register_server_channel` + 先頭 frame routing、wire は同じ宣言 frame で互換）= 早く作る利得ゼロ・待っても debt ゼロ。
 
 ---
 
