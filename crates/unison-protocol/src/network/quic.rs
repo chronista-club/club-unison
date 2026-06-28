@@ -9,14 +9,19 @@ use anyhow::{Context, Result};
 use quinn::{ClientConfig, Connection, Endpoint, ServerConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::{ClientConfig as RustlsClientConfig, ServerConfig as RustlsServerConfig};
+use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock, oneshot};
 use tracing::{error, info, warn};
 
 use super::conn::UnisonConn;
-use super::dispatch::{client_accept_bi_loop, handle_connection};
-use super::{ProtocolMessage, context::ConnectionContext, server::ProtocolServer};
+use super::dispatch::{
+    ClientServerChannelHandler, ClientServerChannelRegistry, client_accept_bi_loop,
+    handle_connection,
+};
+use super::{NetworkError, ProtocolMessage, context::ConnectionContext, server::ProtocolServer};
 
 // 後方互換: typed-frame wire I/O と handler-facing stream 型は専用モジュールへ
 // 移動したが、 `network::quic::*` の public import パスを保つため再公開する。
@@ -186,6 +191,11 @@ pub struct QuicClient {
     /// `TrustAnchors::SkipVerification` for backward compatibility with
     /// `QuicClient::new()` callers (will be tightened in v0.9.0).
     trust_anchors: super::trust::TrustAnchors,
+    /// server-initiated channel (= `from="server"`) の handler registry。
+    ///
+    /// `client_accept_bi_loop` が server 発信 stream の先頭宣言 frame の method で引く。
+    /// [`register_server_channel`](Self::register_server_channel) で登録。
+    server_channels: ClientServerChannelRegistry,
 }
 
 /// Builder for [`QuicClient`] (v0.8.0+).
@@ -216,6 +226,7 @@ impl QuicClientBuilder {
             identity_tx: Arc::new(Mutex::new(None)),
             response_tasks: Arc::new(Mutex::new(Vec::new())),
             trust_anchors,
+            server_channels: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 }
@@ -251,6 +262,7 @@ impl QuicClient {
             identity_tx: Arc::new(Mutex::new(None)),
             response_tasks: Arc::new(Mutex::new(Vec::new())),
             trust_anchors: super::trust::TrustAnchors::SkipVerification,
+            server_channels: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -288,6 +300,30 @@ impl QuicClient {
     /// QUIC接続への参照を取得（チャネル用ストリーム開設に使用）
     pub fn connection(&self) -> &Arc<RwLock<Option<Connection>>> {
         &self.connection
+    }
+
+    /// server-initiated channel (= `from="server"`) の handler を登録する。
+    ///
+    /// server が [`ConnectionContext::open_server_stream`](super::context::ConnectionContext::open_server_stream)
+    /// で開いた stream の先頭宣言 frame の method がこの `channel` と一致すると、handler に
+    /// raw [`UnisonStream`] が渡る。handler はその stream を **直読** して reliable に payload
+    /// を受ける（recv ループ／中継 mpsc を挟まない = 取りこぼし無し）。
+    ///
+    /// `connect` 前に登録しておくこと（接続直後に届く server-initiated stream を取りこぼさない）。
+    /// 同 `channel` で再登録すると古い handler を replace する。
+    pub async fn register_server_channel<F, Fut>(&self, channel: &str, handler: F)
+    where
+        F: Fn(UnisonStream) -> Fut + Send + Sync + 'static,
+        Fut: futures_util::Future<Output = Result<(), NetworkError>> + Send + 'static,
+    {
+        let handler: ClientServerChannelHandler = Arc::new(move |stream: UnisonStream| {
+            Box::pin(handler(stream))
+                as Pin<Box<dyn futures_util::Future<Output = Result<(), NetworkError>> + Send>>
+        });
+        self.server_channels
+            .write()
+            .await
+            .insert(channel.to_string(), handler);
     }
 }
 
@@ -372,8 +408,9 @@ impl QuicClient {
 
         // サーバー発信ストリームを受け付けるバックグラウンドタスクを起動
         let identity_tx = self.identity_tx.clone();
+        let server_channels = Arc::clone(&self.server_channels);
         let task = tokio::spawn(async move {
-            client_accept_bi_loop(connection_for_loop, identity_tx).await;
+            client_accept_bi_loop(connection_for_loop, identity_tx, server_channels).await;
         });
         self.response_tasks.lock().await.push(task);
 

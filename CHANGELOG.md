@@ -7,6 +7,51 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-06-28 — server-initiated reliable stream (`ServerToClient` を起こす)
+
+> server 起点で connected client へ **reliable・同順** な stream を開く primitive を追加。
+> 既に型・KDL (`from="server"`) に宣言されながら runtime で無視されていた
+> `ChannelDirection::ServerToClient` を本物にする。reliable は新しい配送 mode ではなく、
+> **client 側の受信 handler を server 側と対称化**（どちらも raw `UnisonStream` を直読）して
+> 構造的に得る — recv ループ／中継 mpsc を挟まないので、遅い consumer には QUIC flow-control
+> backpressure が掛かり、取りこぼしも OOM も起きない。chronista-hub federation relay
+> (ADR-020 §S4) の substrate floor。SemVer minor (= additive、opt-in、既存 API 不変)。
+>
+> 設計: `design/server-initiated-stream.md`（SSOT）
+
+### Added
+
+- **server-initiated reliable stream** (`network::context` / `network::client` / `network::dispatch`):
+  server が connected client へ取りこぼし無く push できる stream primitive。
+  - `ConnectionContext::open_server_stream(channel) -> UnisonStream`: server 起点で双方向
+    stream を開き、先頭に channel 宣言 frame (= `__identity` と同形) を 1 本書く。以降の
+    payload は返した raw `UnisonStream` で授受する。stream は persistent (`finish()` しない)。
+    既存の `UnisonConn::open_bi()` を再利用し、新しい transport 動詞は増やさない。
+  - `ProtocolClient::register_server_channel(channel, handler)`: client が `from="server"`
+    channel の handler を登録。handler は raw `UnisonStream` を受け取り**直読**する
+    (= server 側 `register_channel` handler と対称)。`connect` 前に登録する。
+  - `ConnectionContext::set_conn`: `handle_connection` が server 側でのみ接続を ctx に渡す
+    (1 行注入)。client 側 ctx は conn 未 set のままで、`open_server_stream` は誤用 error。
+
+### Changed
+
+- `client_accept_bi_loop`: server 発信 stream を先頭 frame の method で振り分けるよう一般化。
+  `__identity` は従来どおり専用 oneshot、それ以外は server-channel registry を引いて handler へ
+  `UnisonStream` を渡す。**未登録 channel は従来どおり drop + warn**（後方互換 = 無回帰）。
+
+### Notes
+
+- **完全性 (no-drop) の根拠**: dedicated QUIC stream を直読すると、handler が読まない間に
+  受信 window が埋まり送信側が QUIC flow-control で throttle される。完全性は queue
+  (bounded→drop / unbounded→OOM) でなく **end-to-end backpressure** が生む。
+- **scope 外 (剃刀)**: `get_connection_by_principal` 等の lookup table / relay 専用 API は
+  substrate に置かない (利用側 = hub が `wld_id→ctx` map を持つ)。aggregate (多重相関) と
+  既存 `UnisonChannel` の global reliable 化は consumer が出るまで保留。
+- **制約**: client 受信経路は raw QUIC 専用 (`client_accept_bi_loop` が `quinn::Connection`)
+  のため、WebTransport client は server-initiated channel を受けられない (native client は可)。
+  `build_identity()` の `from="server"` honor は direction source 整備が前提のため本リリースでは
+  未対応 (schema↔runtime 齟齬は残置、二次的)。
+
 ## [1.4.0] - 2026-06-27 — connection-level auth primitive (mechanism/policy 分離)
 
 > 全エンドポイント間通信 (federation worlds channel / 連邦 wire / live streaming) の認証を
