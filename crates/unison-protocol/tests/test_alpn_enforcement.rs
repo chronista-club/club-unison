@@ -43,8 +43,10 @@ async fn try_connect(addr: &str, alpn: &[&str]) -> Result<(), String> {
         .install_default()
         .ok();
 
-    let mut rustls_cfg: RustlsClientConfig =
-        (*TrustAnchors::SkipVerification.build_client_config().unwrap()).clone();
+    let mut rustls_cfg: RustlsClientConfig = (*TrustAnchors::SkipVerification
+        .build_client_config()
+        .unwrap())
+    .clone();
     // テストしたい ALPN で上書き（空配列 = 旧 client を再現）。
     rustls_cfg.alpn_protocols = alpn.iter().map(|s| s.as_bytes().to_vec()).collect();
 
@@ -55,7 +57,9 @@ async fn try_connect(addr: &str, alpn: &[&str]) -> Result<(), String> {
     let mut endpoint = Endpoint::client("[::]:0".parse().unwrap()).map_err(|e| e.to_string())?;
     endpoint.set_default_client_config(client_config);
 
-    let sockaddr: std::net::SocketAddr = addr.parse().map_err(|e: std::net::AddrParseError| e.to_string())?;
+    let sockaddr: std::net::SocketAddr = addr
+        .parse()
+        .map_err(|e: std::net::AddrParseError| e.to_string())?;
     let result = timeout(Duration::from_secs(5), async {
         endpoint
             .connect(sockaddr, "localhost")
