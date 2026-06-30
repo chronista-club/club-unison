@@ -84,8 +84,15 @@
 
 > Apple `NWProtocolQUIC` との interop のため raw QUIC に ALPN を追加し
 > (RFC 9001 §8.1 — QUIC は ALPN 必須)、Swift native client SDK (`clients/swift`)
-> を新設。SemVer minor (= additive)。raw QUIC は server/client 両端が同 label を
-> negotiate するため後方互換。
+> を新設。SemVer minor (= additive)。
+>
+> ⚠️ **互換性の訂正**（当初の「後方互換」記述は誤り）: ALPN を設定した server は
+> ALPN を出さない**旧 raw QUIC client を `no_application_protocol` で拒否する**
+> (QUIC は ALPN 必須で、rustls/quinn は plain TLS と違い handshake 時に enforce
+> する — empty-ALPN client での実測で確認)。raw QUIC client（Rust / Ruby FFI）は
+> **club-unison 1.3.0+ にビルドし直して `"unison"` ALPN を送る必要がある**。
+> WebTransport（TS）は HTTP/3 の `"h3"` 別 ingress なので無影響。詳細は
+> `design/quic-runtime.md` の ALPN 節。
 
 ### Added
 
