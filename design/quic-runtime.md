@@ -17,9 +17,21 @@ QUIC は仕様（RFC 9001 §8.1）で ALPN を必須とする。raw QUIC の ser
 （`quic.rs`）と client（`trust.rs`）は SSOT である `network::UNISON_ALPN`
 （= `"unison"`）を negotiate する。空 ALPN は仕様逸脱であり、Apple
 `NWProtocolQUIC` 等の厳格実装（Swift client）と interop できないため v1.3.0 で
-明示設定した。server / client が同 label で合意するため Rust↔Rust / Ruby（FFI）は
-後方互換。WebTransport 経路は HTTP/3 上のため ALPN は `"h3"` 固定（`wtransport`
-依存が内部設定）で、本 const は適用されない（別 ingress）。
+明示設定した。
+
+> ⚠️ **互換性（重要）**: ALPN を設定した server は、ALPN を送らない**旧 client を
+> `no_application_protocol` で拒否する**。QUIC は ALPN 必須なので、rustls/quinn は
+> plain TLS（client が ALPN を出さなければ enforce しない）と違い handshake 時に
+> **enforce する**（empty-ALPN client での実測で確認済み）。したがって v1.3.0 は
+> raw QUIC client にとって **breaking** で、**後方互換ではない**:
+> - **Rust client / Swift client**: `"unison"` を送るため OK。
+> - **Ruby client（FFI）**: gem が pin する `club-unison` を **1.3.0+ に上げて
+>   ビルドし直す必要がある**（旧 lock の 1.0.x は empty ALPN → 拒否される）。
+> - **WebTransport（TS）**: HTTP/3 の `"h3"` 別 ingress なので**無影響**。
+>
+> WebTransport 経路は HTTP/3 上のため ALPN は `"h3"` 固定（`wtransport` 依存が内部
+> 設定）で、本 const は適用されない（別 ingress）。回帰テスト:
+> `crates/unison-protocol/tests/test_alpn_enforcement.rs`。
 
 全体のアーキテクチャ層における位置付け:
 
