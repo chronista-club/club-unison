@@ -25,6 +25,7 @@ pub mod conn_quinn;
 pub mod context;
 pub mod datagram_channel;
 pub mod datagram_dispatcher;
+pub mod dial;
 pub mod discovery;
 pub mod dispatch;
 pub mod dynamic;
@@ -46,6 +47,7 @@ pub use client::{ClientConnectionEvent, ClientConnectionEventReceiver, ProtocolC
 pub use conn::UnisonConn;
 pub use context::Principal;
 pub use datagram_channel::DatagramChannel;
+pub use dial::{AttemptOutcome, Candidate, RaceCfg, RaceError, Via, Winner, WldId};
 pub use discovery::{
     DISCOVERY_CHANNEL_NAME, GET_PROTOCOL_METHOD, GetProtocolRequest, ProtocolDocument,
     SCHEMA_UPDATED_EVENT, SchemaUpdatedEvent,
