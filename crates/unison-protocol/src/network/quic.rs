@@ -392,7 +392,15 @@ impl QuicClient {
             .await
             .context("Failed to establish QUIC connection")?;
 
-        info!("Connected to QUIC server at {}", addr);
+        self.adopt_connection(endpoint, connection).await;
+        Ok(())
+    }
+
+    /// 確立済み QUIC connection を client state に採用する（endpoint 保存・accept_bi
+    /// loop 起動・identity oneshot 準備）。[`connect`](Self::connect) /
+    /// [`connect_race`](Self::connect_race) 共通の後処理。
+    async fn adopt_connection(&self, endpoint: Endpoint, connection: Connection) {
+        info!("Connected to QUIC server at {}", connection.remote_address());
 
         // Endpoint を保存（drop されると UDP ソケットが閉じて接続が切れる）
         *self.endpoint.lock().await = Some(endpoint);
@@ -413,7 +421,88 @@ impl QuicClient {
             client_accept_bi_loop(connection_for_loop, identity_tx, server_channels).await;
         });
         self.response_tasks.lock().await.push(task);
+    }
 
+    /// 複数の direct 候補アドレスへ Happy Eyeballs v2 の staggered race で接続する
+    /// (ADR-020 §S6)。1 個の client Endpoint から候補を stagger 付きで並行 connect し、
+    /// 最初に握手完了した経路を採用、残りは cancel する。「全滅」を判定せず、死経路の
+    /// コストは stagger 1 tick で有界。
+    ///
+    /// **direct-first-cut**: IPv6 GUA (ADR-020 §D3-a = first-class direct) のみ race する。
+    /// IPv4 候補は doctrine 上まだ deferred (§D3) のため **warn して skip**（silent drop
+    /// はしない）。relay fallback は engine 側 relay-ready だが本メソッドでは未配線
+    /// (relay は別到達機構ゆえ Transport 抽象が要る = 次段)。
+    ///
+    /// `server_name` は全候補共通（= 同一 world の cert 名前検証に使う）。
+    pub async fn connect_race(
+        &self,
+        addrs: Vec<SocketAddr>,
+        server_name: &str,
+        cfg: super::dial::RaceCfg,
+    ) -> Result<()> {
+        use super::dial::{AttemptOutcome, Candidate, Via};
+
+        // IPv6 GUA のみ採用。IPv4 は §D3 で deferred ゆえ明示 skip（silent drop なし）。
+        let mut v6: Vec<SocketAddr> = Vec::new();
+        for a in addrs {
+            if a.is_ipv6() {
+                v6.push(a);
+            } else {
+                warn!("connect_race: IPv4 候補 {a} を skip (ADR-020 §D3: IPv4 deferred)");
+            }
+        }
+        if v6.is_empty() {
+            return Err(anyhow::anyhow!(
+                "connect_race: IPv6 direct 候補がありません"
+            ));
+        }
+
+        // SkipVerification は loopback のみ許可（connect と対称）。
+        if matches!(
+            self.trust_anchors,
+            super::trust::TrustAnchors::SkipVerification
+        ) && let Some(a) = v6.iter().find(|a| !a.ip().is_loopback())
+        {
+            return Err(anyhow::anyhow!(
+                "SkipVerification is restricted to loopback; got {a}"
+            ));
+        }
+
+        let client_config = Self::configure_client_with(self.trust_anchors.clone()).await?;
+
+        // v6 候補を 1 個の [::] endpoint から race する（複数 connect を同時発火）。
+        let mut endpoint = Endpoint::client("[::]:0".parse().unwrap())?;
+        endpoint.set_default_client_config(client_config);
+
+        let candidates: Vec<Candidate> = v6.into_iter().map(Candidate::Direct).collect();
+
+        let winner = super::dial::race::<Connection, _, _>(candidates, &[], cfg, |cand| {
+            // `&endpoint` を future に move（endpoint 本体は race 後に adopt するため保持）。
+            let ep = &endpoint;
+            async move {
+                let addr = match &cand {
+                    Candidate::Direct(a) => *a,
+                    // relay は direct-first-cut では未配線（次段の Transport 抽象で）。
+                    Candidate::Relay(_) => return AttemptOutcome::Failed { via: cand.via() },
+                };
+                let t0 = tokio::time::Instant::now();
+                match ep.connect(addr, server_name) {
+                    Ok(connecting) => match connecting.await {
+                        Ok(conn) => AttemptOutcome::Connected {
+                            transport: conn,
+                            via: Via::Direct(addr),
+                            rtt: t0.elapsed(),
+                        },
+                        Err(_) => AttemptOutcome::Failed { via: Via::Direct(addr) },
+                    },
+                    Err(_) => AttemptOutcome::Failed { via: Via::Direct(addr) },
+                }
+            }
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("connect_race failed: {e}"))?;
+
+        self.adopt_connection(endpoint, winner.transport).await;
         Ok(())
     }
 
