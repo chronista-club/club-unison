@@ -257,7 +257,7 @@ async fn handle_ping(bridge: &UnisonBridge, args: PingArgs) -> Result<CallToolRe
     let (_client, endpoint) = connect_client(bridge, args.endpoint.as_deref(), args.trust).await?;
     let trust = bridge.resolve_trust(args.trust, &endpoint);
     let msg = format!("✅ connected to {endpoint} (trust={trust:?})");
-    Ok(CallToolResult::success(vec![Content::text(msg)]))
+    Ok(CallToolResult::success(vec![ContentBlock::text(msg)]))
 }
 
 async fn handle_call(bridge: &UnisonBridge, args: CallArgs) -> Result<CallToolResult, McpError> {
@@ -278,7 +278,7 @@ async fn handle_call(bridge: &UnisonBridge, args: CallArgs) -> Result<CallToolRe
         "method": args.method,
         "response": response,
     });
-    Ok(CallToolResult::success(vec![Content::text(
+    Ok(CallToolResult::success(vec![ContentBlock::text(
         result.to_string(),
     )]))
 }
@@ -323,7 +323,7 @@ async fn handle_discover(
         "channels": channels,
     });
 
-    Ok(CallToolResult::success(vec![Content::text(
+    Ok(CallToolResult::success(vec![ContentBlock::text(
         serde_json::to_string_pretty(&summary).unwrap_or_else(|_| summary.to_string()),
     )]))
 }
@@ -388,7 +388,7 @@ async fn handle_synthesized(
         "method": method,
         "response": response,
     });
-    Ok(CallToolResult::success(vec![Content::text(
+    Ok(CallToolResult::success(vec![ContentBlock::text(
         serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string()),
     )]))
 }
