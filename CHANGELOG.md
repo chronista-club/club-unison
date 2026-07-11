@@ -7,6 +7,14 @@
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-07-11 — connect_race: Happy Eyeballs v2 staggered-race dialer
+
+> 複数 direct 候補への接続を逐次フォールバックでなく 1 本の時間差レース（RFC 8305 型）に畳む
+> dialer（ADR-020 §S6 の consume 側）。direct-first-cut = IPv6 GUA direct のみ、relay fallback
+> は次段（`Transport` 抽象）。SemVer minor（additive・opt-in、既存 `connect` API 不変）。
+>
+> 設計: `design/happy-eyeballs-dial.md`（SSOT）
+
 ### Added
 
 - **connect_race — Happy Eyeballs v2 staggered-race dialer**（`network::dial` / `network::client` /
