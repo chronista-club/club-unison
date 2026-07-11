@@ -334,6 +334,13 @@ impl ProtocolClient {
             .await
             .map_err(|e| NetworkError::Connection(e.to_string()))?;
 
+        self.after_connect().await
+    }
+
+    /// transport 確立後の共通後処理（datagram dispatcher reset / Connected event fire /
+    /// drop detection task / Identity handshake）。[`connect`](Self::connect) /
+    /// [`connect_race`](Self::connect_race) が共有する。
+    async fn after_connect(&self) -> Result<(), NetworkError> {
         // reconnect 対策: 古い connection に bind された datagram dispatcher を破棄する。
         // dispatcher は spawn 時の connection を握ったままなので、 これを clear しないと
         // reconnect 後の open_datagram_channel が死んだ旧 connection の dispatcher を
@@ -374,6 +381,24 @@ impl ProtocolClient {
         }
 
         Ok(())
+    }
+
+    /// 複数の direct 候補へ Happy Eyeballs v2 の staggered race で接続する（ADR-020 §S6）。
+    ///
+    /// direct-first-cut: IPv6 GUA のみ race（IPv4 は §D3 deferred で skip、relay fallback は
+    /// 次段）。`server_name` は全候補共通（= 同一 world の cert 名前検証に使う）。成功後は
+    /// [`connect`](Self::connect) と同じ状態（identity/イベント/datagram）で使える。
+    pub async fn connect_race(
+        &self,
+        addrs: Vec<SocketAddr>,
+        server_name: &str,
+        cfg: super::dial::RaceCfg,
+    ) -> Result<(), NetworkError> {
+        self.transport
+            .connect_race(addrs, server_name, cfg)
+            .await
+            .map_err(|e| NetworkError::Connection(e.to_string()))?;
+        self.after_connect().await
     }
 
     /// Unisonサーバーへ接続し、 接続直後に credential を1回提示して認証する
