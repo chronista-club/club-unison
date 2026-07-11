@@ -7,6 +7,35 @@
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-07-11 — connect_race: Happy Eyeballs v2 staggered-race dialer
+
+> 複数 direct 候補への接続を逐次フォールバックでなく 1 本の時間差レース（RFC 8305 型）に畳む
+> dialer（ADR-020 §S6 の consume 側）。direct-first-cut = IPv6 GUA direct のみ、relay fallback
+> は次段（`Transport` 抽象）。SemVer minor（additive・opt-in、既存 `connect` API 不変）。
+>
+> 設計: `design/happy-eyeballs-dial.md`（SSOT）
+
+### Added
+
+- **connect_race — Happy Eyeballs v2 staggered-race dialer**（`network::dial` / `network::client` /
+  `network::quic`、ADR-020 §S6）: 複数の direct 候補へ *逐次フォールバック* でなく
+  **1 本の時間差レース**で接続し、最初に握手完了した経路を採用・残りを cancel する dialer。
+  per-endpoint timeout の「短すぎ＝良経路誤棄／長すぎ＝数秒待ち」ジレンマを、有界な stagger
+  だけで構造的に解消する（死経路コスト = stagger 1 tick、「全滅」判定は不要）。
+  - `network::dial::race` / `rank`: network 非依存の generic engine。実 I/O は `attempt` closure に
+    閉じ、並行タイミングの状態機械を**仮想時間**（`start_paused = true`）で決定論的にテスト
+    （unit 10 件）。eager relay arm（握手済 relay を `relay_handicap` まで hold し direct に勝機を
+    与える → direct 失敗時の failover +0 RTT）を doctrine default に持つ。
+  - `ProtocolClient::connect_race(addrs, server_name, cfg)` / `QuicClient::connect_race`:
+    1 個の client Endpoint から IPv6 GUA 候補を staggered race。成功後は `connect` と同じ状態
+    （identity / イベント / datagram）で使える。IPv4 は §D3 で deferred のため warn して skip、
+    relay fallback は次段（`Transport` 抽象）。
+  - `RaceCfg { stagger, relay_handicap, overall_deadline }`: レースのチューニング
+    （default = eager relay arm）。
+
+  設計 SSOT: [`design/happy-eyeballs-dial.md`](design/happy-eyeballs-dial.md)。
+  SemVer minor（additive・opt-in、既存 `connect` API は不変）。
+
 ## [1.5.0] - 2026-06-28 — server-initiated reliable stream (`ServerToClient` を起こす)
 
 > server 起点で connected client へ **reliable・同順** な stream を開く primitive を追加。
@@ -84,8 +113,15 @@
 
 > Apple `NWProtocolQUIC` との interop のため raw QUIC に ALPN を追加し
 > (RFC 9001 §8.1 — QUIC は ALPN 必須)、Swift native client SDK (`clients/swift`)
-> を新設。SemVer minor (= additive)。raw QUIC は server/client 両端が同 label を
-> negotiate するため後方互換。
+> を新設。SemVer minor (= additive)。
+>
+> ⚠️ **互換性の訂正**（当初の「後方互換」記述は誤り）: ALPN を設定した server は
+> ALPN を出さない**旧 raw QUIC client を `no_application_protocol` で拒否する**
+> (QUIC は ALPN 必須で、rustls/quinn は plain TLS と違い handshake 時に enforce
+> する — empty-ALPN client での実測で確認)。raw QUIC client（Rust / Ruby FFI）は
+> **club-unison 1.3.0+ にビルドし直して `"unison"` ALPN を送る必要がある**。
+> WebTransport（TS）は HTTP/3 の `"h3"` 別 ingress なので無影響。詳細は
+> `design/quic-runtime.md` の ALPN 節。
 
 ### Added
 

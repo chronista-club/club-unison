@@ -76,6 +76,8 @@ buffa-build.workspace = true
 [dev-dependencies]
 pretty_assertions.workspace = true
 tokio-test.workspace = true
+# dial.rs のレーステスト用に仮想時間（start_paused）を有効化。
+tokio = { workspace = true, features = ["test-util"] }
 criterion.workspace = true
 hdrhistogram.workspace = true
 
