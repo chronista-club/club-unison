@@ -145,8 +145,14 @@ pub enum Via {
 /// 1 候補の握手結果。`attempt` closure が返す。
 #[derive(Debug)]
 pub enum AttemptOutcome<T> {
-    Connected { transport: T, via: Via, rtt: Duration },
-    Failed { via: Via },
+    Connected {
+        transport: T,
+        via: Via,
+        rtt: Duration,
+    },
+    Failed {
+        via: Via,
+    },
 }
 
 /// レースの失敗。
@@ -329,7 +335,11 @@ mod tests {
                 match s {
                     Some(Script::Ok(delay)) => {
                         sleep(delay).await;
-                        AttemptOutcome::Connected { transport: c, via, rtt: delay }
+                        AttemptOutcome::Connected {
+                            transport: c,
+                            via,
+                            rtt: delay,
+                        }
                     }
                     Some(Script::Fail(delay)) => {
                         sleep(delay).await;
@@ -374,7 +384,10 @@ mod tests {
         let w = race(vec![d(1), d(2)], &[], RaceCfg::default(), attempter(script))
             .await
             .unwrap();
-        assert_eq!(w.via, Via::Direct(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 1)));
+        assert_eq!(
+            w.via,
+            Via::Direct(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 1))
+        );
         // 50ms < stagger 250ms → d(2) は arm される前に決着。
         assert!(near(t0.elapsed(), 50), "elapsed = {:?}", t0.elapsed());
     }
@@ -389,7 +402,10 @@ mod tests {
         let w = race(vec![d(1), d(2)], &[], RaceCfg::default(), attempter(script))
             .await
             .unwrap();
-        assert_eq!(w.via, Via::Direct(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 2)));
+        assert_eq!(
+            w.via,
+            Via::Direct(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 2))
+        );
         // d(2) は stagger 250ms で arm → 80ms 後 = 330ms に完了。黒穴 timeout を待たない。
         assert!(near(t0.elapsed(), 330), "elapsed = {:?}", t0.elapsed());
     }
@@ -402,8 +418,15 @@ mod tests {
         let w = race(vec![d(1), d(2)], &[], RaceCfg::default(), attempter(script))
             .await
             .unwrap();
-        assert_eq!(w.via, Via::Direct(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 2)));
-        assert!(near(t0.elapsed(), 50), "elapsed = {:?} (10 fail + 40 ok)", t0.elapsed());
+        assert_eq!(
+            w.via,
+            Via::Direct(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 2))
+        );
+        assert!(
+            near(t0.elapsed(), 50),
+            "elapsed = {:?} (10 fail + 40 ok)",
+            t0.elapsed()
+        );
     }
 
     // ── eager relay ──────────────────────────────────────────────────────────
@@ -417,12 +440,21 @@ mod tests {
             (r("hub"), Script::Ok(ms(30))),
         ]);
         let t0 = Instant::now();
-        let w = race(vec![d(1), d(2), r("hub")], &[], RaceCfg::default(), attempter(script))
-            .await
-            .unwrap();
+        let w = race(
+            vec![d(1), d(2), r("hub")],
+            &[],
+            RaceCfg::default(),
+            attempter(script),
+        )
+        .await
+        .unwrap();
         assert_eq!(w.via, Via::Relay("hub".into()));
         assert_eq!(w.rtt, ms(30)); // relay 握手は 30ms（gate は adoption を遅らせるだけ）
-        assert!(near(t0.elapsed(), 500), "elapsed = {:?} (gate)", t0.elapsed());
+        assert!(
+            near(t0.elapsed(), 500),
+            "elapsed = {:?} (gate)",
+            t0.elapsed()
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -434,24 +466,40 @@ mod tests {
             (r("hub"), Script::Ok(ms(30))),
         ]);
         let t0 = Instant::now();
-        let w = race(vec![d(1), d(2), r("hub")], &[], RaceCfg::default(), attempter(script))
-            .await
-            .unwrap();
+        let w = race(
+            vec![d(1), d(2), r("hub")],
+            &[],
+            RaceCfg::default(),
+            attempter(script),
+        )
+        .await
+        .unwrap();
         assert_eq!(w.via, Via::Relay("hub".into()));
         // d(1)@10 fail→d(2) arm@10→fail@20、relay@30 完了で全 direct 決着済 → 30ms 採用。
-        assert!(near(t0.elapsed(), 30), "elapsed = {:?} (early)", t0.elapsed());
+        assert!(
+            near(t0.elapsed(), 30),
+            "elapsed = {:?} (early)",
+            t0.elapsed()
+        );
     }
 
     #[tokio::test(start_paused = true)]
     async fn direct_beats_already_connected_relay() {
         // relay は 20ms で握手済（hold）、direct は 100ms で完了 → direct 優先。
-        let script =
-            HashMap::from([(r("hub"), Script::Ok(ms(20))), (d(1), Script::Ok(ms(100)))]);
+        let script = HashMap::from([(r("hub"), Script::Ok(ms(20))), (d(1), Script::Ok(ms(100)))]);
         let t0 = Instant::now();
-        let w = race(vec![d(1), r("hub")], &[], RaceCfg::default(), attempter(script))
-            .await
-            .unwrap();
-        assert_eq!(w.via, Via::Direct(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 1)));
+        let w = race(
+            vec![d(1), r("hub")],
+            &[],
+            RaceCfg::default(),
+            attempter(script),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            w.via,
+            Via::Direct(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 1))
+        );
         assert!(near(t0.elapsed(), 100), "elapsed = {:?}", t0.elapsed());
     }
 
@@ -467,7 +515,10 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn blackhole_without_relay_hits_deadline() {
         let script = HashMap::from([(d(1), Script::Fail(ms(9_000)))]); // deadline より長い
-        let cfg = RaceCfg { overall_deadline: ms(1_000), ..Default::default() };
+        let cfg = RaceCfg {
+            overall_deadline: ms(1_000),
+            ..Default::default()
+        };
         let t0 = Instant::now();
         let res = race(vec![d(1)], &[], cfg, attempter(script)).await;
         assert_eq!(res.unwrap_err(), RaceError::Deadline);

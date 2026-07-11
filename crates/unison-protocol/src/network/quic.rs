@@ -400,7 +400,10 @@ impl QuicClient {
     /// loop 起動・identity oneshot 準備）。[`connect`](Self::connect) /
     /// [`connect_race`](Self::connect_race) 共通の後処理。
     async fn adopt_connection(&self, endpoint: Endpoint, connection: Connection) {
-        info!("Connected to QUIC server at {}", connection.remote_address());
+        info!(
+            "Connected to QUIC server at {}",
+            connection.remote_address()
+        );
 
         // Endpoint を保存（drop されると UDP ソケットが閉じて接続が切れる）
         *self.endpoint.lock().await = Some(endpoint);
@@ -493,9 +496,13 @@ impl QuicClient {
                             via: Via::Direct(addr),
                             rtt: t0.elapsed(),
                         },
-                        Err(_) => AttemptOutcome::Failed { via: Via::Direct(addr) },
+                        Err(_) => AttemptOutcome::Failed {
+                            via: Via::Direct(addr),
+                        },
                     },
-                    Err(_) => AttemptOutcome::Failed { via: Via::Direct(addr) },
+                    Err(_) => AttemptOutcome::Failed {
+                        via: Via::Direct(addr),
+                    },
                 }
             }
         })

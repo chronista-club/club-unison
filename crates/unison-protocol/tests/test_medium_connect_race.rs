@@ -107,7 +107,10 @@ async fn connect_race_prefers_live_over_dead_decoy() -> Result<()> {
     client
         .connect_race(vec![dead, live], "::1", fast_cfg())
         .await?;
-    assert!(client.is_connected().await, "race should establish a live connection");
+    assert!(
+        client.is_connected().await,
+        "race should establish a live connection"
+    );
     // decoy には server が居ないため、ping-pong が成立すること自体が「race が live 経路を
     // 掴んだ」証明（dead を掴んでいたら open_channel/request が timeout する）。
     assert_ping_pong(&client).await?;
