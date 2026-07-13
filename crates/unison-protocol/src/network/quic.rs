@@ -763,14 +763,25 @@ impl QuicServer {
         info!("QUIC server listening for connections");
 
         while let Some(connecting) = endpoint.accept().await {
-            let connection = connecting.await?;
-            let remote_addr = connection.remote_address();
-            info!("New QUIC connection from: {}", remote_addr);
-
+            // handshake 完了 (`connecting.await`) は **per-connection task 内**で行う。
+            // 以前は accept loop 内で `connecting.await?` していたため、incoming handshake が
+            // 1 つでも失敗すると `?` が accept loop 全体を終了させ、以降の新規接続を一切
+            // 受け付けなくなる「片肺死」が起きていた (既存の spawn 済み接続だけ生存)。
+            // 例: federation direct-dial の cert mismatch (`UnknownIssuer`) や ALPN mismatch。
+            // 修正 2026-07-13、回帰テスト test_medium_accept_resilience、creo
+            // mem_1CcvYA5TRF4EcFafbyKqPg。
             let server = Arc::clone(&self.server);
             let ctx = Arc::new(ConnectionContext::new());
-            let conn: Arc<dyn UnisonConn> = Arc::new(connection);
             tokio::spawn(async move {
+                let connection = match connecting.await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        warn!("QUIC handshake failed (accept loop 継続): {}", e);
+                        return;
+                    }
+                };
+                info!("New QUIC connection from: {}", connection.remote_address());
+                let conn: Arc<dyn UnisonConn> = Arc::new(connection);
                 if let Err(e) = handle_connection(conn, server, ctx).await {
                     error!("Connection error: {}", e);
                 }
@@ -797,14 +808,20 @@ impl QuicServer {
                 connecting = endpoint.accept() => {
                     match connecting {
                         Some(connecting) => {
-                            let connection = connecting.await?;
-                            let remote_addr = connection.remote_address();
-                            info!("New QUIC connection from: {}", remote_addr);
-
+                            // handshake 完了は per-connection task 内で行う (start() と同じ理由で
+                            // accept loop を守る = 片肺死の根治、2026-07-13、mem_1CcvYA5TRF4EcFafbyKqPg)。
                             let server = Arc::clone(&self.server);
                             let ctx = Arc::new(ConnectionContext::new());
-                            let conn: Arc<dyn UnisonConn> = Arc::new(connection);
                             tokio::spawn(async move {
+                                let connection = match connecting.await {
+                                    Ok(c) => c,
+                                    Err(e) => {
+                                        warn!("QUIC handshake failed (accept loop 継続): {}", e);
+                                        return;
+                                    }
+                                };
+                                info!("New QUIC connection from: {}", connection.remote_address());
+                                let conn: Arc<dyn UnisonConn> = Arc::new(connection);
                                 if let Err(e) = handle_connection(conn, server, ctx).await {
                                     error!("Connection error: {}", e);
                                 }
