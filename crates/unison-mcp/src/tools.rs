@@ -59,10 +59,13 @@ impl UnisonMcp {
             Tool::new(
                 Cow::Borrowed("unison_ping"),
                 Cow::Borrowed(
-                    "Verify connectivity to a Unison server. Connects then disconnects, returning a success message.",
+                    "Verify connectivity to a Unison server. Connects over QUIC, then reports \
+                     `{connected, endpoint, trust}` as structured content. Use this first when \
+                     a server seems unreachable or to sanity-check an endpoint URL.",
                 ),
                 schema_for_type::<PingArgs>(),
             )
+            .with_title("Ping Unison server")
             .annotate(
                 ToolAnnotations::new()
                     .read_only(true)
@@ -72,18 +75,31 @@ impl UnisonMcp {
             Tool::new(
                 Cow::Borrowed("unison_call"),
                 Cow::Borrowed(
-                    "Generic escape hatch: open any channel on a Unison server, send a typed method+payload, return the response. No schema validation.",
+                    "Escape hatch: send any request to any channel on a Unison server, without \
+                     schema validation by the bridge. Prefer the synthesized \
+                     `unison_<channel>_<method>` tools when they are listed — those validate \
+                     payloads against the server's schema and declare typed output. Use this \
+                     only for channels not covered by synthesized tools (e.g. after inspecting \
+                     an unknown server with `unison_discover`).",
                 ),
                 schema_for_type::<CallArgs>(),
             )
+            .with_title("Call Unison channel (escape hatch)")
             .annotate(ToolAnnotations::new().open_world(true)),
             Tool::new(
                 Cow::Borrowed("unison_discover"),
                 Cow::Borrowed(
-                    "Fetch the protocol KDL from a Unison server via the `unison.discovery` channel. Returns channel/request listing + version/hash/codecs. When targeting the configured default endpoint, refreshes the synthesized tool set (emits tools/list_changed on schema change).",
+                    "Fetch a Unison server's protocol schema (KDL) via the `unison.discovery` \
+                     channel and return a summary: channels, requests, events, version, hash, \
+                     codecs. Against the configured default endpoint this also refreshes the \
+                     synthesized tool set (emitting tools/list_changed if the schema hash \
+                     changed) — the response's `refreshed` field tells you which mode ran. Use \
+                     it to explore unknown servers or to pick up server schema changes \
+                     mid-session.",
                 ),
                 schema_for_type::<DiscoverArgs>(),
             )
+            .with_title("Discover Unison protocol")
             .annotate(
                 ToolAnnotations::new()
                     .read_only(true)
@@ -203,46 +219,58 @@ impl UnisonMcp {
 // Tool argument schemas
 // ---------------------------------------------------------------------------
 
+/// arg schema の doc comment は schemars 経由で JSON Schema の `description` になり
+/// client (= LLM agent) にそのまま露出する。 tool description と同じく英語で書く。
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct PingArgs {
-    /// Unison サーバの endpoint URL (= 例: `quic://[::1]:7878`)。
-    /// BridgeConfig に default endpoint があれば省略可。
+    /// Unison server endpoint URL, e.g. `quic://[::1]:7878`. Optional when the
+    /// bridge config provides a default endpoint.
     #[serde(default)]
     pub endpoint: Option<String>,
 
-    /// Trust anchor mode (= "skip" / "system")。 省略時は BridgeConfig の default、
-    /// それも無ければ "skip"。
+    /// Certificate trust mode: `"skip"` (accept self-signed certs; dev/loopback
+    /// servers) or `"system"` (OS trust store; public servers). Defaults to the
+    /// config value; without one, loopback endpoints get `skip` and remote
+    /// endpoints get `system`.
     #[serde(default)]
     pub trust: Option<TrustMode>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CallArgs {
-    /// Unison サーバの endpoint URL。 BridgeConfig に default endpoint があれば省略可。
+    /// Unison server endpoint URL, e.g. `quic://[::1]:7878`. Optional when the
+    /// bridge config provides a default endpoint.
     #[serde(default)]
     pub endpoint: Option<String>,
 
-    /// 対象 channel 名 (= 例: `"unison.discovery"`、 `"chat"`)
+    /// Target channel name, e.g. `"unison.discovery"` or `"chat"`. Channel names
+    /// are listed by `unison_discover`.
     pub channel_name: String,
 
-    /// 対象 method 名 (= KDL の `request "Name"` の Name)
+    /// Request name as declared in the channel's KDL `request "Name"` block
+    /// (case-sensitive).
     pub method: String,
 
-    /// 送信する JSON payload
+    /// JSON payload for the request. The bridge sends it as-is (no schema
+    /// validation); the server may still reject it.
     pub payload: serde_json::Value,
 
-    /// Trust mode (省略可)
+    /// Certificate trust mode: `"skip"` or `"system"`. See `unison_ping` for
+    /// the default rules.
     #[serde(default)]
     pub trust: Option<TrustMode>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct DiscoverArgs {
-    /// Unison サーバの endpoint URL。 BridgeConfig に default endpoint があれば省略可。
+    /// Unison server endpoint URL, e.g. `quic://[::1]:7878`. Optional when the
+    /// bridge config provides a default endpoint; omitting it targets the
+    /// default endpoint and refreshes the synthesized tool set.
     #[serde(default)]
     pub endpoint: Option<String>,
 
-    /// Trust mode (省略可)
+    /// Certificate trust mode: `"skip"` or `"system"`. See `unison_ping` for
+    /// the default rules.
     #[serde(default)]
     pub trust: Option<TrustMode>,
 }
@@ -306,7 +334,9 @@ async fn connect_client(
         Some(e) => e.to_string(),
         None => elicit_endpoint(peer).await.ok_or_else(|| {
             McpError::invalid_request(
-                "endpoint not provided and no default in BridgeConfig".to_string(),
+                "no endpoint: pass the `endpoint` argument (e.g. quic://[::1]:7878) \
+                 or start unison-mcp with `--config` providing a default endpoint"
+                    .to_string(),
                 None,
             )
         })?,
@@ -319,10 +349,15 @@ async fn connect_client(
         .map_err(|e| McpError::internal_error(format!("client init failed: {e}"), None))?;
     let client = ProtocolClient::new(quic);
 
-    client
-        .connect(&endpoint)
-        .await
-        .map_err(|e| McpError::internal_error(format!("connect failed: {e}"), None))?;
+    client.connect(&endpoint).await.map_err(|e| {
+        McpError::internal_error(
+            format!(
+                "connect to {endpoint} failed (trust={trust:?}): {e}. \
+                 Is the server running? For self-signed dev servers use trust=\"skip\"."
+            ),
+            None,
+        )
+    })?;
 
     Ok((client, endpoint))
 }
@@ -350,15 +385,29 @@ async fn handle_call(
     let (client, _endpoint) =
         connect_client(bridge, args.endpoint.as_deref(), args.trust, peer).await?;
 
-    let channel = client
-        .open_channel(&args.channel_name)
-        .await
-        .map_err(|e| McpError::internal_error(format!("open_channel failed: {e}"), None))?;
+    let channel = client.open_channel(&args.channel_name).await.map_err(|e| {
+        McpError::internal_error(
+            format!(
+                "open_channel `{}` failed: {e}. Check the channel name with unison_discover.",
+                args.channel_name
+            ),
+            None,
+        )
+    })?;
 
-    let response: serde_json::Value = channel
-        .request(&args.method, &args.payload)
-        .await
-        .map_err(|e| McpError::internal_error(format!("request failed: {e}"), None))?;
+    let response: serde_json::Value =
+        channel
+            .request(&args.method, &args.payload)
+            .await
+            .map_err(|e| {
+                McpError::internal_error(
+                    format!(
+                        "request `{}` on channel `{}` failed: {e}",
+                        args.method, args.channel_name
+                    ),
+                    None,
+                )
+            })?;
 
     // escape hatch は output_schema を宣言しないので、 channel/method 込みの
     // wrapper object を structured で返す (= 常に object になる)。
@@ -380,9 +429,16 @@ async fn handle_discover(
         connect_client(bridge, args.endpoint.as_deref(), args.trust, peer).await?;
     let client = Arc::new(client);
 
-    let proto = DynamicProtocol::fetch(client.clone())
-        .await
-        .map_err(|e| McpError::internal_error(format!("discovery fetch failed: {e}"), None))?;
+    let proto = DynamicProtocol::fetch(client.clone()).await.map_err(|e| {
+        McpError::internal_error(
+            format!(
+                "discovery fetch from {endpoint} failed: {e}. \
+                 The server may not expose the `unison.discovery` channel \
+                 (= enable_discovery not called)."
+            ),
+            None,
+        )
+    })?;
 
     let channels: Vec<serde_json::Value> = proto
         .registry()
@@ -462,7 +518,9 @@ async fn handle_synthesized(
     let disc = bridge.discovered().ok_or_else(|| {
         McpError::invalid_request(
             format!(
-                "no discovered protocol; synthesized tool `{tool_name}` cannot be served without a configured endpoint"
+                "no discovered protocol; synthesized tool `{tool_name}` cannot be served. \
+                 Configure a default endpoint (`--config`) so discovery runs at startup, \
+                 or use unison_call with an explicit `endpoint`."
             ),
             None,
         )
@@ -471,11 +529,15 @@ async fn handle_synthesized(
     let (channel_name, method) = resolve_synth_tool(&disc, tool_name)
         .ok_or(McpError::method_not_found::<CallToolRequestMethod>())?;
 
-    let chan = disc
-        .proto
-        .open_channel(&channel_name)
-        .await
-        .map_err(|e| McpError::internal_error(format!("open_channel failed: {e}"), None))?;
+    let chan = disc.proto.open_channel(&channel_name).await.map_err(|e| {
+        McpError::internal_error(
+            format!(
+                "open_channel `{channel_name}` failed: {e}. \
+                 The server may have restarted — run unison_discover to reconnect and refresh."
+            ),
+            None,
+        )
+    })?;
 
     let response = chan.request(&method, arguments).await.map_err(|e| {
         // DynamicError には Network / Validation / Registry / Serde がある。
@@ -514,15 +576,16 @@ impl ServerHandler for UnisonMcp {
                 .build(),
         )
         .with_instructions(
-            "MCP bridge for Unison Protocol. Static escape hatch tools: \
-                 `unison_ping` / `unison_call` / `unison_discover`. \
-                 If a default endpoint is configured (= unison.json), synthesized typed tools \
-                 named `unison_<channel>_<method>` are also exposed for each channel.request \
-                 in the discovered KDL schema. Synthesized tools are payload-validated against \
-                 the server's schema before dispatch (= fail-fast on type mismatch), declare \
-                 output_schema from the KDL `returns` block, and return results as \
-                 structuredContent (text mirror included). Calling `unison_discover` against \
-                 the default endpoint refreshes the synthesized tool set (tools/list_changed).",
+            "MCP bridge to Unison Protocol servers (QUIC). \
+             Prefer the synthesized `unison_<channel>_<method>` tools when listed: they are \
+             generated from the server's KDL schema, validate payloads before dispatch \
+             (fail-fast on type mismatch), and declare output_schema from the KDL `returns` \
+             block. Static tools: `unison_ping` checks connectivity; `unison_discover` \
+             summarizes a server's schema and — against the configured default endpoint — \
+             refreshes the synthesized tool set (tools/list_changed on schema change); \
+             `unison_call` is an untyped escape hatch for channels without a synthesized \
+             tool. All results are structuredContent with a text mirror. If tool calls fail \
+             after a server restart, run `unison_discover` first to reconnect.",
         )
     }
 
