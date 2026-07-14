@@ -4,12 +4,16 @@
 //! fetch、 schema を `discovered` field に保持)。 これにより `tools.rs` の `list_tools`
 //! が synthesized typed tools を返せるようになる。
 //!
+//! discovery は起動時 1 回で終わりではなく **live** — `unison_discover` が default
+//! endpoint に対して成功すると [`UnisonBridge::set_discovered`] で置き換わり、
+//! synthesized tool set が MCP session 中に更新される (= server の schema 進化に追従)。
+//!
 //! Discovery failure (= endpoint 未指定 / 接続失敗 / KDL parse 失敗) は warn log
 //! で continue、 static escape hatch tools (ping/call/discover) のみで動作。 これに
 //! より agent 起動時に 「discovery server がまだ準備中」 の場合でも MCP server 自身は
 //! 起動できる (= 部分動作の resilience)。
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
 
@@ -22,12 +26,16 @@ use crate::config::{BridgeConfig, TrustMode};
 /// MCP bridge 全体の state。
 pub struct UnisonBridge {
     config: BridgeConfig,
-    /// 起動時に config.endpoint に対して fetch した DynamicProtocol。
-    /// None = endpoint 未設定 or 接続失敗 (= synthesized tools 不可、 static のみ)。
-    discovered: Option<DiscoveredProtocol>,
+    /// 現在 active な discovery 結果。 起動時に config.endpoint から fetch し、
+    /// 以後 `unison_discover` (= default endpoint 宛) が refresh する。
+    /// None = endpoint 未設定 or 未 discovery (= synthesized tools 不可、 static のみ)。
+    ///
+    /// lock は read → Arc clone → 即 drop の短い critical section のみ
+    /// (= await を跨いで保持しない) なので std の RwLock で足りる。
+    discovered: RwLock<Option<Arc<DiscoveredProtocol>>>,
 }
 
-/// 起動時 discovery 結果
+/// discovery 結果 (= 起動時 or `unison_discover` による refresh)
 pub struct DiscoveredProtocol {
     pub proto: Arc<DynamicProtocol>,
 }
@@ -70,12 +78,29 @@ impl UnisonBridge {
                 None
             }
         };
-        Ok(Self { config, discovered })
+        Ok(Self {
+            config,
+            discovered: RwLock::new(discovered.map(Arc::new)),
+        })
     }
 
-    /// Discovered protocol への参照 (= synthesized tools 用)
-    pub fn discovered(&self) -> Option<&DiscoveredProtocol> {
-        self.discovered.as_ref()
+    /// 現在の discovered protocol (= synthesized tools 用)。 Arc clone を返すので
+    /// 呼び出し側は lock を保持せず自由に使える。
+    pub fn discovered(&self) -> Option<Arc<DiscoveredProtocol>> {
+        self.discovered
+            .read()
+            .expect("discovered lock poisoned")
+            .clone()
+    }
+
+    /// discovery を新しい結果で置き換え、 **直前の** protocol hash を返す
+    /// (= 呼び出し側が hash 比較で「tool set が実際に変わったか」を判定し、
+    /// `tools/list_changed` 通知を hash 変化時に限定できる)。
+    pub fn set_discovered(&self, d: DiscoveredProtocol) -> Option<String> {
+        let mut guard = self.discovered.write().expect("discovered lock poisoned");
+        let old_hash = guard.as_ref().map(|p| p.proto.hash().to_string());
+        *guard = Some(Arc::new(d));
+        old_hash
     }
 
     /// Tool arg で endpoint が未指定の場合、 config の default endpoint を返す。
@@ -197,7 +222,7 @@ mod tests {
                 endpoint: Some("default".to_string()),
                 trust: None,
             },
-            discovered: None,
+            discovered: RwLock::new(None),
         };
         assert_eq!(bridge.resolve_endpoint(Some("override")), Some("override"));
         assert_eq!(bridge.resolve_endpoint(None), Some("default"));
@@ -207,7 +232,7 @@ mod tests {
     fn endpoint_resolution_empty_returns_none() {
         let bridge = UnisonBridge {
             config: BridgeConfig::default(),
-            discovered: None,
+            discovered: RwLock::new(None),
         };
         assert_eq!(bridge.resolve_endpoint(None), None);
     }
@@ -219,7 +244,7 @@ mod tests {
                 endpoint: None,
                 trust: Some(TrustMode::System),
             },
-            discovered: None,
+            discovered: RwLock::new(None),
         };
         // arg / config の明示は endpoint に関係なく優先される
         assert_eq!(
@@ -236,7 +261,7 @@ mod tests {
     fn trust_default_is_skip_for_loopback() {
         let bridge = UnisonBridge {
             config: BridgeConfig::default(),
-            discovered: None,
+            discovered: RwLock::new(None),
         };
         // 明示なし + loopback → Skip (dev ergonomics)
         assert_eq!(
@@ -257,7 +282,7 @@ mod tests {
     fn trust_default_is_system_for_remote() {
         let bridge = UnisonBridge {
             config: BridgeConfig::default(),
-            discovered: None,
+            discovered: RwLock::new(None),
         };
         // 明示なし + remote → System (secure-by-default、 silent skip を防ぐ)
         assert_eq!(

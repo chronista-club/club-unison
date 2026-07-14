@@ -7,6 +7,24 @@
 
 ## [Unreleased]
 
+### Added
+
+- **unison-mcp: rmcp 2 系機能の還元 — typed I/O + live bridge 化**:
+  - KDL `returns` block → MCP `Tool.output_schema` 合成。synthesized tools が入出力とも
+    typed になり、client が `structuredContent` を検証できる（input と同一 converter =
+    `mapping::fields_to_object_schema`、型対応が入出力で完全一致）。
+  - 全 tool の結果を `structuredContent` で返却（text content は互換 mirror）。synthesized
+    tools は response そのものを structured で返し、output_schema と形が一致する。
+  - static tools に `ToolAnnotations`（ping/discover = read-only + idempotent、全 tool
+    open-world）、synthesized tools に `title`（= sanitize 前の `channel.method` 表示名）。
+  - **live re-discovery**: `unison_discover` が default endpoint への成功時に bridge の
+    discovery を置き換え、synthesized tool set を MCP session 中に更新（= server の schema
+    進化に追従）。protocol hash 変化時は `notifications/tools/list_changed` を発行
+    （`listChanged` capability 宣言済み）。`UnisonBridge.discovered` は `RwLock` 化。
+  - **endpoint elicitation**: endpoint が config にも tool arg にも無い場合、elicitation
+    対応 client にはその場で接続先を質問（`Peer::elicit`、rmcp feature `elicitation` +
+    `schemars` を追加）。非対応/拒否/失敗は従来どおり invalid_request エラー。
+
 ### Changed
 
 - **unison-mcp: rmcp を最新 2 系（2.2.0）へ更新**（`1.7` → `2`）: MCP 公式 Rust SDK を 2 系に追従。

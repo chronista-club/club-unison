@@ -91,9 +91,12 @@ fn sanitize_description(s: &str) -> String {
 /// `ChannelRequest` を MCP `Tool` に変換する。
 ///
 /// - name: `synth_tool_name(channel, request.name)`
+/// - title: `channel.method` (= sanitize 前の人間可読表示名、 制御文字のみ除去)
 /// - description: KDL `request "X" description="..."` があればその文字列を採用、
 ///   無ければ formulaic な default (= 「Invoke the X request on the Y channel」) を生成
 /// - input_schema: `request.fields` を JSON Schema object に変換
+/// - output_schema: KDL `returns` block があれば同じ converter で合成
+///   (= tool が入出力とも typed になり、 client は `structuredContent` を検証できる)
 ///
 /// description は LLM の tool-selection accuracy に強相関するので、 schema 設計時に
 /// `description="..."` を書くことで LLM が tool を正しく選びやすくなる。
@@ -109,16 +112,23 @@ pub fn synthesize_tool(channel_name: &str, request: &ChannelRequest) -> Tool {
                 request.name, channel_name
             )
         });
-    let input_schema = fields_to_input_schema(&request.fields);
-    Tool::new(
+    let input_schema = fields_to_object_schema(&request.fields);
+    let title = sanitize_description(&format!("{}.{}", channel_name, request.name));
+    let mut tool = Tool::new(
         Cow::Owned(name),
         Cow::Owned(description),
         Arc::new(input_schema),
     )
+    .with_title(title);
+    if let Some(returns) = &request.returns {
+        tool = tool.with_raw_output_schema(Arc::new(fields_to_object_schema(&returns.fields)));
+    }
+    tool
 }
 
-/// `Field` 群から JSON Schema object (= top-level `{type: "object", properties: {...}, required: [...]}`) を組み立てる
-pub fn fields_to_input_schema(fields: &[Field]) -> JsonObject {
+/// `Field` 群から JSON Schema object (= top-level `{type: "object", properties: {...}, required: [...]}`) を組み立てる。
+/// `Tool.input_schema` (= request.fields) と `Tool.output_schema` (= returns.fields) の両方に使う。
+pub fn fields_to_object_schema(fields: &[Field]) -> JsonObject {
     let mut properties = Map::new();
     let mut required = Vec::new();
     for f in fields {
@@ -334,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    fn fields_to_input_schema_basic() {
+    fn fields_to_object_schema_basic() {
         // Mock: 既存 schemas/ping_pong.kdl と類似の構造を 直接 Field で組まずに、
         // 既存 KDL parser 経由で取得する
         let kdl = r#"
@@ -350,7 +360,7 @@ protocol "x" version="0.1.0" {
 "#;
         let parsed = unison::parser::SchemaParser::new().parse(kdl).unwrap();
         let req = &parsed.protocol.as_ref().unwrap().channels[0].requests[0];
-        let schema = fields_to_input_schema(&req.fields);
+        let schema = fields_to_object_schema(&req.fields);
 
         assert_eq!(schema.get("type"), Some(&json!("object")));
         let props = schema.get("properties").and_then(Value::as_object).unwrap();
@@ -502,6 +512,83 @@ protocol "x" version="0.1.0" {
         assert!(meta.get("additionalProperties").is_some());
     }
 
+    /// KDL `returns` block → `Tool.output_schema` 合成 (= rmcp 2.x / MCP 2025-06-18)。
+    /// input と同じ converter を通るので、 型対応・required・additionalProperties の
+    /// 挙動は input_schema と完全に一致する。
+    #[test]
+    fn synthesize_tool_with_returns_produces_output_schema() {
+        let kdl = r#"
+protocol "x" version="0.1.0" {
+    channel "chat" from="client" lifetime="persistent" {
+        request "Send" {
+            field "msg" type="string" required=#true
+            returns "Sent" {
+                field "id" type="string" required=#true
+                field "ts" type="int"
+            }
+        }
+    }
+}
+"#;
+        let parsed = unison::parser::SchemaParser::new().parse(kdl).unwrap();
+        let req = &parsed.protocol.as_ref().unwrap().channels[0].requests[0];
+        let tool = synthesize_tool("chat", req);
+
+        let out = tool
+            .output_schema
+            .as_ref()
+            .expect("returns block must produce output_schema");
+        assert_eq!(out.get("type"), Some(&json!("object")));
+        let props = out.get("properties").and_then(Value::as_object).unwrap();
+        assert_eq!(
+            props
+                .get("id")
+                .and_then(Value::as_object)
+                .unwrap()
+                .get("type"),
+            Some(&json!("string"))
+        );
+        assert_eq!(
+            props
+                .get("ts")
+                .and_then(Value::as_object)
+                .unwrap()
+                .get("type"),
+            Some(&json!("integer"))
+        );
+        let required = out.get("required").and_then(Value::as_array).unwrap();
+        assert_eq!(required, &vec![json!("id")]);
+    }
+
+    /// returns block が無い request は output_schema を宣言しない (= 出力は自由形)。
+    #[test]
+    fn synthesize_tool_without_returns_has_no_output_schema() {
+        let req = ChannelRequest {
+            name: "Fire".to_string(),
+            description: None,
+            fields: vec![],
+            returns: None,
+        };
+        let tool = synthesize_tool("events", &req);
+        assert!(tool.output_schema.is_none());
+    }
+
+    /// title は sanitize 前の `channel.method` (= 人間可読表示名)。
+    /// name の `[A-Za-z0-9_]` 正規化で失われる dot 等の情報を title が保持する。
+    #[test]
+    fn synthesize_tool_title_is_human_readable_channel_dot_method() {
+        let req = ChannelRequest {
+            name: "GetProtocol".to_string(),
+            description: None,
+            fields: vec![],
+            returns: None,
+        };
+        let tool = synthesize_tool("unison.discovery", &req);
+        assert_eq!(tool.title.as_deref(), Some("unison.discovery.GetProtocol"));
+        // name 側は従来どおり正規化される
+        assert_eq!(tool.name.as_ref(), "unison_unison_discovery_GetProtocol");
+    }
+
     /// Anthropic Messages API `tools[].input_schema` 互換性: top-level に
     /// `type: "object"` + `properties` がある JSON Schema Draft 7+ object であること
     /// が要求される。 本 test で構造を検証 (= Hailing-δ leverage 1 acceptance)。
@@ -518,7 +605,7 @@ protocol "x" version="0.1.0" {
 "#;
         let parsed = unison::parser::SchemaParser::new().parse(kdl).unwrap();
         let req = &parsed.protocol.as_ref().unwrap().channels[0].requests[0];
-        let schema = fields_to_input_schema(&req.fields);
+        let schema = fields_to_object_schema(&req.fields);
 
         // Anthropic input_schema 要件:
         // 1. top-level type は "object"
