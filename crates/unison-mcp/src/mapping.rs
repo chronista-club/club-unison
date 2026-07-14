@@ -16,7 +16,7 @@
 //!
 //! 全 ecosystem が JSON Schema を共通通貨にしているため、 converter 1 つで全部に届く。
 
-use rmcp::model::{JsonObject, Tool};
+use rmcp::model::{JsonObject, Tool, ToolAnnotations};
 use serde_json::{Map, Value, json};
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -97,6 +97,10 @@ fn sanitize_description(s: &str) -> String {
 /// - input_schema: `request.fields` を JSON Schema object に変換
 /// - output_schema: KDL `returns` block があれば同じ converter で合成
 ///   (= tool が入出力とも typed になり、 client は `structuredContent` を検証できる)
+/// - annotations: `open_world(true)` を base に (= bridge は外部 Unison server と
+///   対話する、 static tools と同方針)、 KDL の safety hint (`readonly` /
+///   `destructive` / `idempotent`) が宣言されていればそれを写す。 未宣言の hint は
+///   set しない (= 「不明」 を MCP client 側の spec default に委ねる)
 ///
 /// description は LLM の tool-selection accuracy に強相関するので、 schema 設計時に
 /// `description="..."` を書くことで LLM が tool を正しく選びやすくなる。
@@ -123,7 +127,17 @@ pub fn synthesize_tool(channel_name: &str, request: &ChannelRequest) -> Tool {
     if let Some(returns) = &request.returns {
         tool = tool.with_raw_output_schema(Arc::new(fields_to_object_schema(&returns.fields)));
     }
-    tool
+    let mut annotations = ToolAnnotations::new().open_world(true);
+    if let Some(readonly) = request.readonly {
+        annotations = annotations.read_only(readonly);
+    }
+    if let Some(destructive) = request.destructive {
+        annotations = annotations.destructive(destructive);
+    }
+    if let Some(idempotent) = request.idempotent {
+        annotations = annotations.idempotent(idempotent);
+    }
+    tool.annotate(annotations)
 }
 
 /// 1 schema あたりの field 数上限 (= 巨大 / 悪意ある KDL による schema 肥大の防御、
@@ -302,6 +316,9 @@ mod tests {
         let req = ChannelRequest {
             name: "Send".to_string(),
             description: Some("evil\x1b[2Jclear".to_string()),
+            readonly: None,
+            destructive: None,
+            idempotent: None,
             fields: vec![],
             returns: None,
         };
@@ -658,6 +675,9 @@ protocol "x" version="0.1.0" {
         let req = ChannelRequest {
             name: "Fire".to_string(),
             description: None,
+            readonly: None,
+            destructive: None,
+            idempotent: None,
             fields: vec![],
             returns: None,
         };
@@ -672,6 +692,9 @@ protocol "x" version="0.1.0" {
         let req = ChannelRequest {
             name: "GetProtocol".to_string(),
             description: None,
+            readonly: None,
+            destructive: None,
+            idempotent: None,
             fields: vec![],
             returns: None,
         };
@@ -679,6 +702,67 @@ protocol "x" version="0.1.0" {
         assert_eq!(tool.title.as_deref(), Some("unison.discovery.GetProtocol"));
         // name 側は従来どおり正規化される
         assert_eq!(tool.name.as_ref(), "unison_unison_discovery_GetProtocol");
+    }
+
+    /// KDL safety hint (`readonly` / `destructive` / `idempotent`) は
+    /// `ToolAnnotations` の対応する hint に写される。
+    #[test]
+    fn synthesize_tool_maps_safety_hints_to_annotations() {
+        let req = ChannelRequest {
+            name: "Query".to_string(),
+            description: None,
+            readonly: Some(true),
+            destructive: None,
+            idempotent: Some(true),
+            fields: vec![],
+            returns: None,
+        };
+        let tool = synthesize_tool("memory", &req);
+        let ann = tool.annotations.as_ref().unwrap();
+        assert_eq!(ann.read_only_hint, Some(true));
+        assert_eq!(ann.idempotent_hint, Some(true));
+        // 未宣言の hint は set しない (= MCP client の spec default に委ねる)
+        assert_eq!(ann.destructive_hint, None);
+        // bridge は外部 Unison server と対話する (= static tools と同方針)
+        assert_eq!(ann.open_world_hint, Some(true));
+    }
+
+    /// destructive=#false の明示宣言 (= 「非破壊」 の積極表明) も写される。
+    #[test]
+    fn synthesize_tool_maps_explicit_destructive_false() {
+        let req = ChannelRequest {
+            name: "Upsert".to_string(),
+            description: None,
+            readonly: None,
+            destructive: Some(false),
+            idempotent: None,
+            fields: vec![],
+            returns: None,
+        };
+        let tool = synthesize_tool("memory", &req);
+        let ann = tool.annotations.as_ref().unwrap();
+        assert_eq!(ann.destructive_hint, Some(false));
+        assert_eq!(ann.read_only_hint, None);
+    }
+
+    /// hint 未宣言の request は open_world 以外の hint を持たない。
+    #[test]
+    fn synthesize_tool_without_hints_leaves_hints_unset() {
+        let req = ChannelRequest {
+            name: "Send".to_string(),
+            description: None,
+            readonly: None,
+            destructive: None,
+            idempotent: None,
+            fields: vec![],
+            returns: None,
+        };
+        let tool = synthesize_tool("chat", &req);
+        let ann = tool.annotations.as_ref().unwrap();
+        assert_eq!(ann.read_only_hint, None);
+        assert_eq!(ann.destructive_hint, None);
+        assert_eq!(ann.idempotent_hint, None);
+        assert_eq!(ann.open_world_hint, Some(true));
     }
 
     /// Anthropic Messages API `tools[].input_schema` 互換性: top-level に

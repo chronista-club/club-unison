@@ -336,3 +336,80 @@ fn test_channel_mixed_stream_and_datagram_channels() {
     assert_eq!(protocol.channels[2].backend(), ChannelBackend::Datagram);
     assert_eq!(protocol.channels[2].channel_id, Some(2));
 }
+
+/// request の safety hint (`readonly` / `destructive` / `idempotent`) がパースされる
+#[test]
+fn test_request_safety_hints_parsed() {
+    let schema = r#"
+        protocol "test" version="1.0.0" {
+            channel "memory" from="client" lifetime="persistent" {
+                request "Query" readonly=#true idempotent=#true {
+                    field "key" type="string"
+                    returns "Result" { field "value" type="json" }
+                }
+                request "Delete" destructive=#true {
+                    field "key" type="string"
+                    returns "Deleted" { field "ok" type="bool" }
+                }
+            }
+        }
+    "#;
+    let parser = SchemaParser::new();
+    let protocol = parser.parse(schema).unwrap().protocol.unwrap();
+    let ch = &protocol.channels[0];
+
+    let query = &ch.requests[0];
+    assert_eq!(query.readonly, Some(true));
+    assert_eq!(query.idempotent, Some(true));
+    assert_eq!(query.destructive, None);
+
+    let delete = &ch.requests[1];
+    assert_eq!(delete.destructive, Some(true));
+    assert_eq!(delete.readonly, None);
+    assert_eq!(delete.idempotent, None);
+}
+
+/// safety hint 未宣言の request は全 hint が None (= 従来 schema 互換)
+#[test]
+fn test_request_without_safety_hints_defaults_to_none() {
+    let schema = r#"
+        protocol "test" version="1.0.0" {
+            channel "chat" from="client" lifetime="persistent" {
+                request "Send" {
+                    field "text" type="string"
+                    returns "Sent" { field "ok" type="bool" }
+                }
+            }
+        }
+    "#;
+    let parser = SchemaParser::new();
+    let protocol = parser.parse(schema).unwrap().protocol.unwrap();
+    let req = &protocol.channels[0].requests[0];
+    assert_eq!(req.readonly, None);
+    assert_eq!(req.destructive, None);
+    assert_eq!(req.idempotent, None);
+}
+
+/// `readonly=#true` と `destructive=#true` の同時宣言は矛盾 → validation error
+#[test]
+fn test_request_readonly_and_destructive_conflict_fails() {
+    let schema = r#"
+        protocol "test" version="1.0.0" {
+            channel "memory" from="client" lifetime="persistent" {
+                request "Broken" readonly=#true destructive=#true {
+                    field "key" type="string"
+                }
+            }
+        }
+    "#;
+    let parser = SchemaParser::new();
+    let err = parser
+        .parse(schema)
+        .expect_err("readonly + destructive must fail validation");
+    let msg = format!("{}", err);
+    assert!(
+        msg.contains("readonly") && msg.contains("destructive"),
+        "error must mention the conflicting hints: {}",
+        msg
+    );
+}
