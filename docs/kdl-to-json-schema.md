@@ -1,8 +1,8 @@
 # KDL → JSON Schema 対応表
 
-> **Status**: v0.1.0 (Unison Hailing α P3b 一部)
+> **Status**: v0.2.0 (= 1.7.0 で `returns` → `Tool.output_schema` 対応、 converter は入出力両用に)
 > **Implementation**: `crates/unison-mcp/src/mapping.rs::field_type_to_schema`
-> **Consumers**: MCP `Tool.input_schema` / Anthropic Messages API `tools[].input_schema` / OpenAI `response_format` / Vercel AI SDK `generateObject` / Instructor / outlines
+> **Consumers**: MCP `Tool.input_schema` / **MCP `Tool.output_schema`** (= KDL `returns` block) / Anthropic Messages API `tools[].input_schema` / OpenAI `response_format` / Vercel AI SDK `generateObject` / Instructor / outlines
 
 ## 1. なぜこの対応表が要るか
 
@@ -36,9 +36,11 @@ KDL は Unison の SSOT として channel/request/event の型を語る。 こ�
 - KDL field の制約 (= `min`, `max`, `min_length`, `max_length`, `pattern`) — v0.1.0 では schema に出力しない (= constraint 検証は SchemaRegistry 側でも未実装)
 - `Int` の sub-type 区別 (= i32 vs i64) — JSON Schema は integer 1 種類、 範囲は constraint で表現可能
 
-## 3. Request schema 構築 (= 複数 field の組み合わせ)
+## 3. Request / Returns schema 構築 (= 複数 field の組み合わせ)
 
-`fields_to_input_schema(fields: &[Field]) -> JsonObject` の出力:
+`fields_to_object_schema(fields: &[Field]) -> JsonObject` の出力
+(= `request.fields` → `Tool.input_schema`、 `returns.fields` → `Tool.output_schema` の両方に同一関数を適用。
+型対応・required・additionalProperties の挙動が入出力で完全一致する):
 
 ```json
 {
@@ -141,17 +143,21 @@ client.messages.create(
 | `Float` の f32/f64 sub-type 区別 | JSON Schema の `format` 拡張で表現可 (= `float`/`double`) |
 | 制約 (`min`/`max`/`pattern`) の schema 出力 | constraint Epic で SchemaRegistry validation と同時に追加 |
 | `additionalProperties: false` の strict mode | strict-validation opt-in (= 別 channel attribute or call site flag) |
-| 返り値 (`returns`) の schema → MCP `Tool.output_schema` | P3c 以降の polish phase |
 | KDL `description` の channel/request level 集約 | tool description の自動充実 |
+| KDL に MCP hint 属性 (`readonly` / `destructive` / `idempotent`) → `ToolAnnotations` 合成 | 未着手 (= P3 watch、 spec/ 提案候補) |
+
+> `returns` → `Tool.output_schema` は **1.7.0 で実装済み** (= 本表から昇格)。
 
 ## 6. テスト位置
 
 | test | 場所 | 検証内容 |
 |---|---|---|
 | 基本型 → schema 変換 | `mapping.rs` 内 `field_type_*_to_schema` 各 unit test | 個別 FieldType の正しい変換 |
-| Request → input schema 構築 | `mapping.rs` 内 `fields_to_input_schema_basic` | properties + required + additionalProperties |
+| Request → object schema 構築 | `mapping.rs` 内 `fields_to_object_schema_basic` | properties + required + additionalProperties |
+| Returns → output_schema 合成 | `mapping.rs` 内 `synthesize_tool_with_returns_produces_output_schema` ほか | returns 有→schema 宣言 / 無→非宣言 |
+| Untrusted KDL 防御 | `mapping.rs` 内 `fields_to_object_schema_{skips_hostile_field_names,sanitizes_field_description,caps_field_count}` | hostile field 名 skip / desc sanitize / field 数 cap |
 | Anthropic compat | `mapping.rs` 内 `input_schema_is_anthropic_compatible` | top-level type=object + JSON serializable |
-| E2E synthesis | `crates/unison-mcp/tests/test_integ_synthesis.rs` | discovery server → UnisonMcp → list_tools / invoke_tool |
+| E2E synthesis | `crates/unison-mcp/tests/test_integ_synthesis.rs` | discovery server → UnisonMcp → list_tools / invoke_tool / live refresh |
 
 ## 7. 参照
 
