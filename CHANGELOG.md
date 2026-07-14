@@ -7,6 +7,13 @@
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-07-14 — unison-mcp: rmcp 2 系 + live MCP bridge 化
+
+> unison-mcp を MCP spec 2025-06-18+ 世代へ引き上げるリリース。KDL `returns` からの
+> `output_schema` 合成・`structuredContent`・live re-discovery・elicitation（#88/#91/#92、
+> team-b Moody Blues ディープレビュー済み）に加え、QUIC accept loop の片肺死修正（#90）と
+> Edge(nightly) への CI ゲート整備（#89）を含む。SemVer minor（additive、既存 API 不変）。
+
 ### Added
 
 - **unison-mcp: rmcp 2 系機能の還元 — typed I/O + live bridge 化**:
@@ -40,6 +47,17 @@
 
   いずれも `unison-mcp`（`publish = false` の MCP bridge crate）内に閉じ、公開 `club-unison` API への
   影響はなし。
+- **unison-mcp: tool description / arg schema / エラーの全面 UX 整備**: description の stale 解消
+  （ping の "success message"、trust default の実挙動）、arg schema doc の英語統一（schemars 経由で
+  LLM に露出するため）、actionable エラー（文脈 + 次のアクション提示）、instructions の再構成、
+  static tools への title 付与。Moody Blues review 指摘の解消（`fields_to_object_schema` の
+  field 数 cap + hostile field 名 skip + description sanitize、テスト空白の充填 = unit 45 / E2E 7）。
+
+### Fixed
+
+- **QUIC accept loop の片肺死を根治**: accept loop 内の handshake await が失敗すると loop 全体が
+  死ぬ問題を修正。handshake を spawn 済み task 内へ移動し、失敗した handshake が acceptor を
+  殺さないようにした。回帰テスト `acceptor_survives_failed_handshake` 追加。
 
 ## [1.6.0] - 2026-07-11 — connect_race: Happy Eyeballs v2 staggered-race dialer
 
