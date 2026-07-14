@@ -126,15 +126,46 @@ pub fn synthesize_tool(channel_name: &str, request: &ChannelRequest) -> Tool {
     tool
 }
 
+/// 1 schema あたりの field 数上限 (= 巨大 / 悪意ある KDL による schema 肥大の防御、
+/// [`MAX_SYNTHESIZED_TOOLS` と同じ思想の field 版])
+const MAX_SCHEMA_FIELDS: usize = 256;
+
+/// field 名の最大長。 tool 名 component と違い、 field 名は payload key として
+/// server へ round-trip する **wire 契約** なので変形 (truncate / 置換) できない —
+/// 制御文字入り / 超長の名前は正当な API ではないため field ごと skip する。
+const MAX_FIELD_NAME_LEN: usize = 128;
+
 /// `Field` 群から JSON Schema object (= top-level `{type: "object", properties: {...}, required: [...]}`) を組み立てる。
 /// `Tool.input_schema` (= request.fields) と `Tool.output_schema` (= returns.fields) の両方に使う。
+///
+/// fields は remote KDL (= untrusted discovery server) 由来なので、 field 数を
+/// [`MAX_SCHEMA_FIELDS`] で cap し、 hostile な field 名は skip、 description は
+/// [`sanitize_description`] を通す (= tool 名 / description と同じ防御方針)。
 pub fn fields_to_object_schema(fields: &[Field]) -> JsonObject {
     let mut properties = Map::new();
     let mut required = Vec::new();
-    for f in fields {
+    if fields.len() > MAX_SCHEMA_FIELDS {
+        tracing::warn!(
+            cap = MAX_SCHEMA_FIELDS,
+            total = fields.len(),
+            "schema field cap exceeded; remaining fields are not exposed \
+             (large or hostile discovery schema?)"
+        );
+    }
+    for f in fields.iter().take(MAX_SCHEMA_FIELDS) {
+        if f.name.len() > MAX_FIELD_NAME_LEN || f.name.chars().any(char::is_control) {
+            tracing::warn!(
+                field = %f.name.escape_debug(),
+                "skipping field with hostile name (control chars or overlong)"
+            );
+            continue;
+        }
         let mut field_schema = field_type_to_schema(&f.field_type());
-        if let Some(desc) = f.description.clone() {
-            field_schema.insert("description".to_string(), Value::String(desc));
+        if let Some(desc) = f.description.as_deref() {
+            field_schema.insert(
+                "description".to_string(),
+                Value::String(sanitize_description(desc)),
+            );
         }
         properties.insert(f.name.clone(), Value::Object(field_schema));
         if f.required {
@@ -510,6 +541,67 @@ protocol "x" version="0.1.0" {
         let meta = props.get("meta").and_then(Value::as_object).unwrap();
         assert_eq!(meta.get("type"), Some(&json!("object")));
         assert!(meta.get("additionalProperties").is_some());
+    }
+
+    /// テスト用 Field 構築ヘルパ (= Field は Default 非実装のため)
+    fn test_field(name: &str, desc: Option<&str>) -> Field {
+        Field {
+            name: name.to_string(),
+            field_type_str: "string".to_string(),
+            required: false,
+            default_str: None,
+            min: None,
+            max: None,
+            min_length: None,
+            max_length: None,
+            pattern: None,
+            description: desc.map(String::from),
+        }
+    }
+
+    /// F1 (Moody Blues MEDIUM) acceptance: remote KDL 由来の hostile な field 名
+    /// (= 制御文字 / 超長) は schema から skip され、 正常な field は残る。
+    /// field 名は wire 契約なので変形せず skip する (= 変形すると dispatch が壊れる)。
+    #[test]
+    fn fields_to_object_schema_skips_hostile_field_names() {
+        let fields = vec![
+            test_field("ok_field", None),
+            test_field("evil\x1b[2Jfield", None),
+            test_field(&"a".repeat(500), None),
+        ];
+        let schema = fields_to_object_schema(&fields);
+        let props = schema.get("properties").and_then(Value::as_object).unwrap();
+        assert_eq!(props.len(), 1, "only the sane field survives: {props:?}");
+        assert!(props.contains_key("ok_field"));
+    }
+
+    /// field description は sanitize_description を通る (= 制御文字除去 + 長さ上限)
+    #[test]
+    fn fields_to_object_schema_sanitizes_field_description() {
+        let dirty = format!("hello\x07world{}", "x".repeat(2000));
+        let fields = vec![test_field("f", Some(&dirty))];
+        let schema = fields_to_object_schema(&fields);
+        let desc = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|p| p.get("f"))
+            .and_then(Value::as_object)
+            .and_then(|f| f.get("description"))
+            .and_then(Value::as_str)
+            .unwrap();
+        assert!(!desc.contains('\x07'));
+        assert!(desc.len() <= MAX_DESCRIPTION_LEN);
+    }
+
+    /// field 数は MAX_SCHEMA_FIELDS で cap される (= schema 肥大の防御)
+    #[test]
+    fn fields_to_object_schema_caps_field_count() {
+        let fields: Vec<Field> = (0..MAX_SCHEMA_FIELDS + 50)
+            .map(|i| test_field(&format!("f{i}"), None))
+            .collect();
+        let schema = fields_to_object_schema(&fields);
+        let props = schema.get("properties").and_then(Value::as_object).unwrap();
+        assert_eq!(props.len(), MAX_SCHEMA_FIELDS);
     }
 
     /// KDL `returns` block → `Tool.output_schema` 合成 (= rmcp 2.x / MCP 2025-06-18)。

@@ -33,12 +33,14 @@ pub struct BridgeConfig {
 /// config / tool arg で未指定の場合、 bridge は endpoint が loopback なら
 /// `Skip`、 それ以外なら `System` を選ぶ (= secure-by-default、 [`crate::bridge`]
 /// 参照)。 ここに固定 default は持たせない。
+/// variant doc は schemars 経由で JSON Schema description になり client (= LLM
+/// agent) に露出するため英語で書く。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum TrustMode {
-    /// Skip cert verification (= dev only、 loopback self-signed server 向け)
+    /// Skip certificate verification (dev only; for loopback self-signed servers)
     Skip,
-    /// OS / webpki-roots trust store (= public server 向け)
+    /// Verify against the OS / webpki-roots trust store (for public servers)
     System,
 }
 
