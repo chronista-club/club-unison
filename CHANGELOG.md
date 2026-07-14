@@ -7,6 +7,22 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **unison-mcp: rmcp を最新 2 系（2.2.0）へ更新**（`1.7` → `2`）: MCP 公式 Rust SDK を 2 系に追従。
+  破壊的変更は content 型のみ — `Content`（= `Annotated<RawContent>`）→ **`ContentBlock`**（enum 直、
+  `.raw` ラッパ廃止）にリネーム。`Content::text` → `ContentBlock::text`、テストの `c.raw` /
+  `RawContent::Text` → `c` / `ContentBlock::Text` に追従。`Tool::new` / `ServerHandler` / `ErrorData` /
+  `schema_for_type` の API は不変。
+- **unison-mcp: 未使用の rmcp `macros` feature を削除**: `#[tool]` / `#[tool_router]` マクロは撤去済で
+  `ServerHandler` を手動 impl しているため、`macros` は dead weight だった。rmcp の `default`
+  （`base64` / `macros` / `server`）に `macros` が含まれるため `default-features = false` にして
+  `server` / `transport-io` / `base64` のみを明示列挙し、`rmcp-macros` proc-macro を依存グラフから
+  除去（ビルド短縮・Minimum を保つ）。
+
+  いずれも `unison-mcp`（`publish = false` の MCP bridge crate）内に閉じ、公開 `club-unison` API への
+  影響はなし。
+
 ## [1.6.0] - 2026-07-11 — connect_race: Happy Eyeballs v2 staggered-race dialer
 
 > 複数 direct 候補への接続を逐次フォールバックでなく 1 本の時間差レース（RFC 8305 型）に畳む

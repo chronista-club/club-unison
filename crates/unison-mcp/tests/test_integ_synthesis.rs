@@ -187,8 +187,8 @@ async fn test_e2e_synthesis_invoke_synthesized_tool_round_trip() -> Result<()> {
 
     // CallToolResult の content[0] が text、 JSON parse して中身を assert
     let content_text = match result.content.first() {
-        Some(c) => match &c.raw {
-            rmcp::model::RawContent::Text(t) => t.text.clone(),
+        Some(c) => match c {
+            rmcp::model::ContentBlock::Text(t) => t.text.clone(),
             _ => panic!("expected text content"),
         },
         None => panic!("no content in CallToolResult"),

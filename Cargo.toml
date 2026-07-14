@@ -70,7 +70,9 @@ crc32fast = "1.5"
 clap = { version = "4.6", features = ["derive", "cargo", "color"] }
 
 # MCP (Model Context Protocol) — rmcp 公式 Rust SDK
-rmcp = { version = "1.7", features = ["server", "macros", "transport-io"] }
+# default = [base64, macros, server]。macros（`#[tool]` 系）は未使用のため
+# default-features = false で切り、必要な feature のみ明示列挙する。
+rmcp = { version = "2", default-features = false, features = ["server", "transport-io", "base64"] }
 schemars = "1"
 
 # Utilities
