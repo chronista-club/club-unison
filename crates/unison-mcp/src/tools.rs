@@ -22,7 +22,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use rmcp::{
-    ErrorData as McpError, RoleServer, ServerHandler,
+    ErrorData as McpError, Peer, RoleServer, ServerHandler,
     handler::server::{common::schema_for_type, wrapper::Parameters},
     model::*,
     service::RequestContext,
@@ -51,6 +51,10 @@ pub struct UnisonMcp {
 
 impl UnisonMcp {
     pub fn new(bridge: UnisonBridge) -> Self {
+        // annotations: endpoint が任意指定できる = 外部世界に開いている (open_world)。
+        // ping / discover は server 状態を変えない (read_only + idempotent)。
+        // call は任意 payload を送る escape hatch なので hint なし (= client は
+        // spec default の「destructive かもしれない」扱いで確認を挟める)。
         let static_tools = vec![
             Tool::new(
                 Cow::Borrowed("unison_ping"),
@@ -58,6 +62,12 @@ impl UnisonMcp {
                     "Verify connectivity to a Unison server. Connects then disconnects, returning a success message.",
                 ),
                 schema_for_type::<PingArgs>(),
+            )
+            .annotate(
+                ToolAnnotations::new()
+                    .read_only(true)
+                    .idempotent(true)
+                    .open_world(true),
             ),
             Tool::new(
                 Cow::Borrowed("unison_call"),
@@ -65,13 +75,20 @@ impl UnisonMcp {
                     "Generic escape hatch: open any channel on a Unison server, send a typed method+payload, return the response. No schema validation.",
                 ),
                 schema_for_type::<CallArgs>(),
-            ),
+            )
+            .annotate(ToolAnnotations::new().open_world(true)),
             Tool::new(
                 Cow::Borrowed("unison_discover"),
                 Cow::Borrowed(
-                    "Fetch the protocol KDL from a Unison server via the `unison.discovery` channel. Returns channel/request listing + version/hash/codecs.",
+                    "Fetch the protocol KDL from a Unison server via the `unison.discovery` channel. Returns channel/request listing + version/hash/codecs. When targeting the configured default endpoint, refreshes the synthesized tool set (emits tools/list_changed on schema change).",
                 ),
                 schema_for_type::<DiscoverArgs>(),
+            )
+            .annotate(
+                ToolAnnotations::new()
+                    .read_only(true)
+                    .idempotent(true)
+                    .open_world(true),
             ),
         ];
         Self {
@@ -130,25 +147,37 @@ impl UnisonMcp {
         tools
     }
 
-    /// MCP transport context を要らない tool dispatch (= ServerHandler::call_tool の
-    /// 本体、 integration test からも直接呼べる)。
+    /// MCP transport context を要らない tool dispatch (= integration test からも
+    /// 直接呼べる)。 peer 無し = elicitation / list_changed 通知はスキップされる。
     pub async fn invoke_tool(
         &self,
         name: &str,
         args: serde_json::Value,
     ) -> Result<CallToolResult, McpError> {
+        self.invoke_tool_with_peer(name, args, None).await
+    }
+
+    /// peer 付き tool dispatch (= ServerHandler::call_tool の本体)。 peer は
+    /// endpoint 未設定時の elicitation と、 discovery refresh 時の
+    /// `tools/list_changed` 通知に使う。
+    pub async fn invoke_tool_with_peer(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+        peer: Option<&Peer<RoleServer>>,
+    ) -> Result<CallToolResult, McpError> {
         match name {
             "unison_ping" => {
                 let Parameters(args) = parse_params::<PingArgs>(args)?;
-                handle_ping(&self.bridge, args).await
+                handle_ping(&self.bridge, args, peer).await
             }
             "unison_call" => {
                 let Parameters(args) = parse_params::<CallArgs>(args)?;
-                handle_call(&self.bridge, args).await
+                handle_call(&self.bridge, args, peer).await
             }
             "unison_discover" => {
                 let Parameters(args) = parse_params::<DiscoverArgs>(args)?;
-                handle_discover(&self.bridge, args).await
+                handle_discover(&self.bridge, args, peer).await
             }
             other => handle_synthesized(&self.bridge, other, args).await,
         }
@@ -160,7 +189,7 @@ impl UnisonMcp {
             return Some(t.clone());
         }
         let disc = self.bridge.discovered()?;
-        let (channel_name, method) = resolve_synth_tool(disc, name)?;
+        let (channel_name, method) = resolve_synth_tool(&disc, name)?;
         let request = disc
             .proto
             .registry()
@@ -222,22 +251,67 @@ pub struct DiscoverArgs {
 // Handler impls (= 各 tool の本体)
 // ---------------------------------------------------------------------------
 
+/// endpoint 未設定時に client へ質問する elicitation の回答 schema。
+/// MCP elicitation は flat な primitive object のみ許可 (= `ElicitationSafe`)。
+#[derive(Debug, Deserialize, JsonSchema)]
+struct EndpointAnswer {
+    /// Unison server endpoint URL (= 例: `quic://[::1]:7878`)
+    endpoint: String,
+}
+rmcp::elicit_safe!(EndpointAnswer);
+
+/// client に endpoint をその場で質問する (= MCP elicitation)。
+/// client が elicitation 非対応 / 拒否 / cancel / 失敗は None を返し、
+/// 呼び出し側は従来どおり invalid_request エラーへ fallback する。
+async fn elicit_endpoint(peer: Option<&Peer<RoleServer>>) -> Option<String> {
+    let peer = peer?;
+    let supports = peer
+        .peer_info()
+        .is_some_and(|info| info.capabilities.elicitation.is_some());
+    if !supports {
+        return None;
+    }
+    match peer
+        .elicit::<EndpointAnswer>(
+            "No Unison endpoint is configured. Enter the server endpoint URL (e.g. quic://[::1]:7878).",
+        )
+        .await
+    {
+        Ok(Some(ans)) => {
+            let endpoint = ans.endpoint.trim().to_string();
+            if endpoint.is_empty() { None } else { Some(endpoint) }
+        }
+        // decline / cancel はユーザーの意思 = そのままエラー路線へ
+        Ok(None) => None,
+        Err(e) => {
+            tracing::debug!(error = %e, "endpoint elicitation failed; falling back to error");
+            None
+        }
+    }
+}
+
 /// 共通: endpoint を resolve + ProtocolClient を build + connect する。
+/// endpoint が arg にも config にも無い場合、 elicitation 対応 client には
+/// その場で質問する (= [`elicit_endpoint`])。
 async fn connect_client(
     bridge: &UnisonBridge,
     endpoint_arg: Option<&str>,
     trust_arg: Option<TrustMode>,
+    peer: Option<&Peer<RoleServer>>,
 ) -> Result<(unison::ProtocolClient, String), McpError> {
     use unison::ProtocolClient;
     use unison::network::quic::QuicClient;
 
-    let endpoint = bridge.resolve_endpoint(endpoint_arg).ok_or_else(|| {
-        McpError::invalid_request(
-            "endpoint not provided and no default in BridgeConfig".to_string(),
-            None,
-        )
-    })?;
-    let trust = bridge.resolve_trust(trust_arg, endpoint);
+    let endpoint: String = match bridge.resolve_endpoint(endpoint_arg) {
+        Some(e) => e.to_string(),
+        None => elicit_endpoint(peer).await.ok_or_else(|| {
+            McpError::invalid_request(
+                "endpoint not provided and no default in BridgeConfig".to_string(),
+                None,
+            )
+        })?,
+    };
+    let trust = bridge.resolve_trust(trust_arg, &endpoint);
 
     let quic = QuicClient::builder()
         .trust_anchors(trust.to_anchors())
@@ -246,22 +320,35 @@ async fn connect_client(
     let client = ProtocolClient::new(quic);
 
     client
-        .connect(endpoint)
+        .connect(&endpoint)
         .await
         .map_err(|e| McpError::internal_error(format!("connect failed: {e}"), None))?;
 
-    Ok((client, endpoint.to_string()))
+    Ok((client, endpoint))
 }
 
-async fn handle_ping(bridge: &UnisonBridge, args: PingArgs) -> Result<CallToolResult, McpError> {
-    let (_client, endpoint) = connect_client(bridge, args.endpoint.as_deref(), args.trust).await?;
+async fn handle_ping(
+    bridge: &UnisonBridge,
+    args: PingArgs,
+    peer: Option<&Peer<RoleServer>>,
+) -> Result<CallToolResult, McpError> {
+    let (_client, endpoint) =
+        connect_client(bridge, args.endpoint.as_deref(), args.trust, peer).await?;
     let trust = bridge.resolve_trust(args.trust, &endpoint);
-    let msg = format!("✅ connected to {endpoint} (trust={trust:?})");
-    Ok(CallToolResult::success(vec![ContentBlock::text(msg)]))
+    Ok(CallToolResult::structured(serde_json::json!({
+        "connected": true,
+        "endpoint": endpoint,
+        "trust": format!("{trust:?}").to_lowercase(),
+    })))
 }
 
-async fn handle_call(bridge: &UnisonBridge, args: CallArgs) -> Result<CallToolResult, McpError> {
-    let (client, _endpoint) = connect_client(bridge, args.endpoint.as_deref(), args.trust).await?;
+async fn handle_call(
+    bridge: &UnisonBridge,
+    args: CallArgs,
+    peer: Option<&Peer<RoleServer>>,
+) -> Result<CallToolResult, McpError> {
+    let (client, _endpoint) =
+        connect_client(bridge, args.endpoint.as_deref(), args.trust, peer).await?;
 
     let channel = client
         .open_channel(&args.channel_name)
@@ -273,23 +360,24 @@ async fn handle_call(bridge: &UnisonBridge, args: CallArgs) -> Result<CallToolRe
         .await
         .map_err(|e| McpError::internal_error(format!("request failed: {e}"), None))?;
 
-    let result = serde_json::json!({
+    // escape hatch は output_schema を宣言しないので、 channel/method 込みの
+    // wrapper object を structured で返す (= 常に object になる)。
+    Ok(CallToolResult::structured(serde_json::json!({
         "channel": args.channel_name,
         "method": args.method,
         "response": response,
-    });
-    Ok(CallToolResult::success(vec![ContentBlock::text(
-        result.to_string(),
-    )]))
+    })))
 }
 
 async fn handle_discover(
     bridge: &UnisonBridge,
     args: DiscoverArgs,
+    peer: Option<&Peer<RoleServer>>,
 ) -> Result<CallToolResult, McpError> {
     use unison::network::DynamicProtocol;
 
-    let (client, endpoint) = connect_client(bridge, args.endpoint.as_deref(), args.trust).await?;
+    let (client, endpoint) =
+        connect_client(bridge, args.endpoint.as_deref(), args.trust, peer).await?;
     let client = Arc::new(client);
 
     let proto = DynamicProtocol::fetch(client.clone())
@@ -313,19 +401,37 @@ async fn handle_discover(
         })
         .collect();
 
-    let summary = serde_json::json!({
+    let hash = proto.hash().to_string();
+    let mut summary = serde_json::json!({
         "endpoint": endpoint,
         "protocol_name": proto.protocol_name(),
         "version": proto.version(),
         "namespace": proto.registry().protocol_namespace(),
-        "hash": proto.hash(),
+        "hash": hash,
         "codecs": proto.codecs(),
         "channels": channels,
+        "refreshed": false,
     });
 
-    Ok(CallToolResult::success(vec![ContentBlock::text(
-        serde_json::to_string_pretty(&summary).unwrap_or_else(|_| summary.to_string()),
-    )]))
+    // default endpoint への discover は bridge の discovery を refresh する
+    // (= server の schema 進化に MCP session 中に追従する live bridge)。
+    // 明示的に別 endpoint を指定した discover は one-off 照会で state を触らない。
+    if bridge.resolve_endpoint(None) == Some(endpoint.as_str()) {
+        let old_hash = bridge.set_discovered(DiscoveredProtocol {
+            proto: Arc::new(proto),
+        });
+        summary["refreshed"] = serde_json::Value::Bool(true);
+        if old_hash.as_deref() != Some(hash.as_str()) {
+            tracing::info!(hash = %hash, "protocol schema changed — synthesized tool set refreshed");
+            if let Some(peer) = peer
+                && let Err(e) = peer.notify_tool_list_changed().await
+            {
+                tracing::warn!(error = %e, "tools/list_changed notification failed");
+            }
+        }
+    }
+
+    Ok(CallToolResult::structured(summary))
 }
 
 /// Synthesized typed tool の dispatch。 bridge.discovered() の DynamicProtocol 経由で
@@ -362,7 +468,7 @@ async fn handle_synthesized(
         )
     })?;
 
-    let (channel_name, method) = resolve_synth_tool(disc, tool_name)
+    let (channel_name, method) = resolve_synth_tool(&disc, tool_name)
         .ok_or(McpError::method_not_found::<CallToolRequestMethod>())?;
 
     let chan = disc
@@ -383,14 +489,16 @@ async fn handle_synthesized(
         }
     })?;
 
-    let result = serde_json::json!({
-        "channel": channel_name,
-        "method": method,
-        "response": response,
-    });
-    Ok(CallToolResult::success(vec![ContentBlock::text(
-        serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string()),
-    )]))
+    // structured_content は response そのもの (= KDL `returns` から合成した
+    // output_schema と形が一致する)。 channel/method は tool 名が既に示している。
+    // returns 未定義 channel の非 object response のみ wrapper で object 化する
+    // (= MCP spec: structuredContent は object)。
+    let structured = if response.is_object() {
+        response
+    } else {
+        serde_json::json!({ "response": response })
+    };
+    Ok(CallToolResult::structured(structured))
 }
 
 // ---------------------------------------------------------------------------
@@ -399,13 +507,22 @@ async fn handle_synthesized(
 
 impl ServerHandler for UnisonMcp {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_tool_list_changed()
+                .build(),
+        )
+        .with_instructions(
             "MCP bridge for Unison Protocol. Static escape hatch tools: \
                  `unison_ping` / `unison_call` / `unison_discover`. \
                  If a default endpoint is configured (= unison.json), synthesized typed tools \
                  named `unison_<channel>_<method>` are also exposed for each channel.request \
                  in the discovered KDL schema. Synthesized tools are payload-validated against \
-                 the server's schema before dispatch (= fail-fast on type mismatch).",
+                 the server's schema before dispatch (= fail-fast on type mismatch), declare \
+                 output_schema from the KDL `returns` block, and return results as \
+                 structuredContent (text mirror included). Calling `unison_discover` against \
+                 the default endpoint refreshes the synthesized tool set (tools/list_changed).",
         )
     }
 
@@ -431,10 +548,13 @@ impl ServerHandler for UnisonMcp {
     fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
         let args_value = serde_json::Value::Object(request.arguments.clone().unwrap_or_default());
-        async move { self.invoke_tool(request.name.as_ref(), args_value).await }
+        async move {
+            self.invoke_tool_with_peer(request.name.as_ref(), args_value, Some(&context.peer))
+                .await
+        }
     }
 }
 
@@ -474,6 +594,28 @@ mod tests {
         let server = UnisonMcp::new(bridge);
         let tools = server.all_tools();
         assert_eq!(tools.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn static_tools_have_annotations() {
+        let bridge = UnisonBridge::new(BridgeConfig::default()).await.unwrap();
+        let server = UnisonMcp::new(bridge);
+
+        let ping = server.find_tool("unison_ping").unwrap();
+        let ann = ping.annotations.expect("ping annotations");
+        assert_eq!(ann.read_only_hint, Some(true));
+        assert_eq!(ann.idempotent_hint, Some(true));
+        assert_eq!(ann.open_world_hint, Some(true));
+
+        let discover = server.find_tool("unison_discover").unwrap();
+        let ann = discover.annotations.expect("discover annotations");
+        assert_eq!(ann.read_only_hint, Some(true));
+
+        // call は escape hatch = read_only/destructive を主張しない (spec default 扱い)
+        let call = server.find_tool("unison_call").unwrap();
+        let ann = call.annotations.expect("call annotations");
+        assert_eq!(ann.read_only_hint, None);
+        assert_eq!(ann.open_world_hint, Some(true));
     }
 
     #[tokio::test]

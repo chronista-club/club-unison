@@ -72,7 +72,8 @@ clap = { version = "4.6", features = ["derive", "cargo", "color"] }
 # MCP (Model Context Protocol) — rmcp 公式 Rust SDK
 # default = [base64, macros, server]。macros（`#[tool]` 系）は未使用のため
 # default-features = false で切り、必要な feature のみ明示列挙する。
-rmcp = { version = "2", default-features = false, features = ["server", "transport-io", "base64"] }
+# elicitation + schemars は `Peer::elicit`（endpoint 未設定時のユーザー質問）用。
+rmcp = { version = "2", default-features = false, features = ["server", "transport-io", "base64", "elicitation", "schemars"] }
 schemars = "1"
 
 # Utilities
