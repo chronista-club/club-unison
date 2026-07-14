@@ -119,6 +119,27 @@ pub struct ChannelRequest {
     #[kdl(property)]
     pub description: Option<String>,
 
+    /// 環境を変更しない読み取り専用リクエストであることの宣言 (= safety hint)。
+    ///
+    /// optional。 server 作者が自チャネルの安全性を宣言し、 AI agent 等の
+    /// consumer (= unison-mcp の `ToolAnnotations` 合成など) が尊重する。
+    /// 未宣言 (= `None`) は「不明」であり consumer 側の default に委ねる。
+    /// `destructive=#true` との同時宣言は矛盾として validation error。
+    #[kdl(property)]
+    pub readonly: Option<bool>,
+
+    /// 破壊的更新 (= 復元不能な削除・上書き) があり得ることの宣言 (= safety hint)。
+    ///
+    /// optional。 semantics は [`Self::readonly`] と同じ hint 系。
+    #[kdl(property)]
+    pub destructive: Option<bool>,
+
+    /// 同一引数での再実行が追加の効果を持たないことの宣言 (= safety hint)。
+    ///
+    /// optional。 semantics は [`Self::readonly`] と同じ hint 系。
+    #[kdl(property)]
+    pub idempotent: Option<bool>,
+
     /// リクエストフィールド
     #[kdl(children, name = "field")]
     pub fields: Vec<Field>,
@@ -194,7 +215,17 @@ impl Channel {
     /// - `backend="datagram"` の場合は `channel_id` が必須、 0 は予約 (= sentinel)
     /// - `backend="stream"` (= default) の場合は `channel_id` を指定しても無視 (= warning は出さない)
     /// - `backend="datagram"` の channel は `request` ブロックを持てない (= datagram は応答不可)
+    /// - request の safety hint は `readonly=#true` と `destructive=#true` を同時宣言できない (= 矛盾)
     pub fn validate(&self) -> Result<(), String> {
+        for request in &self.requests {
+            if request.readonly == Some(true) && request.destructive == Some(true) {
+                return Err(format!(
+                    "request \"{}\" in channel \"{}\" declares both readonly=#true and \
+                     destructive=#true; a readonly request cannot be destructive — pick one",
+                    request.name, self.name
+                ));
+            }
+        }
         match self.backend() {
             ChannelBackend::Datagram => {
                 let id = self.channel_id.ok_or_else(|| {

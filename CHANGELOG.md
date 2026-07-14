@@ -7,6 +7,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- **KDL request に safety hint 属性 `readonly` / `destructive` / `idempotent` を追加**:
+  channel 作者が自メソッドの副作用特性を KDL schema で宣言し（例: `request "Query"
+  readonly=#true idempotent=#true { ... }`）、AI agent 等の consumer が尊重する構図。
+  unison-mcp は synthesized tool の `ToolAnnotations`（`readOnlyHint` / `destructiveHint` /
+  `idempotentHint`）へそのまま写し、あわせて全 synthesized tool に `openWorldHint: true` を
+  付与（= bridge は外部 Unison server と対話する、static tools と同方針）。未宣言の hint は
+  set せず MCP client の spec default 解釈に委ねる。`readonly=#true destructive=#true` の
+  同時宣言は矛盾として parse 時に validation error。additive（既存 schema は無改修で従来
+  どおり動作）。spec/02 §4.4 に Request 属性の節を追記（実装先行だった `description` 属性も
+  同時に文書化）。
+
 ## [1.7.0] - 2026-07-14 — unison-mcp: rmcp 2 系 + live MCP bridge 化
 
 > unison-mcp を MCP spec 2025-06-18+ 世代へ引き上げるリリース。KDL `returns` からの

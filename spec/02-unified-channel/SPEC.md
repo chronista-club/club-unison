@@ -1,8 +1,8 @@
 # spec/02: Unison Protocol - Unified Channel プロトコル仕様
 
-**バージョン**: 2.1.0-draft (v0.10.0 で `backend` / `channel_id` 属性追加)
-**最終更新**: 2026-05-15
-**ステータス**: Stable (v0.9.0 で 2.0.0 確定)、 v0.10.0 で datagram channel narrative を additive 拡張中
+**バージョン**: 2.2.0-draft (request の `description` / safety hint 属性 `readonly` `destructive` `idempotent` を追記)
+**最終更新**: 2026-07-14
+**ステータス**: Stable (v0.9.0 で 2.0.0 確定)、 additive 拡張中 (v0.10.0 datagram channel / request 属性)
 
 ---
 
@@ -194,6 +194,37 @@ channel "<name>" from="<direction>" lifetime="<lifetime>" {
 - **1 channel = 1 (virtual) stream**: stream channel は QUIC bidi stream に直接対応、 datagram channel は connection 内の共有 datagram path 上に `channel_id` で識別される **virtual stream** として存在。
 - **1 channel = 1 backend (strict)**: 1 channel block 内の event は全て同じ backend に従う。 stream/datagram event の mixed channel は v0.10.0 では disallow (= forward-compatible、 将来許容化可)。
 - **互換性**: `backend` 属性なしの v0.9.0 schema は default `"stream"` 解釈で動作、 v0.9.0 caller は無改修。
+
+#### Request 属性
+
+`request` ノードには optional 属性を付与できる:
+
+| 属性 | 値 | 説明 |
+|------|-----|------|
+| `description` | string | リクエストの人間可読な説明。unison-mcp の MCP tool description 等、AI agent が読む説明文に流れる |
+| `readonly` | `#true` / `#false` | 環境を変更しない読み取り専用リクエストであることの宣言 (= safety hint) |
+| `destructive` | `#true` / `#false` | 破壊的更新（復元不能な削除・上書き）があり得ることの宣言。`#false` は「追加のみ」の積極表明 (= safety hint) |
+| `idempotent` | `#true` / `#false` | 同一引数での再実行が追加の効果を持たないことの宣言 (= safety hint) |
+
+**Safety hints** (`readonly` / `destructive` / `idempotent`) は、channel 作者が自メソッドの副作用特性を宣言し、AI agent 等の consumer がそれを尊重するための仕組み:
+
+- **宣言は optional** — 未宣言は「不明」であり、consumer 側の default 解釈に委ねる。KDL parser は未宣言を `None` として保持し、default 値へ潰さない
+- **hint であって enforcement ではない** — protocol runtime は宣言と実際の挙動の一致を検証しない。宣言の信頼性は server 作者への信頼と同一（= untrusted server の hint を security 判断に使わない）
+- **矛盾は validation error** — `readonly=#true destructive=#true` の同時宣言は parse 時に拒否される
+- **MCP への写像** — unison-mcp bridge は synthesized tool の `ToolAnnotations`（`readOnlyHint` / `destructiveHint` / `idempotentHint`）へそのまま写す。未宣言 hint は MCP spec の default（readOnly=false / destructive=true / idempotent=false）解釈に委ねられる
+
+```kdl
+channel "memory" from="client" lifetime="persistent" {
+    request "Query" readonly=#true idempotent=#true {
+        field "key" type="string"
+        returns "Result" { field "value" type="json" }
+    }
+    request "Delete" destructive=#true {
+        field "key" type="string"
+        returns "Deleted" { field "ok" type="bool" }
+    }
+}
+```
 
 #### メッセージブロック
 
@@ -643,6 +674,6 @@ v0.10.0 でも残存 (= channel API の制約に当てはまらない caller の
 
 ---
 
-**仕様バージョン**: 2.0.0-draft
-**最終更新**: 2026-02-16
+**仕様バージョン**: 2.2.0-draft
+**最終更新**: 2026-07-14
 **ステータス**: Draft
