@@ -309,10 +309,12 @@ async fn elicit_endpoint(peer: Option<&Peer<RoleServer>>) -> Option<String> {
             let endpoint = ans.endpoint.trim().to_string();
             if endpoint.is_empty() { None } else { Some(endpoint) }
         }
-        // decline / cancel はユーザーの意思 = そのままエラー路線へ
+        // rmcp 2.2 実装では decline / cancel / no-content は全て Err で届く
+        // (= Ok(None) は API 型上の defensive arm、 現実装では到達しない)
         Ok(None) => None,
         Err(e) => {
-            tracing::debug!(error = %e, "endpoint elicitation failed; falling back to error");
+            // decline / cancel (= ユーザーの意思) もここ。 そのままエラー路線へ
+            tracing::debug!(error = %e, "endpoint elicitation declined/failed; falling back to error");
             None
         }
     }
@@ -657,6 +659,24 @@ mod tests {
         let server = UnisonMcp::new(bridge);
         let tools = server.all_tools();
         assert_eq!(tools.len(), 3);
+    }
+
+    /// F3 (Moody Blues MEDIUM) acceptance: endpoint 未設定 + peer 無し (= elicitation
+    /// 不可) は actionable な invalid_request エラーになる。
+    #[tokio::test]
+    async fn ping_without_endpoint_and_peer_returns_actionable_error() {
+        let bridge = UnisonBridge::new(BridgeConfig::default()).await.unwrap();
+        let server = UnisonMcp::new(bridge);
+        let err = server
+            .invoke_tool("unison_ping", serde_json::json!({}))
+            .await
+            .expect_err("must fail without endpoint");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("no endpoint"), "actionable error: {msg}");
+        assert!(
+            msg.contains("--config"),
+            "should point to the --config remedy: {msg}"
+        );
     }
 
     #[tokio::test]

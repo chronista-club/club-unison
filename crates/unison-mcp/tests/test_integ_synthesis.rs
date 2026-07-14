@@ -127,7 +127,7 @@ protocol "test-synth" version="0.43.0" {
 /// 指定 addr に TEST_KDL_V2 の server を起動する (= schema 進化後の server を模擬)。
 /// `spawn_listen` は self を consume するため、 bind retry は server ごと作り直す
 /// (= 直前の server の UDP socket close 直後は bind が失敗し得る)。
-async fn start_test_server_v2(addr: &str) -> Result<ServerHandle> {
+async fn start_test_server_v2(addr: &str) -> Result<(ServerHandle, String)> {
     let mut last_err: Option<anyhow::Error> = None;
     for _ in 0..10 {
         let server = ProtocolServer::with_identity("test-synth-srv2", "0.43.0", "test");
@@ -160,7 +160,11 @@ async fn start_test_server_v2(addr: &str) -> Result<ServerHandle> {
             })
             .await;
         match server.spawn_listen(addr).await {
-            Ok(h) => return Ok(h),
+            Ok(h) => {
+                let bound = h.local_addr();
+                let bound = format!("[{}]:{}", bound.ip(), bound.port());
+                return Ok((h, bound));
+            }
             Err(e) => {
                 last_err = Some(e.into());
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -400,7 +404,7 @@ async fn test_e2e_discover_refreshes_synthesized_tools() -> Result<()> {
 
     // server の schema 進化を模擬: 同一 endpoint で異なる KDL の server に入れ替える
     h1.shutdown().await?;
-    let h2 = start_test_server_v2(&addr).await?;
+    let (h2, _) = start_test_server_v2(&addr).await?;
 
     // default endpoint (= endpoint arg 省略) への discover が refresh を起こす
     let result = timeout(
@@ -440,5 +444,97 @@ async fn test_e2e_discover_refreshes_synthesized_tools() -> Result<()> {
     assert_eq!(sc.get("ack").and_then(Value::as_str), Some("ack: hello"));
 
     h2.shutdown().await?;
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Test 6: 明示的な別 endpoint への unison_discover は one-off 照会
+// (= refreshed: false、 synthesized tool set は不変)
+// ─────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+#[ignore = "Large: E2E test"]
+async fn test_e2e_discover_non_default_endpoint_is_one_off() -> Result<()> {
+    init_tracing();
+    let (h1, addr1) = start_test_server().await?;
+    let mcp = start_mcp_with_endpoint(&addr1).await?;
+    let before: Vec<String> = mcp.all_tools().iter().map(|t| t.name.to_string()).collect();
+
+    // 別 endpoint に v2 server (= 任意ポート)
+    let (h2, addr2) = start_test_server_v2("[::1]:0").await?;
+
+    let result = timeout(
+        Duration::from_secs(10),
+        mcp.invoke_tool(
+            "unison_discover",
+            json!({ "endpoint": format!("quic://{addr2}") }),
+        ),
+    )
+    .await??;
+    let sc = result
+        .structured_content
+        .as_ref()
+        .expect("structured content");
+    // v2 server の summary は返る (= 照会自体は成功)
+    assert_eq!(sc.get("version").and_then(Value::as_str), Some("0.43.0"));
+    // しかし refresh はされない (= one-off)
+    assert_eq!(sc.get("refreshed"), Some(&json!(false)));
+
+    let after: Vec<String> = mcp.all_tools().iter().map(|t| t.name.to_string()).collect();
+    assert_eq!(
+        before, after,
+        "tool set must be unchanged after one-off discover"
+    );
+
+    h1.shutdown().await?;
+    h2.shutdown().await?;
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Test 7: default endpoint への再 discover で schema hash が不変の場合、
+// refresh はされる (= 新 connection に載せ替え) が tool set は同一
+// ─────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+#[ignore = "Large: E2E test"]
+async fn test_e2e_discover_same_hash_refreshes_without_tool_change() -> Result<()> {
+    init_tracing();
+    let (handle, addr) = start_test_server().await?;
+    let mcp = start_mcp_with_endpoint(&addr).await?;
+    let before: Vec<String> = mcp.all_tools().iter().map(|t| t.name.to_string()).collect();
+
+    // 同じ server への再 discover (= hash 不変 → list_changed は送られない分岐)
+    let result = timeout(
+        Duration::from_secs(10),
+        mcp.invoke_tool("unison_discover", json!({})),
+    )
+    .await??;
+    let sc = result
+        .structured_content
+        .as_ref()
+        .expect("structured content");
+    assert_eq!(sc.get("refreshed"), Some(&json!(true)));
+
+    let after: Vec<String> = mcp.all_tools().iter().map(|t| t.name.to_string()).collect();
+    assert_eq!(
+        before, after,
+        "same schema hash must keep the same tool set"
+    );
+
+    // refresh 後 (= 新 connection) も dispatch が生きている
+    let tool = mapping::synth_tool_name("test.echo", "Ping");
+    let result = timeout(
+        Duration::from_secs(5),
+        mcp.invoke_tool(&tool, json!({ "msg": "still alive", "count": 0 })),
+    )
+    .await??;
+    let sc = result.structured_content.expect("ping structured");
+    assert_eq!(
+        sc.get("reply").and_then(Value::as_str),
+        Some("Pong: still alive")
+    );
+
+    handle.shutdown().await?;
     Ok(())
 }
