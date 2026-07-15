@@ -7,6 +7,13 @@
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-07-15 — KDL request safety hint 属性
+
+> channel 作者が自メソッドの副作用特性（read-only / destructive / idempotent）を KDL schema で
+> 宣言し、unison-mcp が MCP `ToolAnnotations` へ写して AI agent が尊重できるようにするリリース
+> （#94）。1.7.0 の unison-mcp typed I/O + live bridge 化に続く、KDL → MCP hint パイプラインの
+> 拡充。SemVer minor（additive、既存 schema / API は無改修）。
+
 ### Added
 
 - **KDL request に safety hint 属性 `readonly` / `destructive` / `idempotent` を追加**:
