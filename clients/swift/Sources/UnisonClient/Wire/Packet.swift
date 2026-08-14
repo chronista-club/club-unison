@@ -1,5 +1,6 @@
 import Foundation
 import SwiftProtobuf
+import libzstd
 
 /// `UnisonPacket` wire layer。 Rust `crates/unison-protocol/src/packet/` の
 /// `[u32 BE header_len][PacketHeader][payload]` と byte 一致する。
@@ -9,7 +10,11 @@ import SwiftProtobuf
 /// ```
 ///
 /// `payload` は encode 済み `ProtocolMessage` バイト列。 TS client と同様、 常に
-/// 非圧縮で送る (`compressed_length = 0`)。 圧縮 packet 受信時は明示 error。
+/// 非圧縮で送る (`compressed_length = 0`)。 **受信は zstd 展開に対応する** —
+/// Rust server は 2KB 以上の payload を自動圧縮する (packet/mod.rs) ため、
+/// 展開が無いと大きな response / event が読めない (実測 2026-08-15:
+/// fieldd の 64-entity FieldSnapshot で発覚 — 小さい open_ack は届くのに
+/// 大きな応答だけ落ちる、という一番分かりにくい形で現れる)。
 enum Packet {
     /// PacketHeader に乗せる任意設定 (= 全 field 既定、 caller が必要分のみ上書き)。
     struct Options {
@@ -85,12 +90,42 @@ enum Packet {
                 "packet: payload size \(payload.count) != header 宣言 \(expected)"
             )
         }
-        if header.compressedLength > 0 && (header.flags & 0x0001) != 0 {
-            throw UnisonError.codec(
-                "packet: zstd 圧縮 payload は未対応 (= fixture は < 2KB / 非圧縮)"
-            )
+        if header.compressedLength > 0 {
+            // flag bit 0 = zstd (Rust `PacketFlags::is_compressed`)。 立っていない
+            // のに compressed_length > 0 は仕様外 — 黙って生バイトを返すと
+            // decode 失敗が下流に化けるので、ここで名指しで落とす
+            guard (header.flags & 0x0001) != 0 else {
+                throw UnisonError.codec(
+                    "packet: compressed_length > 0 なのに zstd flag が無い (flags=\(header.flags))"
+                )
+            }
+            return Decoded(
+                header: header,
+                payload: try decompress(payload, expectedSize: Int(header.payloadLength)))
         }
         return Decoded(header: header, payload: payload)
+    }
+
+    /// zstd 展開 (= Rust `zstd::decode_all` の対向)。 payload_length が展開後
+    /// サイズの宣言なので、 ぴったりのバッファ 1 回で済む
+    private static func decompress(_ compressed: Data, expectedSize: Int) throws -> Data {
+        guard expectedSize > 0 else {
+            throw UnisonError.codec("packet: zstd 展開後サイズの宣言が 0")
+        }
+        var output = Data(count: expectedSize)
+        let written = output.withUnsafeMutableBytes { dst in
+            compressed.withUnsafeBytes { src in
+                ZSTD_decompress(
+                    dst.baseAddress, expectedSize,
+                    src.baseAddress, compressed.count)
+            }
+        }
+        guard ZSTD_isError(written) == 0, written == expectedSize else {
+            throw UnisonError.codec(
+                "packet: zstd 展開失敗 (宣言 \(expectedSize) bytes, 結果 \(written))"
+            )
+        }
+        return output
     }
 }
 

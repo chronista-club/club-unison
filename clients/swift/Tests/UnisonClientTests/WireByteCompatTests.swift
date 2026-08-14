@@ -142,3 +142,56 @@ extension Data {
         map { String(format: "%02x", $0) }.joined()
     }
 }
+
+// zstd 展開 (2026-08-15)。 Rust server は 2KB 以上の payload を自動圧縮する —
+// 自己圧縮 fixture で decode round-trip を固定する (libzstd は依存済みなので
+// テストからも直接使える)。
+import libzstd
+
+struct PacketZstdTests {
+    /// 圧縮 packet (flag bit 0 + compressed_length) が展開されて返る
+    @Test func decodesZstdCompressedPayload() throws {
+        // 圧縮が効く冗長データ (JSON 想定に寄せた繰り返し)
+        let original = Data(String(repeating: #"{"id":1,"level":0.5}"#, count: 300).utf8)
+        let bound = ZSTD_compressBound(original.count)
+        var compressed = Data(count: bound)
+        let written = compressed.withUnsafeMutableBytes { dst in
+            original.withUnsafeBytes { src in
+                ZSTD_compress(dst.baseAddress, bound, src.baseAddress, original.count, 3)
+            }
+        }
+        try #require(ZSTD_isError(written) == 0)
+        compressed.removeSubrange(written..<compressed.count)
+
+        var header = Protocol_PacketHeader()
+        header.version = 1
+        header.payloadLength = UInt32(original.count)
+        header.compressedLength = UInt32(compressed.count)
+        header.flags = 0x0001  // zstd (Rust PacketFlags::is_compressed)
+        let headerBytes = try header.serializedData()
+        var packet = Data()
+        packet.appendBigEndian(UInt32(headerBytes.count))
+        packet.append(headerBytes)
+        packet.append(compressed)
+
+        let decoded = try Packet.decode(packet)
+        #expect(decoded.payload == original)
+        #expect(decoded.header.payloadLength == UInt32(original.count))
+    }
+
+    /// compressed_length > 0 なのに zstd flag が無い packet は名指しで落ちる
+    @Test func rejectsCompressedLengthWithoutFlag() throws {
+        var header = Protocol_PacketHeader()
+        header.version = 1
+        header.payloadLength = 10
+        header.compressedLength = 4
+        header.flags = 0
+        let headerBytes = try header.serializedData()
+        var packet = Data()
+        packet.appendBigEndian(UInt32(headerBytes.count))
+        packet.append(headerBytes)
+        packet.append(Data([1, 2, 3, 4]))
+
+        #expect(throws: UnisonError.self) { _ = try Packet.decode(packet) }
+    }
+}
