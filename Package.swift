@@ -27,12 +27,18 @@ let package = Package(
     dependencies: [
         // wire format = protocol.proto → swift-protobuf 生成 (Apple 公式)。
         .package(url: "https://github.com/apple/swift-protobuf.git", from: "1.38.0"),
+        // zstd 展開 (facebook 公式が SPM 対応)。 Rust server は 2KB 以上の payload を
+        // 自動で zstd 圧縮する (packet/mod.rs) — 受信側の展開が無いと大きな
+        // response / event が読めない (実測 2026-08-15: fieldd の 64-entity 応答)。
+        // Apple Compression framework は zstd 非対応のため公式 C 実装を使う。
+        .package(url: "https://github.com/facebook/zstd.git", from: "1.5.7"),
     ],
     targets: [
         .target(
             name: "UnisonClient",
             dependencies: [
                 .product(name: "SwiftProtobuf", package: "swift-protobuf"),
+                .product(name: "libzstd", package: "zstd"),
             ],
             // source 実体は monorepo の clients/swift/ 配下 (root manifest から path 参照)。
             path: "clients/swift/Sources/UnisonClient"
