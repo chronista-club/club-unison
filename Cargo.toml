@@ -55,8 +55,8 @@ cgp = "0.7.0"
 cgp-component = "0.7.0"
 
 # Protocol Buffers
-buffa = "0.5"
-buffa-build = "0.5"
+buffa = "0.9.1"
+buffa-build = "0.9.1"
 
 # Hashing (= unison.discovery channel の protocol KDL hash 用)
 sha2 = "0.10"
