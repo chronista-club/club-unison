@@ -598,10 +598,11 @@ impl ServerHandler for UnisonMcp {
     ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
         let tools = self.all_tools();
         async move {
+            // rmcp 3 で ttl_ms / cache_scope / result_type が増え `#[non_exhaustive]` に
+            // なったため、tools 以外は Default に委ねる (= 非キャッシュ・complete)。
             Ok(ListToolsResult {
                 tools,
-                next_cursor: None,
-                meta: None,
+                ..Default::default()
             })
         }
     }
@@ -614,11 +615,14 @@ impl ServerHandler for UnisonMcp {
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
+    ) -> impl std::future::Future<Output = Result<CallToolResponse, McpError>> + Send + '_ {
         let args_value = serde_json::Value::Object(request.arguments.clone().unwrap_or_default());
         async move {
+            // rmcp 3 の call_tool は Complete / InputRequired / Task の 3 択を返す。
+            // unison bridge の tool は常に同期完了するので Complete へ包む。
             self.invoke_tool_with_peer(request.name.as_ref(), args_value, Some(&context.peer))
                 .await
+                .map(CallToolResponse::Complete)
         }
     }
 }

@@ -7,6 +7,96 @@
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-09-01 — 依存の全面棚卸し（buffa 脆弱性 2 件解消 + rmcp 3）+ Swift client の zstd 展開
+
+> 依存 crate を crates.io の最新に対して総点検し、semver 非互換で取り残されていた 4 件
+> （buffa / rmcp / club-kdl / sha2）を引き上げたリリース。主目的は buffa 0.5.2 に残っていた
+> 脆弱性 2 件の解消で、0.5 系に patch 版が存在せず利用側の `cargo update` では直せないため、
+> club-unison の Cargo.toml を上げることが唯一の解消経路だった（creo-memories lane からの
+> cross-repo handoff）。あわせて、どの member crate からも参照されていなかった
+> `[workspace.dependencies]` エントリ 10 件を削除し、nightly に先行統合済みだった Swift client
+> の zstd 受信展開修正（#96）を同梱する。公開 crate は `club-unison` のみで、その公開 API に
+> 変更はない。SemVer minor（依存の major 相当 bump を含むため patch にはしない）。
+
+### Security
+
+- **buffa 0.5.2 の脆弱性 2 件を解消**（いずれも severity medium、runtime scope）:
+  - **GHSA-9pwq-gcrx-wghh** — `OwnedView` の `Deref` 実装が借用を unsound に `'static` へ
+    昇格させ、**Use-After-Free** を引き起こしうる問題。buffa 0.7.0 で `Deref` impl 自体の
+    削除により修正。
+  - **GHSA-f9qc-qg88-7pq5**（CVE-2026-55407） — `decode_unknown_field` の
+    unbounded allocation により、細工した wire 入力で**メモリ枯渇 DoS** を起こしうる問題。
+    buffa 0.8.0 で decode 時の element memory limit 導入により修正。
+
+  club-unison は全通信の `ProtocolMessage` を buffa で decode するため、両方とも受信経路に
+  効く。`club-unison = "1.x"` で解決している下流 crate は、本リリース後に `cargo update`
+  するだけで解消される。
+
+### Changed
+
+- **`buffa` / `buffa-build` を `0.5` → `0.9.1` へ**。0.9.0 は自身の codegen が descriptor set を
+  element memory limit で弾くリグレッションを含むため、`"0.9"` ではなく **`"0.9.1"` を下限**
+  として指定する。移行コストは実測ゼロ: 0.6〜0.9 の破壊的変更は codegen 出力の形
+  （`MessageField` の inline 化、`put_len_delimited_header` の `u64` 化）と手書き `Message`
+  impl の trait 面（`WirePayload` の opaque 化、`OwnedView::to_owned_message` の infallible
+  化、`write_to` の `EncodeSink` 化）に集中しており、club-unison が触れているのは
+  `Message::{encode_to_vec, decode_from_slice}` / `EnumValue` / `__buffa_unknown_fields`
+  のみで、いずれも非該当。生成コードは `build.rs` → `OUT_DIR` 方式で毎ビルド再生成される
+  ため、「checked-in generated code の再生成が必要」という 0.9.0 最大の移行障壁も構造的に
+  該当しない。副次的に buffa 側の性能改善が乗る（singular message field の inline 化、
+  UTF-8 検証の `smoothutf8` slack fast path 化、`EncodeSink` によるセグメント zero-copy
+  flush）。encode 側に protobuf の 2 GiB サイズ上限が入り超過時は panic するが、unison の
+  packet はこの桁に達しない。
+- **`rmcp` を `2` → `3.2` へ（unison-mcp）**。MCP の response caching / Tasks 拡張の導入に
+  伴う 2 点を移行:
+  - `ServerHandler::call_tool` の戻り値が `CallToolResult` から `CallToolResponse`
+    （`Complete` / `InputRequired` / `Task` の 3 択）へ。unison bridge の tool は常に同期完了
+    するため `CallToolResponse::Complete` に包む。内部ヘルパーの戻り値は `CallToolResult`
+    のまま。
+  - `ListToolsResult` に `ttl_ms` / `cache_scope` / `result_type` が追加され
+    `#[non_exhaustive]` 化。`tools` 以外は `..Default::default()` に委ねる（= 非キャッシュ・
+    complete）。今後のフィールド追加でも壊れない形。
+
+  `unison-mcp` は `publish = false` のため、公開 crate `club-unison` の依存ツリーには影響しない。
+- **`club-kdl` を `0.8` → `0.12` へ**、**`sha2` を `0.10` → `0.11` へ**。いずれもコード変更なしで
+  ビルド・テストとも通過。
+
+### Removed
+
+- **どの member crate からも参照されていなかった `[workspace.dependencies]` エントリ 10 件を
+  削除**: `proc-macro2` / `quote` / `syn` / `convert_case`（"Code generation" 節ごと。codegen は
+  proc-macro ではなく KDL パーサ経由に移行済みで、残骸だった）、`miette`、`cgp` /
+  `cgp-component`（"Context-Generic Programming" 節ごと）、`crc32fast`（packet header に CRC は
+  無い）、`indexmap`、`scc`。43 → 33 エントリ。`[workspace.dependencies]` は宣言しただけでは
+  ビルドに影響しないため気づきにくいが、依存監査のノイズと「使っているつもり」の誤解を生む。
+
+### Fixed
+
+- **Swift client: zstd 圧縮 packet の受信展開を実装**（#96）。Rust server は 2KB 以上の
+  payload を自動で zstd 圧縮する（`packet/mod.rs`）が、Swift client は圧縮 packet を明示
+  error にしていたため、小さい `open_ack` は届くのに大きな response / event だけが落ちる、
+  という切り分けにくい形で失敗していた（2026-08-15、bikeboy-ladyland fieldd の
+  64-entity FieldSnapshot 応答が 3s timeout）。Apple の Compression framework は zstd
+  非対応のため facebook/zstd 公式（SPM 対応）を依存に追加し、受信側の展開を実装。
+  flag 無しで `compressed_length > 0` の packet は名指しで reject する。回帰テストは
+  `PacketZstdTests`（自己圧縮 round-trip + flag 検証）と `FieldLiveTests`
+  （`FIELD_LIVE=1`、fieldd 相手の実地 interop）。
+
+### Dependencies
+
+- `buffa` / `buffa-build` 0.5.2 → 0.9.1（推移で `buffa-codegen` / `buffa-descriptor` も、
+  `smoothutf8` 0.2.3 を新規追加）
+- `rmcp` 2.x → 3.2（unison-mcp のみ、`publish = false`）
+- `club-kdl` 0.8 → 0.12
+- `sha2` 0.10 → 0.11
+- 削除: `proc-macro2` / `quote` / `syn` / `convert_case` / `miette` / `cgp` / `cgp-component` /
+  `crc32fast` / `indexmap` / `scc`
+
+  semver 互換の範囲で新しい版が出ている依存（`tokio` 1.53 / `uuid` 1.26 / `bytes` 1.12 /
+  `kdl` 6.7 / `hdrhistogram` 7.6 等）は、宣言済みの caret 要件がすでにそれらを許容しており
+  `cargo update` で解決されるため、下限の引き上げは行わない（下流の解決を不必要に
+  縛らないため）。
+
 ## [1.8.0] - 2026-07-15 — KDL request safety hint 属性
 
 > channel 作者が自メソッドの副作用特性（read-only / destructive / idempotent）を KDL schema で
