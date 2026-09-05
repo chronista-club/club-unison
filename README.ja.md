@@ -216,14 +216,6 @@ protocol "my-service" version="1.0.0" {
 | クレート | 説明 |
 |---------|------|
 | [`unison-protocol`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-protocol) | コアライブラリ。crates.io では `club-unison` として公開、Rust crate identifier は `unison`。KDL スキーマ、QUIC、チャネル、パケット |
-| [`unison-agent`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-agent) | [Claude Agent SDK](https://crates.io/crates/claude-agent-sdk) 統合。AgentClient、InteractiveClient、MCP ツール公開 |
-
-### unison-agent の例
-
-```bash
-cargo run -p unison-agent --example simple_query        # 単発クエリ
-cargo run -p unison-agent --example interactive_chat    # マルチターン会話
-```
 
 ---
 

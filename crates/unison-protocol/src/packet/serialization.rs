@@ -310,9 +310,8 @@ mod tests {
 
     #[test]
     fn test_round_trip() {
-        let mut header = UnisonPacketHeader::new(PacketType::Data)
-            .with_sequence(42)
-            .with_stream_id(1337);
+        let mut header = UnisonPacketHeader::new(PacketType::Control);
+        header.timestamp = 12345;
 
         let payload = b"Test payload data";
 
@@ -322,8 +321,8 @@ mod tests {
         // デシリアライズ
         let (restored_header, restored_payload) = PacketDeserializer::parse(&packet).unwrap();
 
-        assert_eq!(restored_header.sequence_number, 42);
-        assert_eq!(restored_header.stream_id, 1337);
+        assert_eq!(restored_header.packet_type(), Ok(PacketType::Control));
+        assert_eq!(restored_header.timestamp, 12345);
         assert_eq!(restored_payload, payload);
     }
 
@@ -342,16 +341,15 @@ mod tests {
 
     #[test]
     fn test_parse_header_only_skips_payload() {
-        let mut header = UnisonPacketHeader::new(PacketType::Data)
-            .with_message_id(99)
-            .with_response_to(7);
+        let mut header = UnisonPacketHeader::new(PacketType::Control);
+        header.timestamp = 99;
         let payload = b"payload bytes";
 
         let packet = PacketSerializer::serialize(&mut header, payload).unwrap();
         let header_only = PacketDeserializer::parse_header_only(&packet).unwrap();
 
-        assert_eq!(header_only.message_id, 99);
-        assert_eq!(header_only.response_to, 7);
+        assert_eq!(header_only.packet_type(), Ok(PacketType::Control));
+        assert_eq!(header_only.timestamp, 99);
         assert_eq!(header_only.payload_length, payload.len() as u32);
     }
 }

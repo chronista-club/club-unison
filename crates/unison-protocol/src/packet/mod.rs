@@ -21,10 +21,7 @@
 //! // 任意の payload bytes (= caller が codec で encode 済み)
 //! let payload: Vec<u8> = b"Hello, World!".to_vec();
 //!
-//! let packet = UnisonPacket::builder()
-//!     .with_stream_id(123)
-//!     .with_sequence(1)
-//!     .build(payload)?;
+//! let packet = UnisonPacket::new(payload)?;
 //!
 //! // Bytes に変換（ネットワーク送信用）
 //! let bytes = packet.to_bytes();
@@ -57,14 +54,9 @@ pub struct UnisonPacket {
 }
 
 impl UnisonPacket {
-    /// フレームビルダーを作成
-    pub fn builder() -> UnisonPacketBuilder {
-        UnisonPacketBuilder::new()
-    }
-
-    /// ペイロードを指定してフレームを作成（デフォルト設定）
+    /// ペイロードを指定して `PacketType::Data` のフレームを作成（デフォルト設定）
     pub fn new(payload: Vec<u8>) -> Result<Self, SerializationError> {
-        Self::builder().build(payload)
+        Self::with_header(UnisonPacketHeader::new(PacketType::Data), payload)
     }
 
     /// ヘッダーとペイロードを指定してフレームを作成
@@ -136,97 +128,6 @@ impl UnisonPacket {
     }
 }
 
-/// UnisonPacket ビルダー
-pub struct UnisonPacketBuilder {
-    header: UnisonPacketHeader,
-}
-
-impl UnisonPacketBuilder {
-    pub fn new() -> Self {
-        Self {
-            header: UnisonPacketHeader::new(PacketType::Data),
-        }
-    }
-
-    /// フレームタイプを設定
-    pub fn packet_type(mut self, packet_type: PacketType) -> Self {
-        self.header.set_packet_type(packet_type);
-        self
-    }
-
-    /// シーケンス番号を設定
-    pub fn with_sequence(mut self, seq: u64) -> Self {
-        self.header.sequence_number = seq;
-        self
-    }
-
-    /// ストリームIDを設定
-    pub fn with_stream_id(mut self, id: u64) -> Self {
-        self.header.stream_id = id;
-        self
-    }
-
-    /// メッセージIDを設定（Request/Response識別用）
-    pub fn with_message_id(mut self, id: u64) -> Self {
-        self.header.message_id = id;
-        self
-    }
-
-    /// 応答先メッセージIDを設定（Response の場合）
-    pub fn with_response_to(mut self, id: u64) -> Self {
-        self.header.response_to = id;
-        self
-    }
-
-    /// 相関IDを設定（リクエスト追跡用、UUID v7）
-    pub fn with_correlation_id(mut self, id: uuid::Uuid) -> Self {
-        self.header.correlation_id = Some(id);
-        self
-    }
-
-    /// 新しい相関ID（UUID v7）を生成して設定
-    ///
-    /// クライアントが request 起点で呼び、packet flow に伝播させる。
-    pub fn with_new_correlation_id(mut self) -> Self {
-        self.header = self.header.with_new_correlation_id();
-        self
-    }
-
-    /// 高優先度フラグを設定
-    pub fn with_high_priority(mut self) -> Self {
-        let mut flags = self.header.flags();
-        flags.set(PacketFlags::PRIORITY_HIGH);
-        self.header.set_flags(flags);
-        self
-    }
-
-    /// ACK 要求フラグを設定
-    pub fn requires_ack(mut self) -> Self {
-        let mut flags = self.header.flags();
-        flags.set(PacketFlags::REQUIRES_ACK);
-        self.header.set_flags(flags);
-        self
-    }
-
-    /// カスタムフラグを設定
-    pub fn with_flags(mut self, flags: PacketFlags) -> Self {
-        self.header.set_flags(flags);
-        self
-    }
-
-    /// フレームを構築
-    pub fn build(mut self, payload: Vec<u8>) -> Result<UnisonPacket, SerializationError> {
-        self.header.update_timestamp();
-        UnisonPacket::with_header(self.header, payload)
-    }
-}
-
-impl Default for UnisonPacketBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,28 +141,10 @@ mod tests {
         assert!(packet.size() > 4 + payload.len());
 
         let header = packet.header().unwrap();
-        assert_eq!(header.packet_type(), PacketType::Data);
+        assert_eq!(header.packet_type(), Ok(PacketType::Data));
 
         let restored_payload = packet.payload().unwrap();
         assert_eq!(restored_payload, payload);
-    }
-
-    #[test]
-    fn test_packet_builder() {
-        let payload = b"Builder test".to_vec();
-        let packet = UnisonPacket::builder()
-            .packet_type(PacketType::Control)
-            .with_sequence(42)
-            .with_stream_id(1337)
-            .with_high_priority()
-            .build(payload)
-            .unwrap();
-
-        let header = packet.header().unwrap();
-        assert_eq!(header.packet_type(), PacketType::Control);
-        assert_eq!(header.sequence_number, 42);
-        assert_eq!(header.stream_id, 1337);
-        assert!(header.flags().is_high_priority());
     }
 
     #[test]
@@ -293,44 +176,5 @@ mod tests {
         let restored_packet = UnisonPacket::from_bytes(&bytes).unwrap();
         let restored = restored_packet.payload().unwrap();
         assert_eq!(String::from_utf8(restored).unwrap(), large_text);
-    }
-
-    #[test]
-    fn test_request_response_pattern() {
-        // Request 作成
-        let request = UnisonPacket::builder()
-            .with_message_id(100)
-            .with_response_to(0)
-            .build(b"Request data".to_vec())
-            .unwrap();
-
-        let req_header = request.header().unwrap();
-        assert!(req_header.is_request());
-        assert_eq!(req_header.message_id, 100);
-
-        // Response 作成（Request の ID を参照）
-        let response = UnisonPacket::builder()
-            .with_message_id(101)
-            .with_response_to(100)
-            .build(b"Response data".to_vec())
-            .unwrap();
-
-        let res_header = response.header().unwrap();
-        assert!(res_header.is_response());
-        assert_eq!(res_header.response_to, 100);
-    }
-
-    #[test]
-    fn test_oneway_message() {
-        let oneway = UnisonPacket::builder()
-            .with_message_id(0)
-            .with_response_to(0)
-            .build(b"Oneway message".to_vec())
-            .unwrap();
-
-        let header = oneway.header().unwrap();
-        assert!(header.is_oneway());
-        assert_eq!(header.message_id, 0);
-        assert_eq!(header.response_to, 0);
     }
 }

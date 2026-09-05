@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "crates/unison-protocol",
-    "crates/unison-agent",
     "crates/unison-mcp",
     "crates/unison-cli",
 ]

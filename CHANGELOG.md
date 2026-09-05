@@ -7,6 +7,35 @@
 
 ## [Unreleased]
 
+> **breaking (次は 2.0.0)**: 呼び出し元の無い public API を削除する第 1 弾。 削除対象は
+> workspace 内に加えて ~/repos 配下の利用 repo (chronista-hub / fleetstage / fleetflow /
+> vantage-point / creo-memories / cplp-sound-system 等 83 file) を grep して利用ゼロを
+> 確認したものだけ。 wire bytes は変わらない (`tests/fixtures/wire/*.hex` に diff なし)。
+
+### Removed
+
+- **`unison-agent` crate を削除。** `claude-agent-sdk` の薄い wrapper (`AgentClient` /
+  `InteractiveClient`) と、 4 tool 全部が `// TODO` の mock 応答だった `UnisonTools`。
+  後者の役割は `unison-mcp` が本実装済み。 README の crate 表からも外した。
+- **`packet` の未使用 header field / flag / builder を削除。** `UnisonPacketBuilder`、
+  `PacketFlags` の `COMPRESSED` 以外 9 bit と accessor / `Display`、
+  `PacketType::{Heartbeat, Handshake, Custom}`、 header の `sequence_number` /
+  `stream_id` / `message_id` / `response_to` / `correlation_id` と `is_request` /
+  `is_response` / `is_oneway`、 `PacketConfig` の preset 3 種と write-only な `version`、
+  `CompressionConfig` の preset 4 種。 いずれも production では常に default 値で wire に
+  乗っていなかった。 proto は field 6 / 8-11 を `reserved` にし番号を再利用しない。
+  `PacketType` は `From<u8>` から `TryFrom<u8>` (未知値 = `Err(raw)`) に、
+  `UnisonPacketHeader::packet_type()` は `Result<PacketType, u8>` に変更。
+- **`unison::wire` module (`WireFormat` trait) を削除。** 実装ゼロ・呼び出しゼロ・
+  encode/decode method も無い「将来の hook」。 他 format が要る時点で設計する。
+- **`parser::TypeRegistry` と `FieldType::{to_rust_type, to_typescript_type}` を削除。**
+  codegen は `club-kdl-codegen` に分離済みで、 本 crate 内に caller が無かった。
+
+### Documentation
+
+- `design/packet.md` を rkyv 時代 (56 byte 固定 header / `Payloadable` / checksum) の
+  記述から現行 buffa wire に書き直し。 `design/wire-format.md` から `WireFormat` 節を除去。
+
 ## [1.9.0] - 2026-09-01 — 依存の全面棚卸し（buffa 脆弱性 2 件解消 + rmcp 3）+ Swift client の zstd 展開
 
 > 依存 crate を crates.io の最新に対して総点検し、semver 非互換で取り残されていた 4 件
