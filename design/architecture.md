@@ -31,7 +31,6 @@ unison/
   schemas/                 -- KDLプロトコル定義（テスト用）
   crates/
     unison-protocol/       -- コアクレート（パーサー、ネットワーク）
-    unison-agent/          -- エージェント実装
 ```
 
 ### ワークスペース共通設定
@@ -70,9 +69,8 @@ crates/unison-protocol/src/
   parser/
     mod.rs                 -- SchemaParserエントリポイント
     schema.rs              -- ParsedSchema、スキーマ構造
-    types.rs               -- TypeRegistry、型定義
   packet/
-    mod.rs                 -- UnisonPacket、UnisonPacketBuilder、UnisonPacketView
+    mod.rs                 -- UnisonPacket
     header.rs              -- UnisonPacketHeader (56 bytes)、PacketType
     flags.rs               -- PacketFlags ビットフラグ
     payload.rs             -- Payloadable trait、各種ペイロード型
@@ -140,7 +138,7 @@ graph TB
 |---------|------|
 | `mod.rs` | `UnisonPacket<T>` -- ジェネリックフレーム構造体。`Bytes`で生データ保持、遅延デシリアライズ |
 | `header.rs` | `UnisonPacketHeader` -- 56バイト固定長ヘッダー。version, packet_type, flags, lengths, IDs |
-| `flags.rs` | `PacketFlags` -- ビットフラグ（COMPRESSED, PRIORITY_HIGH, REQUIRES_ACK等） |
+| `flags.rs` | `PacketFlags` -- ビットフラグ（現在 COMPRESSED のみ） |
 | `payload.rs` | `Payloadable` trait + ペイロード型: `StringPayload`, `BytesPayload`, `JsonPayload`, `RkyvPayload<T>`, `EmptyPayload` |
 | `config.rs` | `PacketConfig` -- 最大ペイロードサイズ、圧縮設定 |
 | `serialization.rs` | `PacketSerializer` / `PacketDeserializer` -- rkyv + zstd のシリアライズ/デシリアライズ |

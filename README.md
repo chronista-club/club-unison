@@ -216,14 +216,6 @@ protocol "my-service" version="1.0.0" {
 | Crate | Description |
 |-------|-------------|
 | [`unison-protocol`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-protocol) | Core library. Published on crates.io as `club-unison`; the Rust crate identifier is `unison`. KDL schema, QUIC, channels, packets. |
-| [`unison-agent`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-agent) | [Claude Agent SDK](https://crates.io/crates/claude-agent-sdk) integration. AgentClient, InteractiveClient, MCP tool exposure. |
-
-### unison-agent examples
-
-```bash
-cargo run -p unison-agent --example simple_query        # one-shot query
-cargo run -p unison-agent --example interactive_chat    # multi-turn conversation
-```
 
 ## Polyglot clients
 

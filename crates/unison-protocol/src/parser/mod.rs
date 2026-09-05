@@ -2,10 +2,8 @@ use anyhow::Result;
 use thiserror::Error;
 
 pub mod schema;
-pub mod types;
 
 pub use schema::*;
-pub use types::*;
 
 /// Parser errors for Unison Protocol
 #[derive(Error, Debug)]

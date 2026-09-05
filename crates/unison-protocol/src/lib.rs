@@ -48,9 +48,6 @@ pub mod parser;
 // フレーム層モジュール
 pub mod packet;
 
-// Wire format pluggable hook (v0.9.0 で導入、 v0.10+ で具体実装拡張)
-pub mod wire;
-
 // buffa-generated protocol types (v0.9.0 buffa pivot)
 //
 // build.rs が `proto/protocol.proto` を compile し `$OUT_DIR/protocol.{mod,rs,__view.rs,...}` を出力。
