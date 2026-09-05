@@ -145,7 +145,6 @@ impl ConnectionContext {
         Ok(UnisonStream::from_streams(
             0,
             channel.to_string(),
-            conn,
             send,
             recv,
         ))

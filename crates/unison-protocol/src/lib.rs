@@ -14,19 +14,29 @@
 //! ## クイックスタート
 //!
 //! ```rust,no_run
-//! # use anyhow::Result;
 //! # #[tokio::main]
-//! # async fn main() -> Result<()> {
-//! use unison::{UnisonProtocol, NetworkError};
+//! # async fn main() -> anyhow::Result<()> {
+//! use unison::{ProtocolServer, UnisonChannel};
+//! use unison::network::MessageType;
 //!
-//! // プロトコルスキーマを読み込み
-//! let mut protocol = UnisonProtocol::new();
-//! // protocol.load_schema(include_str!("../schemas/ping_pong.kdl"))?;
+//! // サーバーを作り、 channel handler を登録する。 handler は接続ごとに spawn される。
+//! let server = ProtocolServer::with_identity("demo", "1.0.0", "example");
+//! server
+//!     .register_channel("ping", |_ctx, stream| async move {
+//!         let ch = UnisonChannel::new(stream);
+//!         while let Ok(msg) = ch.recv().await {
+//!             if msg.msg_type == MessageType::Request {
+//!                 ch.send_response(msg.id, &msg.method, &serde_json::json!({"reply": "pong"}))
+//!                     .await?;
+//!             }
+//!         }
+//!         Ok(())
+//!     })
+//!     .await;
 //!
-//! // サーバーを作成し、チャネルハンドラーを登録
-//! let server = protocol.create_server();
-//! // server.register_channel("ping", |ctx, stream| async { Ok(()) }).await;
-//! // server.listen("[::1]:8080").await?;
+//! // background で listen し、 handle で shutdown できる
+//! let handle = server.spawn_listen("[::1]:8080").await?;
+//! handle.shutdown().await?;
 //! # Ok(())
 //! # }
 //! ```

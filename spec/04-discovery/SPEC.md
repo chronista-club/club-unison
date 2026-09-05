@@ -394,7 +394,6 @@ let result = proto.call("memory.search", json!({ "query": "..." })).await?;
 ### Schema
 
 - [schemas/discovery.kdl](../../schemas/discovery.kdl) — 本 channel の KDL 定義 (SSOT)
-- [schemas/hierophant.kdl](../../schemas/hierophant.kdl) — KDL 記法 reference (parallel example)
 - [schemas/ping_pong.kdl](../../schemas/ping_pong.kdl) — minimal KDL reference
 
 ### 実装 (= 本 spec の implementation 対応箇所、 Hailing-α P1-P3c で実装)

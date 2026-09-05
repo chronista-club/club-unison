@@ -60,14 +60,14 @@ impl DispatcherInner {
         rx
     }
 
-    /// `channel_id` の登録を解除
-    #[allow(dead_code)] // test / reconnect 用、 v0.10.0 runtime path では未使用
+    /// `channel_id` の登録を解除 (= test 用。 runtime は receiver drop で閉じる)
+    #[cfg(test)]
     async fn unregister(&self, channel_id: u64) {
         self.handlers.lock().await.remove(&channel_id);
     }
 
-    /// 登録されている channel 数
-    #[allow(dead_code)] // test / debug 用
+    /// 登録されている channel 数 (= test 用)
+    #[cfg(test)]
     async fn handler_count(&self) -> usize {
         self.handlers.lock().await.len()
     }
@@ -111,8 +111,9 @@ impl DispatcherInner {
 /// Per-connection datagram dispatcher (= runtime 層)
 ///
 /// [`spawn`](Self::spawn) で background recv task を起動、 caller は
-/// [`register`](Self::register) / [`unregister`](Self::unregister) で channel_id
-/// 単位の handler を出し入れする。 drop 時に task abort。
+/// [`register`](Self::register) で channel_id 単位の receiver を払い出す。 登録解除は
+/// receiver の drop (= `DatagramChannel` の drop) で起き、 dispatcher 自体は drop 時に
+/// task を abort する。
 pub(crate) struct DatagramDispatcher {
     inner: Arc<DispatcherInner>,
     task: Mutex<Option<JoinHandle<()>>>,
@@ -152,32 +153,6 @@ impl DatagramDispatcher {
     /// `channel_id` に対する receiver を払い出して登録 (= `DispatcherInner::register` 委譲)
     pub async fn register(&self, channel_id: u64, buffer_size: usize) -> mpsc::Receiver<Vec<u8>> {
         self.inner.register(channel_id, buffer_size).await
-    }
-
-    /// `channel_id` の登録を解除 (= `DispatcherInner::unregister` 委譲)
-    ///
-    /// 現在の v0.10.0 では `DatagramChannel::close` から呼ばれない (= drop semantics で
-    /// 十分)、 reconnect / 明示 close シナリオの将来 caller 用 API として保持。
-    #[allow(dead_code)]
-    pub async fn unregister(&self, channel_id: u64) {
-        self.inner.unregister(channel_id).await;
-    }
-
-    /// 登録されている channel 数 (= test / debug 用)
-    #[allow(dead_code)]
-    pub async fn handler_count(&self) -> usize {
-        self.inner.handler_count().await
-    }
-
-    /// Dispatcher を明示停止 (= task abort + handler 全 clear)
-    ///
-    /// drop でも task abort されるが、 明示的に停止したい場合 (= reconnect 等) に使用。
-    #[allow(dead_code)]
-    pub async fn shutdown(&self) {
-        if let Some(task) = self.task.lock().await.take() {
-            task.abort();
-        }
-        self.inner.handlers.lock().await.clear();
     }
 }
 

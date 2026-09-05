@@ -12,9 +12,10 @@ use std::sync::{
 use tokio::sync::Mutex;
 use tracing::info;
 
-use super::conn::{BoxUnisonRecv, BoxUnisonSend, UnisonConn};
+use super::conn::{BoxUnisonRecv, BoxUnisonSend};
 use super::frame::{FRAME_TYPE_PROTOCOL, FRAME_TYPE_RAW, read_typed_frame, write_typed_frame};
-use super::{NetworkError, ProtocolFrame, ProtocolMessage};
+use super::{NetworkError, ProtocolMessage};
+use crate::packet::UnisonPacket;
 
 /// Unison Stream — transport 非依存の双方向ストリーム実装。
 ///
@@ -25,8 +26,6 @@ use super::{NetworkError, ProtocolFrame, ProtocolMessage};
 pub struct UnisonStream {
     stream_id: u64,
     method: String,
-    #[allow(dead_code)]
-    connection: Arc<dyn UnisonConn>,
     send_stream: Arc<Mutex<Option<BoxUnisonSend>>>,
     recv_stream: Arc<Mutex<Option<BoxUnisonRecv>>>,
     is_active: Arc<AtomicBool>,
@@ -37,14 +36,12 @@ impl UnisonStream {
     pub fn from_streams(
         stream_id: u64,
         method: String,
-        connection: Arc<dyn UnisonConn>,
         send_stream: BoxUnisonSend,
         recv_stream: BoxUnisonRecv,
     ) -> Self {
         Self {
             stream_id,
             method,
-            connection,
             send_stream: Arc::new(Mutex::new(Some(send_stream))),
             recv_stream: Arc::new(Mutex::new(Some(recv_stream))),
             is_active: Arc::new(AtomicBool::new(true)),
@@ -163,7 +160,7 @@ impl UnisonStream {
 
             match frame_type {
                 FRAME_TYPE_PROTOCOL => {
-                    let frame = ProtocolFrame::from_bytes(&payload)?;
+                    let frame = UnisonPacket::from_bytes(&payload)?;
                     let message = ProtocolMessage::from_frame(&frame)?;
                     Ok(TypedFrame::Protocol(message))
                 }
