@@ -157,17 +157,6 @@ impl<C: Codec> DatagramChannel<C> {
             .ok_or_else(|| NetworkError::Protocol("Datagram channel closed".to_string()))?;
         T::decode(&payload).map_err(NetworkError::Codec)
     }
-
-    /// Channel を閉じる
-    ///
-    /// stream channel と異なり QUIC stream FIN は無く、 demux dispatcher から自分の
-    /// `recv_tx` を取り除く形で「もう受信しない」 状態を作る。 現在の skeleton 実装は
-    /// `recv_rx` の drop に依存 (= caller が `DatagramChannel` を drop すれば自動)、
-    /// 明示 close は v0.10+ で dispatch table と整合させる際に拡張予定。
-    pub async fn close(&self) -> Result<(), NetworkError> {
-        // skeleton: 明示 close は dispatcher 統合 (= 1d/1e) で詳細化
-        Ok(())
-    }
 }
 
 #[cfg(test)]

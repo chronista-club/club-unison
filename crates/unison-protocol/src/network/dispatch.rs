@@ -15,10 +15,8 @@ use tracing::{debug, error, info, warn};
 use super::conn::UnisonConn;
 use super::frame::{FRAME_TYPE_PROTOCOL, read_typed_frame, write_channel_ack, write_typed_frame};
 use super::stream::UnisonStream;
-use super::{
-    NetworkError, ProtocolFrame, ProtocolMessage, context::ConnectionContext,
-    server::ProtocolServer,
-};
+use super::{NetworkError, ProtocolMessage, context::ConnectionContext, server::ProtocolServer};
+use crate::packet::UnisonPacket;
 
 /// client 側 server-initiated channel handler。
 ///
@@ -56,11 +54,10 @@ pub(crate) async fn client_accept_bi_loop(
             Ok((send_stream, mut recv_stream)) => {
                 let identity_tx = identity_tx.clone();
                 let server_channels = Arc::clone(&server_channels);
-                let connection = connection.clone();
                 tokio::spawn(async move {
                     match read_typed_frame(&mut recv_stream).await {
                         Ok((FRAME_TYPE_PROTOCOL, frame_bytes)) => {
-                            if let Ok(frame) = ProtocolFrame::from_bytes(&frame_bytes)
+                            if let Ok(frame) = UnisonPacket::from_bytes(&frame_bytes)
                                 && let Ok(message) = ProtocolMessage::from_frame(&frame)
                             {
                                 if message.method == "__identity" {
@@ -81,14 +78,9 @@ pub(crate) async fn client_accept_bi_loop(
                                     };
                                     match handler {
                                         Some(handler) => {
-                                            // client 側 quinn::Connection を transport 非依存の
-                                            // trait object へ box する（client.rs の channel open と同形）。
-                                            let conn_arc: Arc<dyn UnisonConn> =
-                                                Arc::new(connection.clone());
                                             let stream = UnisonStream::from_streams(
                                                 0,
                                                 message.method.clone(),
-                                                conn_arc,
                                                 Box::new(send_stream),
                                                 Box::new(recv_stream),
                                             );
@@ -225,18 +217,16 @@ pub(crate) async fn handle_connection(
     });
 
     loop {
-        let connection_clone = Arc::clone(&connection);
         match connection.accept_bi().await {
             Ok((send_stream, mut recv_stream)) => {
                 let server = Arc::clone(&server);
-                let connection = connection_clone;
                 let ctx = Arc::clone(&ctx);
 
                 tokio::spawn(async move {
                     // typed frame で読み取り（type tag 付き）
                     let request_result = match read_typed_frame(&mut recv_stream).await {
                         Ok((FRAME_TYPE_PROTOCOL, frame_bytes)) => {
-                            ProtocolFrame::from_bytes(&frame_bytes)
+                            UnisonPacket::from_bytes(&frame_bytes)
                                 .and_then(|frame| ProtocolMessage::from_frame(&frame))
                         }
                         Ok((frame_type, _)) => {
@@ -288,7 +278,6 @@ pub(crate) async fn handle_connection(
                                     let stream = UnisonStream::from_streams(
                                         request.id,
                                         request.method.clone(),
-                                        connection,
                                         send_stream,
                                         recv_stream,
                                     );

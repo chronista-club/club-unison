@@ -466,7 +466,7 @@ impl QuicClient {
 
         let candidates: Vec<Candidate> = v6.into_iter().map(Candidate::Direct).collect();
 
-        let winner = super::dial::race::<Connection, _, _>(candidates, &[], cfg, |cand| {
+        let winner = super::dial::race::<Connection, _, _>(candidates, cfg, |cand| {
             // `&endpoint` を future に move（endpoint 本体は race 後に adopt するため保持）。
             let ep = &endpoint;
             async move {

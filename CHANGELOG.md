@@ -52,6 +52,18 @@
 - **重複 test file を削除。** `tests/test_identity.rs` / `tests/test_identity_quic.rs`
   (`tests/test_integ_identity_flow.rs` が上位互換、 後者は QUIC を含まないのに名前が QUIC)。
 
+- **LOW の dead 群を整理 (俯瞰 LOW)。** `DatagramDispatcher` の public な `unregister` /
+  `handler_count` / `shutdown` (`#[allow(dead_code)]` 5 箇所、 runtime 経路で未使用) を削除し、
+  inner の test helper は `#[cfg(test)]` に。 no-op skeleton だった `DatagramChannel::close()`
+  を削除 (drop で閉じる)。 `dial::race` / `rank` の `my_addrs` 引数 (全 caller が `&[]`、
+  TODO の置き場でしかなかった) を削除。 `network::ProtocolFrame` alias は `packet::UnisonPacket`
+  に一本化。 `UnisonStream` が保持していた未使用の `connection` field と `from_streams` の
+  対応引数を削除 (接続の生存は server / client 側の台帳が担う)。
+  `SerializationError::JsonError` (構築箇所なし) を削除。 `unison-mcp` の未使用 `thiserror`
+  依存を削除。 orphan だった `schemas/hierophant.kdl`、 closed な `dogfood/`、 設定を typecheck
+  するだけで v0.8.0 表記のままだった `examples/builder_api.rs` を削除。 `lib.rs` の crate
+  doctest を全行コメントアウトから動く最小例に書き直し。
+
 意図して **残した** もの: `ProtocolServer::broadcast` (server → client の datagram push の唯一の
 入口、 `test_medium_datagram_broadcast_to_all_clients` で試験済み)、 `MeshCa` (fleetflow control
 plane の private CA として使用中)、 raw-frame 経路 `send_raw` / `recv_raw` (cplp-sound-system の

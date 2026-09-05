@@ -225,12 +225,9 @@ impl ProtocolClient {
         }
 
         // UnisonStreamを作成してUnisonChannelでラップ
-        // quinn のストリームを transport 非依存の trait object へ box する。
-        let conn_arc: Arc<dyn super::conn::UnisonConn> = Arc::new(connection.clone());
         let stream = UnisonStream::from_streams(
             request_id,
             format!("__channel:{}", channel_name),
-            conn_arc,
             Box::new(send_stream),
             Box::new(recv_stream),
         );
@@ -516,7 +513,7 @@ where
             frame_type
         )));
     }
-    let frame = super::ProtocolFrame::from_bytes(&frame_bytes)
+    let frame = crate::packet::UnisonPacket::from_bytes(&frame_bytes)
         .map_err(|e| NetworkError::Protocol(format!("Failed to decode open_ack frame: {}", e)))?;
     let msg = ProtocolMessage::from_frame(&frame)
         .map_err(|e| NetworkError::Protocol(format!("Failed to parse open_ack: {}", e)))?;

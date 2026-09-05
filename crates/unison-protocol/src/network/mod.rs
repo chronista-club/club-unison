@@ -193,25 +193,19 @@ pub struct ProtocolMessage {
     pub payload: Vec<u8>, // Codec がエンコードしたバイト列
 }
 
-/// フレームでラップされたプロトコルメッセージの型エイリアス
-///
-/// v0.9.0 buffa pivot 後は `UnisonPacket` 自体が非ジェネリック (= 生バイト保持)
-/// になったため、 ProtocolFrame は単なるエイリアス。
-pub type ProtocolFrame = UnisonPacket;
-
 impl ProtocolMessage {
     /// ProtocolMessage をフレームに変換
     ///
     /// 内部で buffa の `proto::ProtocolMessage` にエンコードしたのち
     /// `UnisonPacket` (= packet header + payload bytes) で包む。
-    pub fn into_frame(self) -> Result<ProtocolFrame, SerializationError> {
+    pub fn into_frame(self) -> Result<UnisonPacket, SerializationError> {
         let proto_msg = self.into_proto();
         let payload_bytes = proto_msg.encode_to_vec();
         UnisonPacket::new(payload_bytes)
     }
 
     /// フレームから ProtocolMessage を復元
-    pub fn from_frame(frame: &ProtocolFrame) -> Result<Self, SerializationError> {
+    pub fn from_frame(frame: &UnisonPacket) -> Result<Self, SerializationError> {
         let payload_bytes = frame.payload()?;
         let proto_msg = proto::ProtocolMessage::decode_from_slice(&payload_bytes)
             .map_err(|e| SerializationError::DeserializationFailed(e.to_string()))?;

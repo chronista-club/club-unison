@@ -66,7 +66,7 @@
 
 use std::collections::VecDeque;
 use std::future::Future;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -170,17 +170,11 @@ pub enum RaceError {
 
 /// hub の opaque 順序付き候補（D2）に *消費側で* 意味を与える純関数（副作用ゼロ）。
 ///
-/// 規則:
-/// - 同一 prefix（/64,/48）共有の direct GUA = 同一サイト → 先頭（低 RTT 期待）〔TODO〕
-/// - IPv4 導入時は family interleave（v6,v4,…）で片 family 黒穴の頭独占を防ぐ〔TODO〕
-/// - relay は最劣後（末尾）
-///
-/// 現状は IPv6 GUA のみ運用（ADR-020 §D3、IPv4 deferred）ゆえ direct は順序保持で足りる。
-fn rank(candidates: Vec<Candidate>, my_addrs: &[IpAddr]) -> Vec<Candidate> {
+/// 規則: direct は入力順を保持、 relay は最劣後（末尾）。 現状は IPv6 GUA のみ運用
+/// （ADR-020 §D3、IPv4 deferred）ゆえこれで足りる。 同一サイト優先や family interleave が
+/// 要る段階 (§S6) で、 自アドレス等の入力と一緒に設計する。
+fn rank(candidates: Vec<Candidate>) -> Vec<Candidate> {
     let (direct, relay): (Vec<_>, Vec<_>) = candidates.into_iter().partition(Candidate::is_direct);
-    // TODO(§S6): direct.sort_by_key(|c| prefix_distance(c, my_addrs))  // 同一サイト優先
-    // TODO(§S6): family interleave（IPv4 導入後）
-    let _ = my_addrs;
     direct.into_iter().chain(relay).collect()
 }
 
@@ -191,7 +185,6 @@ fn rank(candidates: Vec<Candidate>, my_addrs: &[IpAddr]) -> Vec<Candidate> {
 /// タイマだけを見て、I/O は一切知らない。
 pub async fn race<T, F, Fut>(
     candidates: Vec<Candidate>,
-    my_addrs: &[IpAddr],
     cfg: RaceCfg,
     mut attempt: F,
 ) -> Result<Winner<T>, RaceError>
@@ -199,7 +192,7 @@ where
     F: FnMut(Candidate) -> Fut,
     Fut: Future<Output = AttemptOutcome<T>>,
 {
-    let ranked = rank(candidates, my_addrs);
+    let ranked = rank(candidates);
     if ranked.is_empty() {
         return Err(RaceError::NoCandidates);
     }
@@ -365,13 +358,13 @@ mod tests {
 
     #[test]
     fn rank_puts_relay_last_and_keeps_direct_order() {
-        let out = rank(vec![r("h"), d(1), d(2)], &[]);
+        let out = rank(vec![r("h"), d(1), d(2)]);
         assert_eq!(out, vec![d(1), d(2), r("h")]);
     }
 
     #[tokio::test(start_paused = true)]
     async fn empty_is_no_candidates() {
-        let res = race(vec![], &[], RaceCfg::default(), attempter(HashMap::new())).await;
+        let res = race(vec![], RaceCfg::default(), attempter(HashMap::new())).await;
         assert_eq!(res.unwrap_err(), RaceError::NoCandidates);
     }
 
@@ -381,7 +374,7 @@ mod tests {
     async fn first_direct_wins_without_racing() {
         let script = HashMap::from([(d(1), Script::Ok(ms(50)))]);
         let t0 = Instant::now();
-        let w = race(vec![d(1), d(2)], &[], RaceCfg::default(), attempter(script))
+        let w = race(vec![d(1), d(2)], RaceCfg::default(), attempter(script))
             .await
             .unwrap();
         assert_eq!(
@@ -399,7 +392,7 @@ mod tests {
         // d(1) は黒穴（deadline 手前まで無応答）、d(2) が生きている。
         let script = HashMap::from([(d(1), Script::Fail(ms(9_000))), (d(2), Script::Ok(ms(80)))]);
         let t0 = Instant::now();
-        let w = race(vec![d(1), d(2)], &[], RaceCfg::default(), attempter(script))
+        let w = race(vec![d(1), d(2)], RaceCfg::default(), attempter(script))
             .await
             .unwrap();
         assert_eq!(
@@ -415,7 +408,7 @@ mod tests {
         // d(1) が即失敗 → stagger を待たず d(2) を即 arm。
         let script = HashMap::from([(d(1), Script::Fail(ms(10))), (d(2), Script::Ok(ms(40)))]);
         let t0 = Instant::now();
-        let w = race(vec![d(1), d(2)], &[], RaceCfg::default(), attempter(script))
+        let w = race(vec![d(1), d(2)], RaceCfg::default(), attempter(script))
             .await
             .unwrap();
         assert_eq!(
@@ -442,7 +435,6 @@ mod tests {
         let t0 = Instant::now();
         let w = race(
             vec![d(1), d(2), r("hub")],
-            &[],
             RaceCfg::default(),
             attempter(script),
         )
@@ -468,7 +460,6 @@ mod tests {
         let t0 = Instant::now();
         let w = race(
             vec![d(1), d(2), r("hub")],
-            &[],
             RaceCfg::default(),
             attempter(script),
         )
@@ -488,14 +479,9 @@ mod tests {
         // relay は 20ms で握手済（hold）、direct は 100ms で完了 → direct 優先。
         let script = HashMap::from([(r("hub"), Script::Ok(ms(20))), (d(1), Script::Ok(ms(100)))]);
         let t0 = Instant::now();
-        let w = race(
-            vec![d(1), r("hub")],
-            &[],
-            RaceCfg::default(),
-            attempter(script),
-        )
-        .await
-        .unwrap();
+        let w = race(vec![d(1), r("hub")], RaceCfg::default(), attempter(script))
+            .await
+            .unwrap();
         assert_eq!(
             w.via,
             Via::Direct(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 1))
@@ -508,7 +494,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn all_direct_fail_no_relay_is_all_failed() {
         let script = HashMap::from([(d(1), Script::Fail(ms(10)))]);
-        let res = race(vec![d(1)], &[], RaceCfg::default(), attempter(script)).await;
+        let res = race(vec![d(1)], RaceCfg::default(), attempter(script)).await;
         assert_eq!(res.unwrap_err(), RaceError::AllFailed);
     }
 
@@ -520,7 +506,7 @@ mod tests {
             ..Default::default()
         };
         let t0 = Instant::now();
-        let res = race(vec![d(1)], &[], cfg, attempter(script)).await;
+        let res = race(vec![d(1)], cfg, attempter(script)).await;
         assert_eq!(res.unwrap_err(), RaceError::Deadline);
         assert!(near(t0.elapsed(), 1_000), "elapsed = {:?}", t0.elapsed());
     }
