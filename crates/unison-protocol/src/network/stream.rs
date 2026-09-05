@@ -5,10 +5,9 @@
 //! 扱える。 これが `register_channel` ハンドラーに渡る面 (= handler-facing API)
 //! なので、 型名・メソッドシグネチャは安定させている。
 
-use anyhow::{Context, Result};
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, Ordering},
 };
 use tokio::sync::Mutex;
 use tracing::info;
@@ -34,31 +33,6 @@ pub struct UnisonStream {
 }
 
 impl UnisonStream {
-    pub async fn new(
-        method: String,
-        connection: Arc<dyn UnisonConn>,
-        stream_id: Option<u64>,
-    ) -> Result<Self> {
-        static STREAM_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
-
-        let id = stream_id.unwrap_or_else(|| STREAM_ID_COUNTER.fetch_add(1, Ordering::SeqCst));
-
-        // Open bidirectional stream
-        let (send_stream, recv_stream) = connection
-            .open_bi()
-            .await
-            .context("Failed to open bidirectional stream")?;
-
-        Ok(Self {
-            stream_id: id,
-            method,
-            connection,
-            send_stream: Arc::new(Mutex::new(Some(send_stream))),
-            recv_stream: Arc::new(Mutex::new(Some(recv_stream))),
-            is_active: Arc::new(AtomicBool::new(true)),
-        })
-    }
-
     /// 既存のストリームから作成（サーバー側）
     pub fn from_streams(
         stream_id: u64,

@@ -37,7 +37,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use super::context::{ConnectionContext, Principal};
-use super::quic::UnisonStream;
+use super::stream::UnisonStream;
 use super::{MessageType, NetworkError, UnisonChannel};
 
 /// `unison.auth` channel name (= `schemas/auth.kdl` 側と一致)

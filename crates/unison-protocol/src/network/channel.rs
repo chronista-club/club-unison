@@ -17,7 +17,7 @@ use tokio::task::JoinHandle;
 
 use crate::codec::{Codec, Decodable, Encodable, JsonCodec};
 
-use super::quic::{TypedFrame, UnisonStream};
+use super::stream::{TypedFrame, UnisonStream};
 use super::{MessageType, NetworkError, ProtocolMessage};
 
 /// デフォルトの request タイムアウト（30秒）

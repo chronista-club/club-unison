@@ -55,9 +55,10 @@ pub use discovery::{
 pub use dynamic::{DynamicChannel, DynamicError, DynamicProtocol};
 pub use mesh::{InternalMeshKeypair, MeshCa};
 pub use protocol_cache::ProtocolCache;
-pub use quic::{QuicClient, QuicServer, TypedFrame, UnisonStream};
+pub use quic::{QuicClient, QuicServer};
 pub use schema_registry::{RegistryError, SchemaRegistry, ValidationError};
 pub use server::{ConnectionEvent, ConnectionEventReceiver, ProtocolServer, ServerHandle};
+pub use stream::{TypedFrame, UnisonStream};
 pub use trust::TrustAnchors;
 pub use webtransport::WebTransportServer;
 
@@ -312,14 +313,6 @@ impl MessageType {
             proto::MessageType::ERROR => MessageType::Error,
         }
     }
-}
-
-/// プロトコルエラー
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProtocolError {
-    pub code: i32,
-    pub message: String,
-    pub details: Option<serde_json::Value>,
 }
 
 #[cfg(test)]

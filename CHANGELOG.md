@@ -30,6 +30,32 @@
   encode/decode method も無い「将来の hook」。 他 format が要る時点で設計する。
 - **`parser::TypeRegistry` と `FieldType::{to_rust_type, to_typescript_type}` を削除。**
   codegen は `club-kdl-codegen` に分離済みで、 本 crate 内に caller が無かった。
+- **`codec::proto::creo_sync` と `proto/creo_sync.proto` を削除。** creo-memories の
+  dogfood schema で、 消費者が test だけなのに published crate の public API に乗っていた。
+  `ProtoCodec` のテストは core wire の `proto::ProtocolMessage` / `proto::PacketHeader` を
+  題材にするよう書き直し、 buffa 自体を試験していた `tests/test_proto_buffa.rs` は削除。
+- **network 層の呼び出し元ゼロ public API を削除。** `QuicServer::generate_self_signed_cert` /
+  `load_cert_from_files` / `DEFAULT_CERT_PATH` / `DEFAULT_KEY_PATH` (`cert.rs` の `CertSource`
+  と三重複、 参照先 `assets/certs/` は存在しない)、 `ProtocolServer::is_running` /
+  `listen_webtransport` / `spawn_listen_webtransport` (WebTransport ingress は
+  `WebTransportServer` を直接使う)、 `UnisonStream::new`、 `network::ProtocolError`、
+  `frame::read_frame` / `write_frame` (8MB 超の書き込み拒否は生きている
+  `write_typed_frame` へ移植)、 `identity::ChannelUpdate` (client 3 言語とも未実装、 src も
+  送信していない)、 `ProtocolCache::from_file`。 `dial::rank` は private に。
+- **`network::quic` の「後方互換」再公開 shim を削除。** `network::quic::{UnisonStream,
+  TypedFrame, read_typed_frame, write_typed_frame, CHANNEL_ACK_METHOD, FRAME_TYPE_*}` は
+  `network::{UnisonStream, TypedFrame}` / `network::frame::*` から import する
+  (`QuicClient` / `QuicServer` は従来どおり `network::quic::` にある)。
+- **`unison::prelude` を削除。** 利用者は workspace 内の test 2 file だけで、 `lib.rs` の
+  re-export と 7 symbol 重複、 `NetworkError` が 3 つの名前で到達できていた。 明示 import へ。
+- **`examples/test_kdl_parse.rs` を削除。** `unison` を import しない KDL v2 の scratch script。
+- **重複 test file を削除。** `tests/test_identity.rs` / `tests/test_identity_quic.rs`
+  (`tests/test_integ_identity_flow.rs` が上位互換、 後者は QUIC を含まないのに名前が QUIC)。
+
+意図して **残した** もの: `ProtocolServer::broadcast` (server → client の datagram push の唯一の
+入口、 `test_medium_datagram_broadcast_to_all_clients` で試験済み)、 `MeshCa` (fleetflow control
+plane の private CA として使用中)、 raw-frame 経路 `send_raw` / `recv_raw` (cplp-sound-system の
+audio 配信で使用中)。
 
 ### Documentation
 

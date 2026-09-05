@@ -61,10 +61,6 @@ pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/protocol.mod.rs"));
 }
 
-// よく使用される型と関数のprelude
-pub mod prelude;
-
-// preludeの型を内部で使用
 use parser::{ParseError as UnisonParseError, ParsedSchema, SchemaParser};
 
 // よく使用されるトレイトとクライアント/サーバーの再エクスポート

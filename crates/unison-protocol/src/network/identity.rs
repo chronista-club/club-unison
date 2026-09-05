@@ -44,15 +44,6 @@ pub enum ChannelStatus {
     Unavailable,
 }
 
-/// チャネルのリアルタイム更新
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", content = "channel")]
-pub enum ChannelUpdate {
-    Added(ChannelInfo),
-    Removed(String),
-    StatusChanged { name: String, status: ChannelStatus },
-}
-
 impl ServerIdentity {
     /// 新しいIdentityを作成
     pub fn new(name: &str, version: &str, namespace: &str) -> Self {

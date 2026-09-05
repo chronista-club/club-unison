@@ -1,8 +1,7 @@
 //! Typed-frame の wire I/O。
 //!
-//! Length-prefixed フレーム ([`read_frame`] / [`write_frame`]) と type tag 付き
-//! typed フレーム ([`read_typed_frame`] / [`write_typed_frame`]) の読み書きを
-//! 提供する。 `quinn::RecvStream` / `quinn::SendStream` のみならず WebTransport
+//! type tag 付き typed フレーム ([`read_typed_frame`] / [`write_typed_frame`]) の
+//! 読み書きを提供する。 `quinn::RecvStream` / `quinn::SendStream` のみならず WebTransport
 //! のストリームでも使えるよう、 `AsyncRead` / `AsyncWrite` でジェネリック化されて
 //! いる (= transport 非依存)。
 
@@ -13,48 +12,6 @@ use super::ProtocolMessage;
 
 /// Maximum message size for QUIC streams (8MB)
 const MAX_MESSAGE_SIZE: usize = 8 * 1024 * 1024;
-
-/// Length-prefixed フレームの読み取り（4バイトBE長 + データ）
-/// ストリームを消費せずに1フレームだけ読む
-///
-/// `quinn::RecvStream` のみならず WebTransport のストリームでも使えるよう、
-/// `AsyncRead` でジェネリック化されている (= transport 非依存)。
-pub async fn read_frame<R: AsyncRead + Unpin + ?Sized>(recv: &mut R) -> Result<bytes::Bytes> {
-    let mut len_buf = [0u8; 4];
-    recv.read_exact(&mut len_buf)
-        .await
-        .context("Failed to read frame length")?;
-    let len = u32::from_be_bytes(len_buf) as usize;
-    if len > MAX_MESSAGE_SIZE {
-        return Err(anyhow::anyhow!("Frame too large: {} bytes", len));
-    }
-    let mut data = vec![0u8; len];
-    recv.read_exact(&mut data)
-        .await
-        .context("Failed to read frame data")?;
-    Ok(bytes::Bytes::from(data))
-}
-
-/// Length-prefixed フレームの書き込み
-pub async fn write_frame<W: AsyncWrite + Unpin + ?Sized>(send: &mut W, data: &[u8]) -> Result<()> {
-    // read 側と対称な上限。 これが無いと data.len() >= 4GiB で `as u32` が silently
-    // truncate し、 wire 上の length prefix が実データ長と食い違って frame が壊れる。
-    if data.len() > MAX_MESSAGE_SIZE {
-        return Err(anyhow::anyhow!(
-            "Frame too large to write: {} bytes (max {})",
-            data.len(),
-            MAX_MESSAGE_SIZE
-        ));
-    }
-    let len = (data.len() as u32).to_be_bytes();
-    send.write_all(&len)
-        .await
-        .context("Failed to write frame length")?;
-    send.write_all(data)
-        .await
-        .context("Failed to write frame data")?;
-    Ok(())
-}
 
 /// フレームタイプタグ
 pub const FRAME_TYPE_PROTOCOL: u8 = 0x00;
@@ -115,6 +72,15 @@ pub async fn write_typed_frame<W: AsyncWrite + Unpin + ?Sized>(
     frame_type: u8,
     data: &[u8],
 ) -> Result<()> {
+    // read 側と対称な上限。 これが無いと data.len() >= 4GiB で `as u32` が silently
+    // truncate し、 wire 上の length prefix が実データ長と食い違って frame が壊れる。
+    if 1 + data.len() > MAX_MESSAGE_SIZE {
+        return Err(anyhow::anyhow!(
+            "Frame too large to write: {} bytes (max {})",
+            data.len(),
+            MAX_MESSAGE_SIZE
+        ));
+    }
     let total_len = (1 + data.len()) as u32;
     send.write_all(&total_len.to_be_bytes())
         .await
@@ -174,22 +140,25 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn write_frame_rejects_oversized() {
+    async fn write_typed_frame_rejects_oversized() {
         // read 側の上限と対称: MAX_MESSAGE_SIZE 超は書き込み拒否し、 何も書かない
         let mut sink: Vec<u8> = Vec::new();
-        let too_big = vec![0u8; MAX_MESSAGE_SIZE + 1];
-        let res = write_frame(&mut sink, &too_big).await;
+        let too_big = vec![0u8; MAX_MESSAGE_SIZE];
+        let res = write_typed_frame(&mut sink, FRAME_TYPE_RAW, &too_big).await;
         assert!(res.is_err(), "8MB 超の frame は書き込み拒否されるべき");
         assert!(sink.is_empty(), "拒否時は length prefix すら書かないべき");
     }
 
     #[tokio::test]
-    async fn write_then_read_frame_round_trip() {
+    async fn write_then_read_typed_frame_round_trip() {
         let payload = b"hello frame";
         let mut buf: Vec<u8> = Vec::new();
-        write_frame(&mut buf, payload).await.unwrap();
+        write_typed_frame(&mut buf, FRAME_TYPE_RAW, payload)
+            .await
+            .unwrap();
         let mut cursor = std::io::Cursor::new(buf);
-        let got = read_frame(&mut cursor).await.unwrap();
+        let (tag, got) = read_typed_frame(&mut cursor).await.unwrap();
+        assert_eq!(tag, FRAME_TYPE_RAW);
         assert_eq!(&got[..], payload);
     }
 }
