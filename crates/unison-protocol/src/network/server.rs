@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
+use uuid::Uuid;
 
 use crate::codec::{Codec, Encodable, JsonCodec};
 
@@ -12,15 +13,25 @@ use super::datagram_channel::{DatagramChannel, encode_varint};
 use super::identity::{ChannelDirection, ChannelInfo, ChannelStatus, ServerIdentity};
 
 /// 接続イベント通知
+///
+/// `connection_id` は接続ごとに一意 (= [`ConnectionContext::connection_id`])。
+/// `remote_addr` は NAT 越しの再 dial や同一 host からの複数 ingress で容易に
+/// 衝突するため、 接続の同定には `connection_id` を使うこと。
+///
+/// [`ConnectionContext::connection_id`]: super::context::ConnectionContext::connection_id
 #[derive(Debug, Clone)]
 pub enum ConnectionEvent {
     /// 新しい接続が確立された
     Connected {
+        connection_id: Uuid,
         remote_addr: SocketAddr,
         context: Arc<super::context::ConnectionContext>,
     },
     /// 接続が切断された
-    Disconnected { remote_addr: SocketAddr },
+    Disconnected {
+        connection_id: Uuid,
+        remote_addr: SocketAddr,
+    },
 }
 
 /// [`ProtocolServer::subscribe_connection_events()`] が返す接続イベントレシーバー
@@ -160,11 +171,15 @@ pub struct ProtocolServer {
     channel_handlers: Arc<RwLock<HashMap<String, ChannelHandler>>>,
     /// Datagram channel handlers (v0.10.0 で追加、 name → channel_id + handler)
     datagram_channel_handlers: Arc<RwLock<HashMap<String, DatagramHandlerEntry>>>,
-    /// Active connections (= broadcast 配信先、 remote_addr → Connection)
+    /// Active connections (= broadcast 配信先、 connection_id → Connection)
+    ///
+    /// key は接続ごとに一意な `connection_id`。 `remote_addr` を key にすると NAT
+    /// 越しの再 dial や同一 host からの raw QUIC + WebTransport 併用で衝突し、
+    /// 2 本目の登録が 1 本目を silent に上書きしてしまう。
     ///
     /// transport 非依存。 raw QUIC / WebTransport どちらの接続も
     /// [`UnisonConn`](super::conn::UnisonConn) trait object として保持する。
-    active_connections: Arc<RwLock<HashMap<SocketAddr, Arc<dyn super::conn::UnisonConn>>>>,
+    active_connections: Arc<RwLock<HashMap<Uuid, Arc<dyn super::conn::UnisonConn>>>>,
     /// 接続イベント broadcast チャネル（複数サブスクライバ対応）
     connection_event_tx: tokio::sync::broadcast::Sender<ConnectionEvent>,
 }
@@ -406,21 +421,21 @@ impl ProtocolServer {
             .collect()
     }
 
-    /// Active connection を登録 (= quic.rs::handle_connection 用、 内部 API)
+    /// Active connection を登録 (= dispatch::handle_connection 用、 内部 API)
     pub(crate) async fn add_active_connection(
         &self,
-        remote_addr: SocketAddr,
+        connection_id: Uuid,
         connection: Arc<dyn super::conn::UnisonConn>,
     ) {
         self.active_connections
             .write()
             .await
-            .insert(remote_addr, connection);
+            .insert(connection_id, connection);
     }
 
-    /// Active connection を解除 (= quic.rs::handle_connection 用、 内部 API)
-    pub(crate) async fn remove_active_connection(&self, remote_addr: SocketAddr) {
-        self.active_connections.write().await.remove(&remote_addr);
+    /// Active connection を解除 (= dispatch::handle_connection 用、 内部 API)
+    pub(crate) async fn remove_active_connection(&self, connection_id: Uuid) {
+        self.active_connections.write().await.remove(&connection_id);
     }
 
     /// Active connection 数 (= 主に test / debug 用)
@@ -603,6 +618,44 @@ mod tests {
         assert_eq!(server.active_connection_count().await, 0);
     }
 
+    /// 同一 remote_addr の 2 接続が互いを追い出さないこと。
+    ///
+    /// NAT 越しの再 dial や、 同一 host からの raw QUIC + WebTransport 併用で
+    /// `SocketAddr` は容易に衝突する。 台帳の key は接続ごとに一意な
+    /// `connection_id` でなければ、 2 本目の登録が 1 本目を silent に上書きし、
+    /// 1 本目の切断が 2 本目を broadcast 配信先から消してしまう。
+    #[tokio::test]
+    async fn active_connections_are_keyed_per_connection_not_per_addr() {
+        use super::super::test_support::MockConn;
+        use uuid::Uuid;
+
+        let server = ProtocolServer::new();
+        let addr: SocketAddr = "127.0.0.1:4433".parse().unwrap();
+
+        let id_a = Uuid::new_v4();
+        let id_b = Uuid::new_v4();
+        server
+            .add_active_connection(id_a, Arc::new(MockConn::new(addr)))
+            .await;
+        server
+            .add_active_connection(id_b, Arc::new(MockConn::new(addr)))
+            .await;
+
+        assert_eq!(
+            server.active_connection_count().await,
+            2,
+            "同一 addr でも別接続なら 2 件保持されるべき"
+        );
+
+        // 1 本目の切断は 2 本目を消さない
+        server.remove_active_connection(id_a).await;
+        assert_eq!(
+            server.active_connection_count().await,
+            1,
+            "片方の切断でもう片方が台帳から消えてはならない"
+        );
+    }
+
     #[tokio::test]
     async fn test_server_lifecycle() {
         let server = ProtocolServer::new();
@@ -624,11 +677,14 @@ mod tests {
         let mut rx = server.subscribe_connection_events();
 
         let addr: SocketAddr = "127.0.0.1:9999".parse().unwrap();
-        server.emit_connection_event(ConnectionEvent::Disconnected { remote_addr: addr });
+        server.emit_connection_event(ConnectionEvent::Disconnected {
+            connection_id: Uuid::new_v4(),
+            remote_addr: addr,
+        });
 
         let event = rx.recv_skip_lagged().await.unwrap();
         match event {
-            ConnectionEvent::Disconnected { remote_addr } => {
+            ConnectionEvent::Disconnected { remote_addr, .. } => {
                 assert_eq!(remote_addr, addr);
             }
             _ => panic!("Expected Disconnected event"),
@@ -648,13 +704,16 @@ mod tests {
 
         // capacity(2) を超える 4 件を送信 → subscriber は Lagged になる
         for _ in 0..4 {
-            let _ = tx.send(ConnectionEvent::Disconnected { remote_addr: addr });
+            let _ = tx.send(ConnectionEvent::Disconnected {
+                connection_id: Uuid::new_v4(),
+                remote_addr: addr,
+            });
         }
 
         // recv_skip_lagged は Lagged をスキップして最新のイベントを返す
         let event = rx.recv_skip_lagged().await.unwrap();
         match event {
-            ConnectionEvent::Disconnected { remote_addr } => {
+            ConnectionEvent::Disconnected { remote_addr, .. } => {
                 assert_eq!(remote_addr, addr);
             }
             _ => panic!("Expected Disconnected event"),
@@ -694,7 +753,10 @@ mod tests {
 
         // capacity を超える送信
         for _ in 0..4 {
-            let _ = tx.send(ConnectionEvent::Disconnected { remote_addr: addr });
+            let _ = tx.send(ConnectionEvent::Disconnected {
+                connection_id: Uuid::new_v4(),
+                remote_addr: addr,
+            });
         }
 
         // recv() は Lagged をそのまま返す
@@ -715,12 +777,15 @@ mod tests {
         let mut rx = server.subscribe_connection_events();
 
         let addr: SocketAddr = "127.0.0.1:7001".parse().unwrap();
-        server.emit_connection_event(ConnectionEvent::Disconnected { remote_addr: addr });
+        server.emit_connection_event(ConnectionEvent::Disconnected {
+            connection_id: Uuid::new_v4(),
+            remote_addr: addr,
+        });
 
         // inner() で内部の broadcast::Receiver を取得し、直接 recv() する
         let event = rx.inner().recv().await.unwrap();
         match event {
-            ConnectionEvent::Disconnected { remote_addr } => {
+            ConnectionEvent::Disconnected { remote_addr, .. } => {
                 assert_eq!(remote_addr, addr);
             }
             _ => panic!("Expected Disconnected event"),
@@ -740,13 +805,16 @@ mod tests {
 
         // capacity(2) を超える 4 件を送信 → subscriber は Lagged になる
         for _ in 0..4 {
-            let _ = tx.send(ConnectionEvent::Disconnected { remote_addr: addr });
+            let _ = tx.send(ConnectionEvent::Disconnected {
+                connection_id: Uuid::new_v4(),
+                remote_addr: addr,
+            });
         }
 
         // recv_skip_lagged で Lagged をスキップして最新イベントを受信
         let event = rx.recv_skip_lagged().await.unwrap();
         match &event {
-            ConnectionEvent::Disconnected { remote_addr } => {
+            ConnectionEvent::Disconnected { remote_addr, .. } => {
                 assert_eq!(*remote_addr, addr);
             }
             _ => panic!("Expected Disconnected event after lagged skip"),
@@ -759,6 +827,7 @@ mod tests {
         // Lagged 回復後に新しいイベントを送信
         let new_addr: SocketAddr = "127.0.0.1:7003".parse().unwrap();
         let _ = tx.send(ConnectionEvent::Connected {
+            connection_id: Uuid::new_v4(),
             remote_addr: new_addr,
             context: Arc::new(super::super::context::ConnectionContext::new()),
         });

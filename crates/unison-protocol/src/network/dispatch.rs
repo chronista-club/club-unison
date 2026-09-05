@@ -144,6 +144,7 @@ pub(crate) async fn handle_connection(
     ctx: Arc<ConnectionContext>,
 ) -> Result<()> {
     let remote_addr = connection.remote_address();
+    let connection_id = ctx.connection_id;
 
     // server-initiated stream (= ServerToClient) を handler が開けるよう、ctx に conn を渡す。
     // server 側のみ・1 行（ctx/conn はここで同居しているので call-site ripple ゼロ）。
@@ -152,13 +153,17 @@ pub(crate) async fn handle_connection(
     // v0.10.0: active connection に登録 (= server.broadcast の配信先)
     let connection_arc = Arc::clone(&connection);
     server
-        .add_active_connection(remote_addr, Arc::clone(&connection_arc))
+        .add_active_connection(connection_id, Arc::clone(&connection_arc))
         .await;
 
     // v0.10.0: datagram dispatcher を 1 connection に 1 個 spawn
     // 登録された datagram channel handler 全てに対し、 channel_id を register して
     // DatagramChannel を構築、 handler を別 task で起動
     let datagram_handlers = server.snapshot_datagram_handlers().await;
+    // handler task は接続に紐づくので JoinHandle を掴んでおく。 dispatcher の drop で
+    // 止まるのは recv task だけで、 `recv_event` を待たない handler (= 送信専用 /
+    // timer loop) は abort しない限り接続終了後も回り続ける。
+    let mut datagram_tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
     let _datagram_dispatcher = if datagram_handlers.is_empty() {
         // datagram handler が無ければ dispatcher を spawn しない (= overhead 回避)
         None
@@ -173,9 +178,9 @@ pub(crate) async fn handle_connection(
             >::new(
                 Arc::clone(&connection_arc), channel_id, name.clone(), rx
             );
-            tokio::spawn(async move {
+            datagram_tasks.push(tokio::spawn(async move {
                 handler(datagram_channel).await;
-            });
+            }));
         }
         Some(dispatcher)
     };
@@ -212,6 +217,7 @@ pub(crate) async fn handle_connection(
 
     // 接続イベントを送信
     server.emit_connection_event(super::server::ConnectionEvent::Connected {
+        connection_id,
         remote_addr,
         context: Arc::clone(&ctx),
     });
@@ -340,6 +346,7 @@ pub(crate) async fn handle_connection(
                 // transport を問わず接続ループを抜ける。
                 info!("Connection closed ({}), client disconnected", e);
                 server.emit_connection_event(super::server::ConnectionEvent::Disconnected {
+                    connection_id,
                     remote_addr,
                 });
                 break;
@@ -347,10 +354,68 @@ pub(crate) async fn handle_connection(
         }
     }
 
-    // v0.10.0: connection 終了時に active_connections から remove
-    // (= broadcast 配信先から自動除外、 datagram dispatcher は _datagram_dispatcher 変数の
-    // scope-exit drop で同時に abort される)
-    server.remove_active_connection(remote_addr).await;
+    // 接続終了時の後始末。 台帳から外して broadcast 配信先から除外し、 この接続に
+    // 紐づく datagram handler task を明示的に abort する (dispatcher 自身の recv task は
+    // `_datagram_dispatcher` の scope-exit drop で止まる)。
+    server.remove_active_connection(connection_id).await;
+    for task in datagram_tasks {
+        task.abort();
+    }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    /// 接続が終わったら datagram channel handler の task も止まること。
+    ///
+    /// handler は `recv_event` 以外 (= timer loop や送信専用) で回っていることが
+    /// あり、 その場合 dispatcher の recv task を abort しても handler は生き残る。
+    /// `handle_connection` は spawn した handler task を掴んでおき、 接続終了時に
+    /// abort しなければならない。
+    #[tokio::test]
+    async fn datagram_handler_tasks_stop_when_connection_ends() {
+        use super::super::test_support::MockConn;
+
+        let ticks = Arc::new(AtomicUsize::new(0));
+        let ticks_for_handler = Arc::clone(&ticks);
+
+        let server = Arc::new(ProtocolServer::new());
+        server
+            .register_channel_datagram("ticker", 1, move |_chan| {
+                let ticks = Arc::clone(&ticks_for_handler);
+                async move {
+                    // recv を待たずに回り続ける handler (= 送信専用 / timer loop)
+                    loop {
+                        ticks.fetch_add(1, Ordering::SeqCst);
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                }
+            })
+            .await;
+
+        let conn: Arc<dyn UnisonConn> = Arc::new(MockConn::new("127.0.0.1:4433".parse().unwrap()));
+        let ctx = Arc::new(ConnectionContext::new());
+
+        // MockConn の accept_bi は即 Err を返すので、 handle_connection は
+        // identity 送信を試みたあと 1 周で抜ける。
+        handle_connection(conn, Arc::clone(&server), ctx)
+            .await
+            .expect("handle_connection completes");
+
+        // handler が確実に 1 回以上回ってから、 停止したかを見る
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let after_close = ticks.load(Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let later = ticks.load(Ordering::SeqCst);
+
+        assert_eq!(
+            later, after_close,
+            "接続終了後も datagram handler task が回り続けている (task leak)"
+        );
+    }
 }

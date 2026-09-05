@@ -172,10 +172,16 @@ impl ProtocolClient {
     /// `open_ack` を待つことで、 fire-and-forget だった旧挙動の「accept されたか
     /// 分からない」問題を解消する。
     pub async fn open_channel(&self, channel_name: &str) -> Result<UnisonChannel, NetworkError> {
-        let connection_guard = self.transport.connection().read().await;
-        let connection = connection_guard
-            .as_ref()
-            .ok_or(NetworkError::NotConnected)?;
+        // Connection を clone して guard は即座に手放す。 以降 open_bi / ack 待ちで
+        // await するため、 guard を握ったままだと server の応答を待つ間ずっと
+        // `disconnect()` の write lock が取れなくなる (= open_datagram_channel_with と同形)。
+        let connection = {
+            let connection_guard = self.transport.connection().read().await;
+            connection_guard
+                .as_ref()
+                .ok_or(NetworkError::NotConnected)?
+                .clone()
+        };
 
         // 新しい双方向ストリームを開く
         let (mut send_stream, mut recv_stream) = connection
