@@ -4,7 +4,7 @@ MCP (Model Context Protocol) bridge for the Unison Protocol — discovers a serv
 
 ## Status
 
-**rmcp 2.x 世代** (= 2026-07-14、 MCP spec 2025-06-18+ の機能を還元)
+**rmcp 3.x 世代** (= 1.9.0 で rmcp 3 へ、 MCP spec 2025-06-18+ の機能を還元)
 
 | feature | status |
 |---|---|

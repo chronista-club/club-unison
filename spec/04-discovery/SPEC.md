@@ -390,7 +390,6 @@ let result = proto.call("memory.search", json!({ "query": "..." })).await?;
 
 - [spec/01: Core Concept](../01-core-concept/SPEC.md) — ServerIdentity (§5)、 QUIC 通信
 - [spec/02: Unified Channel](../02-unified-channel/SPEC.md) — KDL 構文、 MessageType、 channel mechanics
-- [spec/03: Stream Channels](../03-stream-channels/SPEC.md) — UnisonChannel API、 routing
 
 ### Schema
 

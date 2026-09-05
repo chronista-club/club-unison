@@ -415,4 +415,4 @@ sequenceDiagram
 
 - [アーキテクチャ](./architecture.md) -- システム全体のレイヤー構成
 - [パケット設計](./packet.md) -- UnisonPacket / ProtocolFrame のバイナリフォーマット
-- [プロトコル仕様](../spec/PROTOCOL_SPEC.md) -- KDLスキーマとメッセージ種別
+- [spec/02: Unified Channel](../spec/02-unified-channel/SPEC.md) -- KDLスキーマとメッセージ種別

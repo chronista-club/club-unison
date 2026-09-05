@@ -61,6 +61,29 @@ audio 配信で使用中)。
 
 - `design/packet.md` を rkyv 時代 (56 byte 固定 header / `Payloadable` / checksum) の
   記述から現行 buffa wire に書き直し。 `design/wire-format.md` から `WireFormat` 節を除去。
+- **docs wave (俯瞰 HIGH #9〜#13)**: 化石になっていた仕様と設計文書を実態に合わせた。
+  - `spec/PROTOCOL_SPEC.md` を削除 (索引に無い 2025-01 の orphan。 `service` / `method` 構文、
+    `UnisonMessage`、 WebSocket transport など存在しないものを「仕様」として記述していた)。
+  - `spec/03-stream-channels/SPEC.md` を `spec/02` に統合して削除。 03 の固有内容 (channel
+    routing の `__channel:` / `__channel_ack`、 `UnisonChannel` API、 `ConnectionContext`) を
+    02 §1.2 / §5.1 / §5.5 / §5.6 に移し、 「旧 `send`/`recv` 構文をパーサーが認識する」 という
+    **事実と異なる** 互換記述 (03 §9、 02 §4.5 / §9.2) を撤去。 02 §3.3 の相関方式を
+    実装どおり「Response は Request と同じ `id`」 に修正 (`response_to` は使っていない)。
+    02 §4.1 の型表を parser の `FieldType` に一致させ (`number` は builtin ではない、
+    `float` / `object` / `map` を追加)、 §6 は「codegen」 から「スキーマの runtime 消費者」 に。
+  - `spec/01` §7 の packet 記述を rkyv 56 byte から現行 buffa wire に。 `spec/README` の索引に
+    04 を追加、 03 は欠番と明記。
+  - `design/architecture.md` を全面書き直し (MSRV 1.93 → `[workspace.package]` 参照、
+    version 0.3.1、 rkyv / cgp / miette、 存在しない `core/` `context/` `service.rs`、
+    `UnisonClient` / `UnisonServer` / `Service` trait などを実態に置換)。
+  - `docs/` を解消: `docs/kdl-to-json-schema.md` → `design/kdl-to-json-schema.md` (設計文書)、
+    `docs/review/` → `design/review/` (時点記録)。 参照元 (`mapping.rs` / `schema.rs` /
+    `unison-mcp/DEMO.md`) と `design/README` の索引を更新。
+  - `README.md` / `README.ja.md` の crate 表に `unison-mcp` / `unison-cli` を追加、
+    「rkyv + zstd」 を「buffa + zstd」 に。
+  - guides / design の KDL 例にあった `type="number"` (= parser に無く untyped になる) を
+    `int` / `float` に修正。 `unison-mcp/README` の「rmcp 2.x」 → 3.x、 TS `index.ts` の
+    「empty entry」 コメントを撤去。
 
 ## [1.9.0] - 2026-09-01 — 依存の全面棚卸し（buffa 脆弱性 2 件解消 + rmcp 3）+ Swift client の zstd 展開
 

@@ -148,7 +148,6 @@ impl UnisonChannel {
 
 ## 関連ドキュメント
 
-- [spec/03: Stream Channel 仕様](../spec/03-stream-channels/SPEC.md)
 - [spec/02: Unified Channel プロトコル仕様](../spec/02-unified-channel/SPEC.md)
 - [spec/01: コアコンセプト](../spec/01-core-concept/SPEC.md)
 

@@ -5,7 +5,7 @@
 //! 2. KDL `FieldType` → JSON Schema Draft 7+ object に変換
 //! 3. tool name の双方向変換 (= `unison_<channel_safe>_<method>` ↔ (channel, method))
 //!
-//! KDL → JSON Schema 対応表は `docs/kdl-to-json-schema.md` 参照。
+//! KDL → JSON Schema 対応表は `design/kdl-to-json-schema.md` 参照。
 //!
 //! # Dual consumer 設計 (Hailing-δ leverage 1)
 //!
@@ -621,7 +621,7 @@ protocol "x" version="0.1.0" {
         assert_eq!(props.len(), MAX_SCHEMA_FIELDS);
     }
 
-    /// KDL `returns` block → `Tool.output_schema` 合成 (= rmcp 2.x / MCP 2025-06-18)。
+    /// KDL `returns` block → `Tool.output_schema` 合成 (= MCP 2025-06-18)。
     /// input と同じ converter を通るので、 型対応・required・additionalProperties の
     /// 挙動は input_schema と完全に一致する。
     #[test]

@@ -1,13 +1,8 @@
 /**
  * @chronista-club/unison-client — TS SDK public entry
  *
- * v1.0 polyglot client base (= Phase 2a 雛形)。
- *
- * Phase 2b 以降で `transport/` / `channel/` / `codec/` の各 module を実装し、
- * ここから re-export する pattern。 現在は **empty entry**、 caller が import しても
- * 何も提供しない (= alpha.1 status の正直な signal)。
- *
- * See `design/typescript-client-api.md` for the API contract this package will satisfy.
+ * `transport/` / `channel/` / `codec/` / `wire/` / `error/` の public surface を
+ * ここから re-export する。 API contract は `design/typescript-client-api.md`。
  */
 
 // === Phase 5: error category framework (UNS-15) ===

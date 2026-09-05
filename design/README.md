@@ -18,6 +18,7 @@
 | [architecture.md](architecture.md) | 全体アーキテクチャ設計詳細 | [spec/01](../spec/01-core-concept/SPEC.md) |
 | [packet.md](packet.md) | UnisonPacket実装仕様（バイナリパケット層） | [spec/01](../spec/01-core-concept/SPEC.md) |
 | [wire-format.md](wire-format.md) | Wire Format 設計（v0.9.0 buffa pivot） | — |
+| [kdl-to-json-schema.md](kdl-to-json-schema.md) | KDL 型 → JSON Schema 対応表（unison-mcp の tool schema） | [spec/02](../spec/02-unified-channel/SPEC.md) §4.1 |
 | [quic-runtime.md](quic-runtime.md) | QUIC Runtime 統合 | — |
 | [connection-auth.md](connection-auth.md) | Connection-level auth primitive（mechanism/policy 分離） | — |
 | [datagram-channel.md](datagram-channel.md) | Datagram Channel 設計（best-effort lane、v0.10.0） | — |
@@ -26,6 +27,8 @@
 | [swift-client-api.md](swift-client-api.md) | Swift Client SDK API 設計 | — |
 | [typescript-client-api.md](typescript-client-api.md) | TypeScript Client SDK API 設計（v1.0 Phase 3a） | — |
 | [test-strategy.md](test-strategy.md) | テスト戦略（3x3マトリクス） | — |
+
+`review/` は特定時点のレビュー記録 (living doc ではない)。
 
 ## 設計ドキュメントの書き方
 

@@ -32,7 +32,7 @@ protocol "vp-dashboard" version="1.0.0" {
     channel "metric" from="server" lifetime="persistent" backend="datagram" channel_id=1 {
         event "MetricUpdate" {
             field "name" type="string" required=#true
-            field "value" type="number" required=#true
+            field "value" type="float" required=#true
             field "unit" type="string"
             field "ts" type="timestamp"
         }
