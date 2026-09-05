@@ -158,6 +158,6 @@ Claude Code (= AI agent)
 ## Related
 
 - Spec: [`spec/04-discovery/SPEC.md`](../../spec/04-discovery/SPEC.md)
-- KDL→JSON Schema 対応: [`docs/kdl-to-json-schema.md`](../../docs/kdl-to-json-schema.md)
+- KDL→JSON Schema 対応: [`design/kdl-to-json-schema.md`](../../design/kdl-to-json-schema.md)
 - Bridge crate README: [`README.md`](README.md)
 - Demo server source: [`../unison-protocol/examples/hailing_demo_server.rs`](../unison-protocol/examples/hailing_demo_server.rs)

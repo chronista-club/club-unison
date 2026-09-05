@@ -5,17 +5,17 @@
 //! 扱える。 これが `register_channel` ハンドラーに渡る面 (= handler-facing API)
 //! なので、 型名・メソッドシグネチャは安定させている。
 
-use anyhow::{Context, Result};
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, Ordering},
 };
 use tokio::sync::Mutex;
 use tracing::info;
 
-use super::conn::{BoxUnisonRecv, BoxUnisonSend, UnisonConn};
+use super::conn::{BoxUnisonRecv, BoxUnisonSend};
 use super::frame::{FRAME_TYPE_PROTOCOL, FRAME_TYPE_RAW, read_typed_frame, write_typed_frame};
-use super::{NetworkError, ProtocolFrame, ProtocolMessage};
+use super::{NetworkError, ProtocolMessage};
+use crate::packet::UnisonPacket;
 
 /// Unison Stream — transport 非依存の双方向ストリーム実装。
 ///
@@ -26,51 +26,22 @@ use super::{NetworkError, ProtocolFrame, ProtocolMessage};
 pub struct UnisonStream {
     stream_id: u64,
     method: String,
-    #[allow(dead_code)]
-    connection: Arc<dyn UnisonConn>,
     send_stream: Arc<Mutex<Option<BoxUnisonSend>>>,
     recv_stream: Arc<Mutex<Option<BoxUnisonRecv>>>,
     is_active: Arc<AtomicBool>,
 }
 
 impl UnisonStream {
-    pub async fn new(
-        method: String,
-        connection: Arc<dyn UnisonConn>,
-        stream_id: Option<u64>,
-    ) -> Result<Self> {
-        static STREAM_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
-
-        let id = stream_id.unwrap_or_else(|| STREAM_ID_COUNTER.fetch_add(1, Ordering::SeqCst));
-
-        // Open bidirectional stream
-        let (send_stream, recv_stream) = connection
-            .open_bi()
-            .await
-            .context("Failed to open bidirectional stream")?;
-
-        Ok(Self {
-            stream_id: id,
-            method,
-            connection,
-            send_stream: Arc::new(Mutex::new(Some(send_stream))),
-            recv_stream: Arc::new(Mutex::new(Some(recv_stream))),
-            is_active: Arc::new(AtomicBool::new(true)),
-        })
-    }
-
     /// 既存のストリームから作成（サーバー側）
     pub fn from_streams(
         stream_id: u64,
         method: String,
-        connection: Arc<dyn UnisonConn>,
         send_stream: BoxUnisonSend,
         recv_stream: BoxUnisonRecv,
     ) -> Self {
         Self {
             stream_id,
             method,
-            connection,
             send_stream: Arc::new(Mutex::new(Some(send_stream))),
             recv_stream: Arc::new(Mutex::new(Some(recv_stream))),
             is_active: Arc::new(AtomicBool::new(true)),
@@ -189,7 +160,7 @@ impl UnisonStream {
 
             match frame_type {
                 FRAME_TYPE_PROTOCOL => {
-                    let frame = ProtocolFrame::from_bytes(&payload)?;
+                    let frame = UnisonPacket::from_bytes(&payload)?;
                     let message = ProtocolMessage::from_frame(&frame)?;
                     Ok(TypedFrame::Protocol(message))
                 }

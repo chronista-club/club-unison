@@ -35,14 +35,9 @@ async fn register_echo_handler(server: &ProtocolServer) {
     server
         .register_channel_datagram("position", 1, |chan| async move {
             // 受信した Transform をそのまま echo back
-            loop {
-                match chan.recv_event::<Transform>().await {
-                    Ok(transform) => {
-                        // 同じ channel に send_event = 同じ connection に send_datagram
-                        let _ = chan.send_event(&transform).await;
-                    }
-                    Err(_) => break,
-                }
+            while let Ok(transform) = chan.recv_event::<Transform>().await {
+                // 同じ channel に send_event = 同じ connection に send_datagram
+                let _ = chan.send_event(&transform).await;
             }
         })
         .await;
@@ -50,19 +45,19 @@ async fn register_echo_handler(server: &ProtocolServer) {
 
 /// Server に handler を register → client が open + send_event → echo を受信できる
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_datagram_echo_round_trip() -> Result<()> {
     init_tracing();
 
     // ─── Server setup ──────────────────────────────────
     let server = Arc::new(ProtocolServer::new());
     register_echo_handler(&server).await;
-    let handle = Arc::clone(&server).spawn_listen_shared("[::1]:0").await?;
+    let handle = Arc::clone(&server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
     info!("Server bound to {}", addr);
 
     // ─── Client connect ────────────────────────────────
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client
         .connect(&format!("[{}]:{}", addr.ip(), addr.port()))
         .await?;
@@ -111,7 +106,7 @@ async fn test_medium_datagram_echo_round_trip() -> Result<()> {
 
 /// 複数 datagram channel が同 connection で並列に動く (= channel_id demux 検証)
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_datagram_multiple_channels() -> Result<()> {
     init_tracing();
 
@@ -119,33 +114,23 @@ async fn test_medium_datagram_multiple_channels() -> Result<()> {
     // 2 つの datagram channel を登録
     server
         .register_channel_datagram("position", 1, |chan| async move {
-            loop {
-                match chan.recv_event::<Transform>().await {
-                    Ok(t) => {
-                        let _ = chan.send_event(&t).await;
-                    }
-                    Err(_) => break,
-                }
+            while let Ok(t) = chan.recv_event::<Transform>().await {
+                let _ = chan.send_event(&t).await;
             }
         })
         .await;
     server
         .register_channel_datagram("presence", 2, |chan| async move {
-            loop {
-                match chan.recv_event::<Transform>().await {
-                    Ok(t) => {
-                        let _ = chan.send_event(&t).await;
-                    }
-                    Err(_) => break,
-                }
+            while let Ok(t) = chan.recv_event::<Transform>().await {
+                let _ = chan.send_event(&t).await;
             }
         })
         .await;
 
-    let handle = Arc::clone(&server).spawn_listen_shared("[::1]:0").await?;
+    let handle = Arc::clone(&server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client
         .connect(&format!("[{}]:{}", addr.ip(), addr.port()))
         .await?;
@@ -210,7 +195,7 @@ async fn test_medium_datagram_multiple_channels() -> Result<()> {
 
 /// Server.broadcast: 全 active connection に同 event を送る
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_datagram_broadcast_to_all_clients() -> Result<()> {
     init_tracing();
 
@@ -223,12 +208,12 @@ async fn test_medium_datagram_broadcast_to_all_clients() -> Result<()> {
         })
         .await;
 
-    let handle = Arc::clone(&server).spawn_listen_shared("[::1]:0").await?;
+    let handle = Arc::clone(&server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
 
     // 2 client を connect
-    let client_a = ProtocolClient::new_default()?;
-    let client_b = ProtocolClient::new_default()?;
+    let client_a = ProtocolClient::insecure_localhost()?;
+    let client_b = ProtocolClient::insecure_localhost()?;
     client_a
         .connect(&format!("[{}]:{}", addr.ip(), addr.port()))
         .await?;

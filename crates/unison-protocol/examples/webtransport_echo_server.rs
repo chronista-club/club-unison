@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use unison::ProtocolServer;
-use unison::network::quic::UnisonStream;
+use unison::network::UnisonStream;
 use unison::network::webtransport::WebTransportServer;
 use unison::network::{MessageType, UnisonChannel};
 

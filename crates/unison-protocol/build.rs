@@ -9,9 +9,8 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Compile .proto files with buffa
     // - protocol.proto: v0.9.0+ wire format core (ProtocolMessage / MessageType / PacketHeader)
-    // - creo_sync.proto: creo-memories sync schemas (dogfood)
     buffa_build::Config::new()
-        .files(&["proto/protocol.proto", "proto/creo_sync.proto"])
+        .files(&["proto/protocol.proto"])
         .includes(&["proto/"])
         .compile()?;
 

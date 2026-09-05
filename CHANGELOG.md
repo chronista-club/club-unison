@@ -4,8 +4,283 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/ja/1.0.0/) に基づいており、
 このプロジェクトは [セマンティックバージョニング](https://semver.org/lang/ja/) に準拠しています。
-
 ## [Unreleased]
+
+## [2.0.0] - 2026-09-06 — 呼び出し元の無い public API と化石 docs の一掃
+
+> 2026-09-05 に workspace 全体を俯瞰し (Explore agent 3 本 + 手動裏取り、 34 項目)、
+> 「作ったが誰も呼ばない public API」「実装と食い違う仕様書」「同じことを 2 度書いた実装」
+> を一掃した major。 **wire bytes は変わらない** (`tests/fixtures/wire/*.hex` に diff なし、
+> TS / Swift / Ruby client との byte 互換は不変) ので、 破壊的なのは Rust の API surface だけ。
+> 削除対象は workspace 内に加えて ~/repos 配下の利用 repo (chronista-hub / fleetstage /
+> fleetflow / vantage-point / creo-memories / cplp-sound-system 等 83 file) を grep して
+> 利用ゼロを確認したものに限り、 外部で使用中だった `ProtocolServer::broadcast` / `MeshCa` /
+> `send_raw` / `recv_raw` は残した。 芯 (channel / wire / QUIC runtime) には手を入れていない。
+
+### Migration (1.9 → 2.0)
+
+呼び出し側の変更が要るのは以下。 いずれも機械的に置き換えられる。
+
+| 1.9 | 2.0 |
+|---|---|
+| `server.listen(addr)` / `spawn_listen` / `spawn_listen_shared` / `spawn_listen_with_cert` / `spawn_listen_shared_with_cert` | `Arc::new(server).listener(addr).spawn()` — cert を載せるなら `.cert(src)` を挟む。 呼び出し側で待つなら `.run()` |
+| `ProtocolClient::new_default()` | `ProtocolClient::insecure_localhost()` (中身は同じ。 証明書を検証しないことが名前で分かるようにした) |
+| `QuicClient::new()` / `QuicServer::new(server)` | `QuicClient::insecure_localhost()` / `QuicServer::builder(server).build()` |
+| `NetworkError::Protocol("channel closed")` の文字列一致 | `NetworkError::ChannelEof(_)` の match、 または `err.is_normal_close()` |
+| `SchemaParser::parse` の `Result<_, DynamicError>` | `Result<_, ParseError>` (`Kdl` / `Validation` の 2 variant) |
+| `ConnectionEvent::Disconnected { remote_addr }` の分解 | `connection_id` が増えたので `..` を足す |
+| `unison::network::quic::{UnisonStream, TypedFrame}` | `unison::network::{UnisonStream, TypedFrame}` |
+| `unison::network::quic::{read_typed_frame, write_typed_frame, CHANNEL_ACK_METHOD, FRAME_TYPE_*}` | `unison::network::frame::*` |
+| `use unison::prelude::*` | 使う型を明示 import (`unison::{ProtocolClient, ProtocolServer, UnisonChannel, NetworkError, ...}`、 `unison::parser::{SchemaParser, ...}`) |
+| `UnisonPacket::builder()...build(payload)` | `UnisonPacket::new(payload)` / `UnisonPacket::with_header(header, payload)` |
+| `header.packet_type() -> PacketType` | `-> Result<PacketType, u8>` (未知値は `Err(raw)`) |
+| `PacketType::from(u8)` | `PacketType::try_from(u8)` |
+| `ProtocolServer::spawn_listen_webtransport(...)` | `WebTransportServer::new(server, cert).bind(addr)` → `start_with_shutdown` |
+| `QuicServer::generate_self_signed_cert()` / `load_cert_from_files()` | `CertSource::dev_localhost()` / `CertSource::FromFile { .. }` |
+| `unison::codec::proto::creo_sync::*` | 利用側の `.proto` を buffa-build で生成する (本 crate は core wire 型のみ) |
+| `unison-agent` crate | `unison-mcp` (MCP bridge) |
+
+client 側 (TS / Swift / Ruby) に変更はない。 Ruby gem の native ext は crates.io の
+`club-unison = "1.3"` を pin しているため、 2.0.0 公開後に `"2.0"` へ上げる (別 PR)。
+
+### Removed
+
+- **`unison-agent` crate を削除。** `claude-agent-sdk` の薄い wrapper (`AgentClient` /
+  `InteractiveClient`) と、 4 tool 全部が `// TODO` の mock 応答だった `UnisonTools`。
+  後者の役割は `unison-mcp` が本実装済み。 README の crate 表からも外した。
+- **`packet` の未使用 header field / flag / builder を削除。** `UnisonPacketBuilder`、
+  `PacketFlags` の `COMPRESSED` 以外 9 bit と accessor / `Display`、
+  `PacketType::{Heartbeat, Handshake, Custom}`、 header の `sequence_number` /
+  `stream_id` / `message_id` / `response_to` / `correlation_id` と `is_request` /
+  `is_response` / `is_oneway`、 `PacketConfig` の preset 3 種と write-only な `version`、
+  `CompressionConfig` の preset 4 種。 いずれも production では常に default 値で wire に
+  乗っていなかった。 proto は field 6 / 8-11 を `reserved` にし番号を再利用しない。
+  `PacketType` は `From<u8>` から `TryFrom<u8>` (未知値 = `Err(raw)`) に、
+  `UnisonPacketHeader::packet_type()` は `Result<PacketType, u8>` に変更。
+- **`unison::wire` module (`WireFormat` trait) を削除。** 実装ゼロ・呼び出しゼロ・
+  encode/decode method も無い「将来の hook」。 他 format が要る時点で設計する。
+- **`parser::TypeRegistry` と `FieldType::{to_rust_type, to_typescript_type}` を削除。**
+  codegen は `club-kdl-codegen` に分離済みで、 本 crate 内に caller が無かった。
+- **`codec::proto::creo_sync` と `proto/creo_sync.proto` を削除。** creo-memories の
+  dogfood schema で、 消費者が test だけなのに published crate の public API に乗っていた。
+  `ProtoCodec` のテストは core wire の `proto::ProtocolMessage` / `proto::PacketHeader` を
+  題材にするよう書き直し、 buffa 自体を試験していた `tests/test_proto_buffa.rs` は削除。
+- **network 層の呼び出し元ゼロ public API を削除。** `QuicServer::generate_self_signed_cert` /
+  `load_cert_from_files` / `DEFAULT_CERT_PATH` / `DEFAULT_KEY_PATH` (`cert.rs` の `CertSource`
+  と三重複、 参照先 `assets/certs/` は存在しない)、 `ProtocolServer::is_running` /
+  `listen_webtransport` / `spawn_listen_webtransport` (WebTransport ingress は
+  `WebTransportServer` を直接使う)、 `UnisonStream::new`、 `network::ProtocolError`、
+  `frame::read_frame` / `write_frame` (8MB 超の書き込み拒否は生きている
+  `write_typed_frame` へ移植)、 `identity::ChannelUpdate` (client 3 言語とも未実装、 src も
+  送信していない)、 `ProtocolCache::from_file`。 `dial::rank` は private に。
+- **`network::quic` の「後方互換」再公開 shim を削除。** `network::quic::{UnisonStream,
+  TypedFrame, read_typed_frame, write_typed_frame, CHANNEL_ACK_METHOD, FRAME_TYPE_*}` は
+  `network::{UnisonStream, TypedFrame}` / `network::frame::*` から import する
+  (`QuicClient` / `QuicServer` は従来どおり `network::quic::` にある)。
+- **`unison::prelude` を削除。** 利用者は workspace 内の test 2 file だけで、 `lib.rs` の
+  re-export と 7 symbol 重複、 `NetworkError` が 3 つの名前で到達できていた。 明示 import へ。
+- **`examples/test_kdl_parse.rs` を削除。** `unison` を import しない KDL v2 の scratch script。
+- **重複 test file を削除。** `tests/test_identity.rs` / `tests/test_identity_quic.rs`
+  (`tests/test_integ_identity_flow.rs` が上位互換、 後者は QUIC を含まないのに名前が QUIC)。
+
+- **LOW の dead 群を整理 (俯瞰 LOW)。** `DatagramDispatcher` の public な `unregister` /
+  `handler_count` / `shutdown` (`#[allow(dead_code)]` 5 箇所、 runtime 経路で未使用) を削除し、
+  inner の test helper は `#[cfg(test)]` に。 no-op skeleton だった `DatagramChannel::close()`
+  を削除 (drop で閉じる)。 `dial::race` / `rank` の `my_addrs` 引数 (全 caller が `&[]`、
+  TODO の置き場でしかなかった) を削除。 `network::ProtocolFrame` alias は `packet::UnisonPacket`
+  に一本化。 `UnisonStream` が保持していた未使用の `connection` field と `from_streams` の
+  対応引数を削除 (接続の生存は server / client 側の台帳が担う)。
+  `SerializationError::JsonError` (構築箇所なし) を削除。 `unison-mcp` の未使用 `thiserror`
+  依存を削除。 orphan だった `schemas/hierophant.kdl`、 closed な `dogfood/`、 設定を typecheck
+  するだけで v0.8.0 表記のままだった `examples/builder_api.rs` を削除。 `lib.rs` の crate
+  doctest を全行コメントアウトから動く最小例に書き直し。
+
+意図して **残した** もの: `ProtocolServer::broadcast` (server → client の datagram push の唯一の
+入口、 `test_medium_datagram_broadcast_to_all_clients` で試験済み)、 `MeshCa` (fleetflow control
+plane の private CA として使用中)、 raw-frame 経路 `send_raw` / `recv_raw` (cplp-sound-system の
+audio 配信で使用中)。
+
+### Changed
+
+- **`quic.rs` からアドレス解釈を `addr.rs` に切り出した (俯瞰 MEDIUM #19)。**
+  接続先文字列の解決 (`[::1]:8080` / `localhost` / `https://host:port` など) と
+  SNI 名の導出は QUIC そのものとは独立した文字列の責務。 テストごと移して
+  `quic.rs` は 1066 行から 758 行に。 公開 API に変化はない (どちらも crate 内部)。
+- **`handle_connection` を責務ごとに分割した (俯瞰 MEDIUM #20)。**
+  224 行の 1 関数が「datagram handler 起動 / identity 送信 / Connected 発火 /
+  accept ループ / 後始末」の 5 つを抱えていた。 `start_datagram_handlers` /
+  `send_identity` / `accept_stream_loop` / `handle_incoming_stream` に分け、
+  `handle_connection` 自身は 41 行の筋書きだけになった。 挙動は不変。
+
+- **テストファイル名を層に揃えた (俯瞰 MEDIUM #30)。**
+  `test_<layer>_<topic>.rs` に統一し、 `small` (実 I/O なし・常時実行) と
+  `medium` (実 QUIC・`#[ignore]`) を名前で見分けられるようにした。 4 つの命名
+  スキームが混在し、 `test_integ_*` の 7 件中 4 件は実 QUIC を使わない Small
+  だった。 `simple_quic_test.rs` は QUIC 通信を一切せず、 4 本のうち 3 本が
+  `#[test]` の付かないヘルパーだったので、 独立した test に分割した上で
+  `test_small_cert_trust_config.rs` に改名。 規則は `CLAUDE.md` に記載。
+- **doc に残っていた死語 API を実体に合わせた。** `spawn_listen*` /
+  `new_default` は 2.0.0 で消えているのに、 テストと bench の doc / expect
+  メッセージに 10 箇所残っていた。
+- **重複の整理 (俯瞰 MEDIUM #17 / #24 / #27)。** 公開 API の形は変わらない。
+  - `QuicServer::start` / `WebTransportServer::start` が
+    `start_with_shutdown` の accept ループを丸ごと複製していたのを、
+    「発火しない shutdown receiver を渡すだけ」 の 4 行に。 accept ループの
+    片肺死対策 (2026-07-13) が 1 箇所にまとまり、 片方だけ直す事故が起きなくなる。
+  - `unison.auth` / `unison.discovery` の handler が同じ 5 分岐の recv ループを
+    持っていたのを `channel::next_request` helper に集約。 channel の正常終端の扱いと
+    未知メッセージへの寛容さ (= forward-compat) が 1 箇所に集まる。
+  - `unison-cli` の `ping` / `call` / `sniff` が同じ 7 行の接続 prologue を
+    複製していたのを `build_client` / `connect` helper に。
+
+- **CI の clippy を全 target に拡げた (俯瞰 MEDIUM #34)。**
+  `--lib` だけが `-D warnings` で `--tests` は `continue-on-error` だったため、
+  警告が無期限に溜まっていた (実測 8 件)。 加えて `--bins` / `--benches` は
+  一度も lint されていなかった。 `--all-targets -- -D warnings` の 1 ステップに統合し、
+  既存の 8 件を解消。 `CLAUDE.md` のコマンドも同じものに更新。
+- **Ruby クライアントの CI job を追加 (俯瞰 MEDIUM #34)。**
+  TypeScript / Swift には job があり Ruby だけ無かった。 `rake compile` +
+  `rake test` を ubuntu で実行する。
+
+
+
+- **breaking**: **listen 系 5 メソッドを [`ServerListener`] builder に統合。**
+  `listen` / `spawn_listen` / `spawn_listen_shared` / `spawn_listen_with_cert` /
+  `spawn_listen_shared_with_cert` は 3 つの直交軸 (`self` か `Arc<Self>` か、 block か
+  background か、 cert 明示か既定か) を名前の suffix に畳んでいた。 `listener()` が
+  `Arc<Self>` を受けることで `_shared` 軸が消え、 起動方法は terminal method、 cert は
+  option になる。
+
+  ```rust
+  // 1.x
+  server.spawn_listen(addr).await?;
+  Arc::clone(&server).spawn_listen_shared(addr).await?;
+  server.spawn_listen_with_cert(addr, cert).await?;
+  server.listen(addr).await?;
+
+  // 2.0
+  Arc::new(server).listener(addr).spawn().await?;   // by-value から
+  server.listener(addr).spawn().await?;             // Arc<ProtocolServer> から
+  server.listener(addr).cert(cert).spawn().await?;
+  Arc::new(server).listener(addr).run().await?;     // block
+  ```
+
+- **breaking**: **証明書を検証しない経路を名前で正直にした。** 呼び出し側のコードを
+  読んだだけで「ここは検証していない」 と分かるようにする。 挙動は変えていない
+  (元から `connect` は SkipVerification 時に loopback 以外を拒否する)。
+
+  | 1.x | 2.0 |
+  |---|---|
+  | `QuicClient::new()` | `QuicClient::insecure_localhost()` |
+  | `ProtocolClient::new_default()` | `ProtocolClient::insecure_localhost()` |
+  | `QuicServer::new(server)` | `QuicServer::builder(server).build()` |
+
+- **breaking**: **channel の正常終端を `NetworkError::ChannelEof(ChannelEof)` にした。**
+  従来は `Protocol(String)` の中身を `"Channel closed"` 等の文字列と照合して判定して
+  おり、 生成側 3 箇所と判定側が定数を共有していなかった (= typo で end-of-stream が
+  ERROR ログに化ける)。 判定メソッド [`NetworkError::is_normal_close`] はそのまま残る
+  ので、 それを使っている caller は **無改修**。 `Protocol(String)` を直接 match して
+  いた場合のみ影響する。
+
+- **breaking**: **`SchemaParser::parse` が `ParseError` を返すようになった** (従来は
+  `anyhow::Result`)。 併せて構築箇所の無かった `ParseError::{Type, Generic, Anyhow}` を
+  削除し、 残る 2 variant (`Kdl` / `Validation`) を実際に使い分ける。 従来は全ての
+  error が `Anyhow` に潰れ、 メッセージが `"Anyhow error: KDL parsing error: ..."` と
+  二重 prefix になっていた。
+
+
+
+- **breaking**: `ConnectionEvent::{Connected, Disconnected}` に `connection_id: Uuid` を
+  追加した。 接続の同定は `remote_addr` ではなくこちらを使う (`remote_addr` は衝突しうる)。
+  分割代入で全 field を書いている caller は `..` を足すか `connection_id` を受けること:
+
+  ```rust
+  // 1.x
+  ConnectionEvent::Disconnected { remote_addr } => { ... }
+  // 2.0
+  ConnectionEvent::Disconnected { remote_addr, .. } => { ... }
+  ```
+
+
+> **breaking (次は 2.0.0)**: 呼び出し元の無い public API を削除する第 1 弾。 削除対象は
+> workspace 内に加えて ~/repos 配下の利用 repo (chronista-hub / fleetstage / fleetflow /
+> vantage-point / creo-memories / cplp-sound-system 等 83 file) を grep して利用ゼロを
+> 確認したものだけ。 wire bytes は変わらない (`tests/fixtures/wire/*.hex` に diff なし)。
+
+### Added
+
+- **`unison schema-lint` が宣言のない型名を警告するようになった (俯瞰 MEDIUM #28)。**
+  `Field::field_type()` は既知の型名に当てはまらないものを全部
+  `FieldType::Custom` にする。 Custom は下流で完全に素通しされ、
+  `SchemaRegistry::validate_request` の型検査は `true` を返し、 unison-mcp が
+  合成する JSON Schema にも型制約が付かない。 つまり `type="strng"` のような
+  打ち間違いは、 そのフィールドの型検査を黙って無効化していた。
+  `typedef` / `enum` で宣言されていない Custom 名を警告する。 invariant 違反とは
+  別枠の警告なので exit code は変えない。 `number` → `float`、
+  `array<T>` は未実装構文、 といった直し方の示唆も出す。
+
+### Fixed
+
+- **CI が実 QUIC のテストを一度も走らせていなかった (俯瞰の追加分)。**
+  `#[ignore]` 付きの Medium test 65 件 (QUIC lifecycle / identity handshake /
+  datagram / mesh trust / Happy Eyeballs dial race / auth / discovery ほか) は
+  `cargo test --workspace` では実行されず、 CI に `-- --ignored` のステップが
+  無かった。 これらの回帰は CI をすり抜けていた。 test job にステップを追加。
+- **Ruby CI job に `protoc` が入っていなかった。**
+  `club-unison` の build script (buffa-build) が protoc を要求するため、
+  他の Rust job と同じく `protobuf-compiler` を入れる。
+- **wire golden test が回帰を検知していなかった (俯瞰 MEDIUM #31)。**
+  `test_wire_byte_compat.rs` は 5 つの fixture を毎回 `fs::write` で上書きするだけで、
+  一度も assert していなかった。 wire format が変われば golden も黙って追従するため、
+  同じ golden を読む TypeScript 側の byte 一致テストも回帰を検知できない状態だった。
+  golden との**比較**に変更し、 再生成は `UPDATE_WIRE_FIXTURES=1` を明示したときだけに。
+  副次的に `cargo test` が source tree へ書き込まなくなった。
+
+
+- **`ProtocolClient::open_channel` が接続の read guard を握ったまま server の ack を
+  待っていた問題を修正。** `open_bi` → open frame 送信 → `__channel_ack` 受信の 3 つの
+  await を guard 越しに行っていたため、 その間 `disconnect()` が write lock を取れず
+  待たされていた。 `Connection` を clone して guard を即座に手放す形に変更 (= 同 file の
+  `open_datagram_channel_with` と同形)。
+- **同一 `remote_addr` の 2 接続が互いを追い出していた問題を修正。** `ProtocolServer` の
+  active connection 台帳が `SocketAddr` を key にしていたため、 NAT 越しの再 dial や同一
+  host からの raw QUIC + WebTransport 併用で 2 本目の登録が 1 本目を silent に上書きし、
+  1 本目の切断が 2 本目を broadcast 配信先から消していた。 key を接続ごとに一意な
+  `ConnectionContext::connection_id` (UUID) に変更。 回帰テスト
+  `active_connections_are_keyed_per_connection_not_per_addr`。
+- **datagram channel handler の task が接続終了後も残っていた問題を修正。**
+  `handle_connection` が handler を `tokio::spawn` しっぱなしで `JoinHandle` を捨てていた
+  ため、 `recv_event` を待たない handler (= 送信専用 / timer loop) は接続が切れても回り
+  続けていた (task leak)。 JoinHandle を保持し、 接続終了時に abort する。 回帰テスト
+  `datagram_handler_tasks_stop_when_connection_ends` (修正前は tick が増え続けて FAIL)。
+
+### Documentation
+
+- `design/packet.md` を rkyv 時代 (56 byte 固定 header / `Payloadable` / checksum) の
+  記述から現行 buffa wire に書き直し。 `design/wire-format.md` から `WireFormat` 節を除去。
+- **docs wave (俯瞰 HIGH #9〜#13)**: 化石になっていた仕様と設計文書を実態に合わせた。
+  - `spec/PROTOCOL_SPEC.md` を削除 (索引に無い 2025-01 の orphan。 `service` / `method` 構文、
+    `UnisonMessage`、 WebSocket transport など存在しないものを「仕様」として記述していた)。
+  - `spec/03-stream-channels/SPEC.md` を `spec/02` に統合して削除。 03 の固有内容 (channel
+    routing の `__channel:` / `__channel_ack`、 `UnisonChannel` API、 `ConnectionContext`) を
+    02 §1.2 / §5.1 / §5.5 / §5.6 に移し、 「旧 `send`/`recv` 構文をパーサーが認識する」 という
+    **事実と異なる** 互換記述 (03 §9、 02 §4.5 / §9.2) を撤去。 02 §3.3 の相関方式を
+    実装どおり「Response は Request と同じ `id`」 に修正 (`response_to` は使っていない)。
+    02 §4.1 の型表を parser の `FieldType` に一致させ (`number` は builtin ではない、
+    `float` / `object` / `map` を追加)、 §6 は「codegen」 から「スキーマの runtime 消費者」 に。
+  - `spec/01` §7 の packet 記述を rkyv 56 byte から現行 buffa wire に。 `spec/README` の索引に
+    04 を追加、 03 は欠番と明記。
+  - `design/architecture.md` を全面書き直し (MSRV 1.93 → `[workspace.package]` 参照、
+    version 0.3.1、 rkyv / cgp / miette、 存在しない `core/` `context/` `service.rs`、
+    `UnisonClient` / `UnisonServer` / `Service` trait などを実態に置換)。
+  - `docs/` を解消: `docs/kdl-to-json-schema.md` → `design/kdl-to-json-schema.md` (設計文書)、
+    `docs/review/` → `design/review/` (時点記録)。 参照元 (`mapping.rs` / `schema.rs` /
+    `unison-mcp/DEMO.md`) と `design/README` の索引を更新。
+  - `README.md` / `README.ja.md` の crate 表に `unison-mcp` / `unison-cli` を追加、
+    「rkyv + zstd」 を「buffa + zstd」 に。
+  - guides / design の KDL 例にあった `type="number"` (= parser に無く untyped になる) を
+    `int` / `float` に修正。 `unison-mcp/README` の「rmcp 2.x」 → 3.x、 TS `index.ts` の
+    「empty entry」 コメントを撤去。
 
 ## [1.9.0] - 2026-09-01 — 依存の全面棚卸し（buffa 脆弱性 2 件解消 + rmcp 3）+ Swift client の zstd 展開
 

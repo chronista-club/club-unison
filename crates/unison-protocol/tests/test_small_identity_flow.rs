@@ -58,44 +58,6 @@ async fn test_integ_identity_build_and_frame() {
     );
 }
 
-#[test]
-fn test_integ_channel_update_variants_json() {
-    let added = ChannelUpdate::Added(ChannelInfo {
-        name: "new-ch".to_string(),
-        direction: ChannelDirection::Bidirectional,
-        lifetime: "persistent".to_string(),
-        status: ChannelStatus::Available,
-    });
-    let json = serde_json::to_string(&added).unwrap();
-    let restored: ChannelUpdate = serde_json::from_str(&json).unwrap();
-    match restored {
-        ChannelUpdate::Added(ch) => assert_eq!(ch.name, "new-ch"),
-        _ => panic!("Expected Added variant"),
-    }
-
-    let removed = ChannelUpdate::Removed("old-ch".to_string());
-    let json = serde_json::to_string(&removed).unwrap();
-    let restored: ChannelUpdate = serde_json::from_str(&json).unwrap();
-    match restored {
-        ChannelUpdate::Removed(name) => assert_eq!(name, "old-ch"),
-        _ => panic!("Expected Removed variant"),
-    }
-
-    let status_changed = ChannelUpdate::StatusChanged {
-        name: "busy-ch".to_string(),
-        status: ChannelStatus::Busy,
-    };
-    let json = serde_json::to_string(&status_changed).unwrap();
-    let restored: ChannelUpdate = serde_json::from_str(&json).unwrap();
-    match restored {
-        ChannelUpdate::StatusChanged { name, status } => {
-            assert_eq!(name, "busy-ch");
-            assert_eq!(status, ChannelStatus::Busy);
-        }
-        _ => panic!("Expected StatusChanged variant"),
-    }
-}
-
 #[tokio::test]
 async fn test_integ_connection_context_identity_flow() {
     use unison::network::context::ConnectionContext;

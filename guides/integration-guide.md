@@ -106,7 +106,7 @@ protocol "vp-dashboard" version="1.0.0" {
     channel "metric" from="server" lifetime="persistent" backend="datagram" channel_id=1 {
         event "MetricUpdate" {
             field "name" type="string" required=#true
-            field "value" type="number" required=#true
+            field "value" type="float" required=#true
             field "unit" type="string"
         }
     }
@@ -165,9 +165,8 @@ Unison は **KDL スキーマが型の SSOT**。コード生成は `club-kdl-cod
   `events()` / `request()` が生成 interface に型 narrow される）
 
 > **codegen の対応範囲**: `club-kdl-codegen 0.9.0` で stream channel + datagram channel
-> どちらも codegen 動く。 datagram channel は専用 field `channelId` も含めて完璧に生成される
-> （[`dogfood/vp-2026-05-26.md`](../dogfood/vp-2026-05-26.md) signal #2 で VP dogfood の
-> 検証 trail）。 datagram の `ChannelMeta` 手書きは [`vp-dashboard.ts` example](../clients/typescript/examples/vp-dashboard.ts)
+> どちらも codegen 動く。 datagram channel は専用 field `channelId` も含めて生成される
+> （2026-05-26 の Vantage Point dogfood で検証済み）。 datagram の `ChannelMeta` 手書きは [`vp-dashboard.ts` example](../clients/typescript/examples/vp-dashboard.ts)
 > に教材として残っているが、実 use では codegen 経由を推奨。
 
 ### ④ 呼び出し側コードを書く

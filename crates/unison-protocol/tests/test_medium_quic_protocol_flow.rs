@@ -1,13 +1,14 @@
-//! Large x E2E: QUIC プロトコル統合テスト
+//! Medium x Integration: QUIC プロトコル一気通貫フロー
 //!
 //! 実際の QUIC サーバー/クライアント間で完全なプロトコルフローを検証する。
 //! スキーマ読み込み → サーバー起動 → クライアント接続 → Identity ハンドシェイク
 //! → チャネル通信 → 切断 → シャットダウン。
 //!
-//! すべて `#[ignore = "Large: E2E test"]` 付き — `cargo test -- --ignored` で実行。
+//! すべて `#[ignore = "Medium: 実 QUIC runtime が要る"]` 付き — `cargo test -- --ignored` で実行。
 
 use anyhow::Result;
 use serde_json::{Value, json};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::timeout;
 use tracing::{Level, info};
@@ -99,7 +100,7 @@ async fn start_e2e_server() -> Result<(ServerHandle, String)> {
         })
         .await;
 
-    let handle = server.spawn_listen("[::1]:0").await?;
+    let handle = Arc::new(server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
     let addr_str = format!("[{}]:{}", addr.ip(), addr.port());
     info!("E2E server started on {}", addr_str);
@@ -113,14 +114,14 @@ async fn start_e2e_server() -> Result<(ServerHandle, String)> {
 
 /// スキーマ読み込み → サーバー → クライアント → チャネル → request/response → close
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_full_protocol_flow() -> Result<()> {
     init_tracing();
 
     let (handle, addr) = start_e2e_server().await?;
 
     // クライアント接続（Identity Handshake 含む）
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr).await?;
     assert!(client.is_connected().await);
 
@@ -165,12 +166,12 @@ async fn test_e2e_full_protocol_flow() -> Result<()> {
 
 /// Echo ハンドラーの各種変換を E2E で検証
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_echo_transformations() -> Result<()> {
     init_tracing();
 
     let (handle, addr) = start_e2e_server().await?;
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr).await?;
     let channel = client.open_channel("ping-pong").await?;
 
@@ -224,12 +225,12 @@ async fn test_e2e_echo_transformations() -> Result<()> {
 
 /// Health メソッドでサーバー稼働状態を確認
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_health_check() -> Result<()> {
     init_tracing();
 
     let (handle, addr) = start_e2e_server().await?;
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr).await?;
     let channel = client.open_channel("ping-pong").await?;
 
@@ -257,12 +258,12 @@ async fn test_e2e_health_check() -> Result<()> {
 
 /// ネスト、配列、Unicode を含む複雑な JSON の E2E 往復
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_complex_json_roundtrip() -> Result<()> {
     init_tracing();
 
     let (handle, addr) = start_e2e_server().await?;
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr).await?;
     let channel = client.open_channel("ping-pong").await?;
 
@@ -302,12 +303,12 @@ async fn test_e2e_complex_json_roundtrip() -> Result<()> {
 
 /// 50 件の連続 ping リクエストを E2E で実行し、レイテンシを計測
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_sequential_throughput() -> Result<()> {
     init_tracing();
 
     let (handle, addr) = start_e2e_server().await?;
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr).await?;
     let channel = client.open_channel("ping-pong").await?;
 
@@ -342,12 +343,12 @@ async fn test_e2e_sequential_throughput() -> Result<()> {
 
 /// アクティブなチャネル通信中にサーバーをシャットダウン → クライアントが検知
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_graceful_shutdown() -> Result<()> {
     init_tracing();
 
     let (handle, addr) = start_e2e_server().await?;
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr).await?;
     assert!(client.is_connected().await);
 

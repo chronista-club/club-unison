@@ -11,7 +11,7 @@ A type-safe QUIC communication framework, defined by KDL schema.
 ```toml
 [dependencies]
 # crates.io package = `club-unison`, Rust crate identifier = `unison`
-club-unison = "1.9.0"
+club-unison = "2.0.0"
 tokio = { version = "1.52", features = ["full"] }
 ```
 
@@ -160,12 +160,12 @@ channel.send_response(id, method, payload).await?;
 // Event push (one-way).
 channel.send_event("UserCreated", payload).await?;
 
-// Raw bytes — bypasses rkyv/zstd. Useful for audio, etc.
+// Raw bytes — bypasses buffa/zstd. Useful for audio, etc.
 channel.send_raw(&pcm_data).await?;
 let data = channel.recv_raw().await?;
 ```
 
-A single byte at the head of each frame distinguishes Protocol frames (`0x00`, rkyv + zstd) from Raw frames (`0x01`, raw bytes). Payloads larger than 2 KB are automatically compressed with zstd.
+A single byte at the head of each frame distinguishes Protocol frames (`0x00`, buffa + zstd) from Raw frames (`0x01`, raw bytes). Payloads larger than 2 KB are automatically compressed with zstd.
 
 ---
 
@@ -216,14 +216,8 @@ protocol "my-service" version="1.0.0" {
 | Crate | Description |
 |-------|-------------|
 | [`unison-protocol`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-protocol) | Core library. Published on crates.io as `club-unison`; the Rust crate identifier is `unison`. KDL schema, QUIC, channels, packets. |
-| [`unison-agent`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-agent) | [Claude Agent SDK](https://crates.io/crates/claude-agent-sdk) integration. AgentClient, InteractiveClient, MCP tool exposure. |
-
-### unison-agent examples
-
-```bash
-cargo run -p unison-agent --example simple_query        # one-shot query
-cargo run -p unison-agent --example interactive_chat    # multi-turn conversation
-```
+| [`unison-mcp`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-mcp) | MCP bridge (`unison-mcp` binary). Discovers a server's KDL at runtime and synthesizes one MCP tool per `request`, so AI agents can call Unison servers. |
+| [`unison-cli`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-cli) | Developer CLI (`unison` binary): `ping`, `call`, `sniff`, `mock` (stub server from a KDL file), `schema lint`. |
 
 ## Polyglot clients
 
@@ -242,7 +236,7 @@ The server stays Rust; clients are first-class siblings under [`clients/`](https
 > (`vX.Y.Z` = Rust workspace 版) に連動する (Swift client は独立 versioning しない)。
 >
 > ```swift
-> .package(url: "https://github.com/chronista-club/club-unison.git", from: "1.9.0")
+> .package(url: "https://github.com/chronista-club/club-unison.git", from: "2.0.0")
 > // target: .product(name: "UnisonClient", package: "club-unison")
 > ```
 >

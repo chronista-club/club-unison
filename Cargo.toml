@@ -1,14 +1,13 @@
 [workspace]
 members = [
     "crates/unison-protocol",
-    "crates/unison-agent",
     "crates/unison-mcp",
     "crates/unison-cli",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "1.9.0"
+version = "2.0.0"
 edition = "2024"
 authors = ["Mako<mito@chronista.club>"]
 license = "MIT"

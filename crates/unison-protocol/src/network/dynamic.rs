@@ -14,7 +14,7 @@
 //! use std::sync::Arc;
 //! use unison::network::{DynamicProtocol, ProtocolClient};
 //!
-//! let client = Arc::new(ProtocolClient::new_default()?);
+//! let client = Arc::new(ProtocolClient::insecure_localhost()?);
 //! client.connect("[::1]:7878").await?;
 //! let proto = DynamicProtocol::fetch(client.clone()).await?;
 //!

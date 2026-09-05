@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
+use uuid::Uuid;
 
 use crate::codec::{Codec, Encodable, JsonCodec};
 
@@ -13,15 +13,25 @@ use super::datagram_channel::{DatagramChannel, encode_varint};
 use super::identity::{ChannelDirection, ChannelInfo, ChannelStatus, ServerIdentity};
 
 /// 接続イベント通知
+///
+/// `connection_id` は接続ごとに一意 (= [`ConnectionContext::connection_id`])。
+/// `remote_addr` は NAT 越しの再 dial や同一 host からの複数 ingress で容易に
+/// 衝突するため、 接続の同定には `connection_id` を使うこと。
+///
+/// [`ConnectionContext::connection_id`]: super::context::ConnectionContext::connection_id
 #[derive(Debug, Clone)]
 pub enum ConnectionEvent {
     /// 新しい接続が確立された
     Connected {
+        connection_id: Uuid,
         remote_addr: SocketAddr,
         context: Arc<super::context::ConnectionContext>,
     },
     /// 接続が切断された
-    Disconnected { remote_addr: SocketAddr },
+    Disconnected {
+        connection_id: Uuid,
+        remote_addr: SocketAddr,
+    },
 }
 
 /// [`ProtocolServer::subscribe_connection_events()`] が返す接続イベントレシーバー
@@ -98,7 +108,7 @@ impl ConnectionEventReceiver {
 pub type ChannelHandler = Arc<
     dyn Fn(
             Arc<super::context::ConnectionContext>,
-            super::quic::UnisonStream,
+            super::stream::UnisonStream,
         ) -> Pin<Box<dyn futures_util::Future<Output = Result<(), NetworkError>> + Send>>
         + Send
         + Sync,
@@ -122,7 +132,7 @@ pub(crate) struct DatagramHandlerEntry {
 
 /// サーバーのライフサイクルを管理するハンドル
 ///
-/// `spawn_listen()` が返す。shutdown シグナル送信と完了待ちを提供。
+/// `listener(..).spawn()` が返す。shutdown シグナル送信と完了待ちを提供。
 pub struct ServerHandle {
     join_handle: JoinHandle<Result<(), NetworkError>>,
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
@@ -153,7 +163,6 @@ impl ServerHandle {
 
 /// プロトコルサーバー実装
 pub struct ProtocolServer {
-    running: Arc<AtomicBool>,
     /// サーバー識別情報
     server_name: String,
     server_version: String,
@@ -162,11 +171,15 @@ pub struct ProtocolServer {
     channel_handlers: Arc<RwLock<HashMap<String, ChannelHandler>>>,
     /// Datagram channel handlers (v0.10.0 で追加、 name → channel_id + handler)
     datagram_channel_handlers: Arc<RwLock<HashMap<String, DatagramHandlerEntry>>>,
-    /// Active connections (= broadcast 配信先、 remote_addr → Connection)
+    /// Active connections (= broadcast 配信先、 connection_id → Connection)
+    ///
+    /// key は接続ごとに一意な `connection_id`。 `remote_addr` を key にすると NAT
+    /// 越しの再 dial や同一 host からの raw QUIC + WebTransport 併用で衝突し、
+    /// 2 本目の登録が 1 本目を silent に上書きしてしまう。
     ///
     /// transport 非依存。 raw QUIC / WebTransport どちらの接続も
     /// [`UnisonConn`](super::conn::UnisonConn) trait object として保持する。
-    active_connections: Arc<RwLock<HashMap<SocketAddr, Arc<dyn super::conn::UnisonConn>>>>,
+    active_connections: Arc<RwLock<HashMap<Uuid, Arc<dyn super::conn::UnisonConn>>>>,
     /// 接続イベント broadcast チャネル（複数サブスクライバ対応）
     connection_event_tx: tokio::sync::broadcast::Sender<ConnectionEvent>,
 }
@@ -178,7 +191,6 @@ impl ProtocolServer {
         // 仮に超過した場合は RecvError::Lagged が返り、recv_skip_lagged() で対処可能。
         let (tx, _) = tokio::sync::broadcast::channel(64);
         Self {
-            running: Arc::new(AtomicBool::new(false)),
             server_name: "unison".to_string(),
             server_version: env!("CARGO_PKG_VERSION").to_string(),
             server_namespace: "default".to_string(),
@@ -200,10 +212,6 @@ impl ProtocolServer {
     }
 
     /// サーバー実行状態の確認
-    pub fn is_running(&self) -> bool {
-        self.running.load(Ordering::SeqCst)
-    }
-
     /// 登録済みチャネルからServerIdentityを構築
     pub async fn build_identity(&self) -> ServerIdentity {
         let mut identity = ServerIdentity::new(
@@ -309,7 +317,7 @@ impl ProtocolServer {
     /// チャネルハンドラーを登録
     pub async fn register_channel<F, Fut>(&self, name: &str, handler: F)
     where
-        F: Fn(Arc<super::context::ConnectionContext>, super::quic::UnisonStream) -> Fut
+        F: Fn(Arc<super::context::ConnectionContext>, super::stream::UnisonStream) -> Fut
             + Send
             + Sync
             + 'static,
@@ -317,7 +325,7 @@ impl ProtocolServer {
     {
         let handler = Arc::new(
             move |ctx: Arc<super::context::ConnectionContext>,
-                  stream: super::quic::UnisonStream| {
+                  stream: super::stream::UnisonStream| {
                 Box::pin(handler(ctx, stream))
                     as Pin<Box<dyn futures_util::Future<Output = Result<(), NetworkError>> + Send>>
             },
@@ -413,21 +421,21 @@ impl ProtocolServer {
             .collect()
     }
 
-    /// Active connection を登録 (= quic.rs::handle_connection 用、 内部 API)
+    /// Active connection を登録 (= dispatch::handle_connection 用、 内部 API)
     pub(crate) async fn add_active_connection(
         &self,
-        remote_addr: SocketAddr,
+        connection_id: Uuid,
         connection: Arc<dyn super::conn::UnisonConn>,
     ) {
         self.active_connections
             .write()
             .await
-            .insert(remote_addr, connection);
+            .insert(connection_id, connection);
     }
 
-    /// Active connection を解除 (= quic.rs::handle_connection 用、 内部 API)
-    pub(crate) async fn remove_active_connection(&self, remote_addr: SocketAddr) {
-        self.active_connections.write().await.remove(&remote_addr);
+    /// Active connection を解除 (= dispatch::handle_connection 用、 内部 API)
+    pub(crate) async fn remove_active_connection(&self, connection_id: Uuid) {
+        self.active_connections.write().await.remove(&connection_id);
     }
 
     /// Active connection 数 (= 主に test / debug 用)
@@ -482,222 +490,27 @@ impl ProtocolServer {
         handlers.get(name).cloned()
     }
 
-    /// 接続の待ち受け開始（self を消費してブロック）
+    /// 待ち受けの設定を組み立てる ([`ServerListener`])。
     ///
-    /// サーバーを起動し、接続を受け付ける。終了するまでブロックする。
-    /// 非ブロッキングで起動する場合は `spawn_listen()` を使用する。
+    /// 起動方法 (block / background) と TLS 証明書の指定を 1 本の builder に集約する。
+    /// `Arc<Self>` を受けるのは、 起動後も `broadcast` 等で server を参照できるように
+    /// するため。 by-value で持っている場合は `Arc::new(server).listener(addr)`。
     ///
-    /// **注意**: self を消費するため、`subscribe_connection_events()` は
-    /// このメソッドの呼び出し前に行う必要がある。
-    pub async fn listen(self, addr: &str) -> Result<(), NetworkError> {
-        use super::quic::QuicServer;
-
-        let protocol_server = Arc::new(self);
-        protocol_server.running.store(true, Ordering::SeqCst);
-
-        let mut quic_server = QuicServer::new(Arc::clone(&protocol_server));
-        quic_server
-            .bind(addr)
-            .await
-            .map_err(|e| NetworkError::Quic(e.to_string()))?;
-
-        tracing::info!("Unison Protocol server listening on {} via QUIC", addr);
-
-        let result = quic_server
-            .start()
-            .await
-            .map_err(|e| NetworkError::Quic(e.to_string()));
-
-        protocol_server.running.store(false, Ordering::SeqCst);
-        result
-    }
-
-    /// バックグラウンドでサーバーを起動し、ServerHandle を返す
-    ///
-    /// `ServerHandle::shutdown()` でグレースフルに停止できる。
-    ///
-    /// **注意**: self を消費するため、`subscribe_connection_events()` は
-    /// このメソッドの呼び出し前に行う必要がある。
-    pub async fn spawn_listen(self, addr: &str) -> Result<ServerHandle, NetworkError> {
-        Arc::new(self).spawn_listen_shared(addr).await
-    }
-
-    /// `spawn_listen` の `Arc<Self>` 版 (v0.10.0 で追加、 broadcast 用 path)
-    ///
-    /// `spawn_listen` が `self` を consume するため、 broadcast 等で server へ
-    /// outside reference を保ちたい caller は本 method を使う。 caller が `Arc::clone`
-    /// を保持してそれを通して `server.broadcast(...)` を呼べる。
-    ///
-    /// cert は `dev_localhost` 既定 (= DEV ONLY、 loopback のみ)。 非 loopback で
-    /// 公開する場合は [`spawn_listen_shared_with_cert`](Self::spawn_listen_shared_with_cert)。
-    pub async fn spawn_listen_shared(
-        self: Arc<Self>,
-        addr: &str,
-    ) -> Result<ServerHandle, NetworkError> {
-        self.spawn_listen_shared_with_cert(addr, super::cert::CertSource::dev_localhost())
-            .await
-    }
-
-    /// [`spawn_listen`](Self::spawn_listen) の cert 指定版 (v1.2.0 で追加)。
-    ///
-    /// `self` を consume する。 cert を明示することで非 loopback アドレスでの
-    /// 公開 (tailnet / public federation) が可能になる。 cert を渡さない既定
-    /// 経路は [`spawn_listen`](Self::spawn_listen) (= `dev_localhost`)。
-    pub async fn spawn_listen_with_cert(
-        self,
-        addr: &str,
-        cert: super::cert::CertSource,
-    ) -> Result<ServerHandle, NetworkError> {
-        Arc::new(self)
-            .spawn_listen_shared_with_cert(addr, cert)
-            .await
-    }
-
-    /// [`spawn_listen_shared`](Self::spawn_listen_shared) の cert 指定版 (v1.2.0 で追加)。
-    ///
-    /// `spawn_listen_shared` / `spawn_listen` / `spawn_listen_with_cert` の
-    /// 共通実装。 `QuicServer::builder().cert_source(cert)` 経由で TLS を構成する
-    /// 点だけが `QuicServer::new` 固定だった旧実装と異なる。
-    pub async fn spawn_listen_shared_with_cert(
-        self: Arc<Self>,
-        addr: &str,
-        cert: super::cert::CertSource,
-    ) -> Result<ServerHandle, NetworkError> {
-        use super::quic::QuicServer;
-
-        let protocol_server = self;
-
-        let mut quic_server = QuicServer::builder(Arc::clone(&protocol_server))
-            .cert_source(cert)
-            .build();
-        quic_server
-            .bind(addr)
-            .await
-            .map_err(|e| NetworkError::Quic(e.to_string()))?;
-
-        let local_addr = quic_server
-            .local_addr()
-            .ok_or_else(|| NetworkError::Quic("Server not bound".to_string()))?;
-
-        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-
-        protocol_server.running.store(true, Ordering::SeqCst);
-
-        tracing::info!("Unison Protocol server spawned on {} via QUIC", local_addr);
-
-        let server_clone = Arc::clone(&protocol_server);
-        let join_handle = tokio::spawn(async move {
-            let result = quic_server
-                .start_with_shutdown(shutdown_rx)
-                .await
-                .map_err(|e| NetworkError::Quic(e.to_string()));
-
-            server_clone.running.store(false, Ordering::SeqCst);
-
-            result
-        });
-
-        Ok(ServerHandle {
-            join_handle,
-            shutdown_tx: Some(shutdown_tx),
-            local_addr,
-        })
-    }
-
-    /// WebTransport ingress を起動する (= ブラウザクライアント受け口、 Phase 6a)。
-    ///
-    /// raw QUIC の [`listen`](Self::listen) と並立する。 受け付けた接続は raw QUIC
-    /// と **同一の** `handle_connection` へ流れるため、 `register_channel` で登録
-    /// したハンドラーは transport を問わず動作する。
-    ///
-    /// `addr` は `SocketAddr` 文字列 (例: `"[::]:4433"`)。 `cert_source` は raw
-    /// QUIC 側と共有でき、 TLS 信頼モデルを 2 ingress で統一できる。
-    ///
-    /// **注意**: self を消費するため、 `subscribe_connection_events()` は事前に。
-    pub async fn listen_webtransport(
-        self,
-        addr: &str,
-        cert_source: super::cert::CertSource,
-    ) -> Result<(), NetworkError> {
-        use super::webtransport::WebTransportServer;
-
-        let socket_addr: SocketAddr = addr
-            .parse()
-            .map_err(|e| NetworkError::Quic(format!("WebTransport bind addr parse 失敗: {}", e)))?;
-
-        let protocol_server = Arc::new(self);
-        protocol_server.running.store(true, Ordering::SeqCst);
-
-        let mut wt_server = WebTransportServer::new(Arc::clone(&protocol_server), cert_source);
-        wt_server
-            .bind(socket_addr)
-            .await
-            .map_err(|e| NetworkError::Quic(e.to_string()))?;
-
-        tracing::info!(
-            "Unison Protocol server listening on {} via WebTransport",
-            addr
-        );
-
-        let result = wt_server
-            .start()
-            .await
-            .map_err(|e| NetworkError::Quic(e.to_string()));
-
-        protocol_server.running.store(false, Ordering::SeqCst);
-        result
-    }
-
-    /// バックグラウンドで WebTransport ingress を起動し、 [`ServerHandle`] を返す。
-    ///
-    /// [`spawn_listen`](Self::spawn_listen) の WebTransport 版。 raw QUIC ingress と
-    /// 同時に走らせたい場合は、 `Arc<Self>` を共有して両方を spawn すればよい。
-    pub async fn spawn_listen_webtransport(
-        self: Arc<Self>,
-        addr: &str,
-        cert_source: super::cert::CertSource,
-    ) -> Result<ServerHandle, NetworkError> {
-        use super::webtransport::WebTransportServer;
-
-        let socket_addr: SocketAddr = addr
-            .parse()
-            .map_err(|e| NetworkError::Quic(format!("WebTransport bind addr parse 失敗: {}", e)))?;
-
-        let protocol_server = self;
-
-        let mut wt_server = WebTransportServer::new(Arc::clone(&protocol_server), cert_source);
-        wt_server
-            .bind(socket_addr)
-            .await
-            .map_err(|e| NetworkError::Quic(e.to_string()))?;
-
-        let local_addr = wt_server
-            .local_addr()
-            .ok_or_else(|| NetworkError::Quic("WebTransport server not bound".to_string()))?;
-
-        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-        protocol_server.running.store(true, Ordering::SeqCst);
-
-        tracing::info!(
-            "Unison Protocol server spawned on {} via WebTransport",
-            local_addr
-        );
-
-        let server_clone = Arc::clone(&protocol_server);
-        let join_handle = tokio::spawn(async move {
-            let result = wt_server
-                .start_with_shutdown(shutdown_rx)
-                .await
-                .map_err(|e| NetworkError::Quic(e.to_string()));
-            server_clone.running.store(false, Ordering::SeqCst);
-            result
-        });
-
-        Ok(ServerHandle {
-            join_handle,
-            shutdown_tx: Some(shutdown_tx),
-            local_addr,
-        })
+    /// ```rust,no_run
+    /// # use std::sync::Arc;
+    /// # use unison::ProtocolServer;
+    /// # async fn f(server: Arc<ProtocolServer>) -> Result<(), Box<dyn std::error::Error>> {
+    /// // background で起動して handle を得る
+    /// let handle = server.clone().listener("[::1]:8080").spawn().await?;
+    /// handle.shutdown().await?;
+    /// # Ok(()) }
+    /// ```
+    pub fn listener(self: Arc<Self>, addr: &str) -> ServerListener {
+        ServerListener {
+            server: self,
+            addr: addr.to_string(),
+            cert: None,
+        }
     }
 }
 
@@ -707,14 +520,128 @@ impl Default for ProtocolServer {
     }
 }
 
+/// 待ち受けの設定を組み立てる builder ([`ProtocolServer::listener`] が返す)。
+///
+/// 起動は [`spawn`](Self::spawn) (= background、 [`ServerHandle`] を返す) か
+/// [`run`](Self::run) (= 終了までブロック) のどちらかで終える。
+pub struct ServerListener {
+    server: Arc<ProtocolServer>,
+    addr: String,
+    cert: Option<super::cert::CertSource>,
+}
+
+impl ServerListener {
+    /// TLS 証明書の出所を指定する。
+    ///
+    /// 未指定なら [`CertSource::dev_localhost`](super::cert::CertSource::dev_localhost)
+    /// (= **DEV ONLY**、 loopback 向けの自己署名)。 非 loopback で公開する場合は
+    /// mesh CA や実証明書を明示すること。
+    pub fn cert(mut self, cert: super::cert::CertSource) -> Self {
+        self.cert = Some(cert);
+        self
+    }
+
+    /// background で待ち受けを開始し、 [`ServerHandle`] を返す。
+    pub async fn spawn(self) -> Result<ServerHandle, NetworkError> {
+        let quic_server = self.build_quic().await?;
+
+        let local_addr = quic_server
+            .local_addr()
+            .ok_or_else(|| NetworkError::Quic("Server not bound".to_string()))?;
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+
+        tracing::info!("Unison Protocol server spawned on {} via QUIC", local_addr);
+
+        let join_handle = tokio::spawn(async move {
+            quic_server
+                .start_with_shutdown(shutdown_rx)
+                .await
+                .map_err(|e| NetworkError::Quic(e.to_string()))
+        });
+
+        Ok(ServerHandle {
+            join_handle,
+            shutdown_tx: Some(shutdown_tx),
+            local_addr,
+        })
+    }
+
+    /// 現在の task で待ち受ける (= 接続受付が終わるまでブロック)。
+    pub async fn run(self) -> Result<(), NetworkError> {
+        let addr = self.addr.clone();
+        let quic_server = self.build_quic().await?;
+
+        tracing::info!("Unison Protocol server listening on {} via QUIC", addr);
+
+        quic_server
+            .start()
+            .await
+            .map_err(|e| NetworkError::Quic(e.to_string()))
+    }
+
+    /// bind 済みの [`QuicServer`](super::quic::QuicServer) を組み立てる。
+    async fn build_quic(self) -> Result<super::quic::QuicServer, NetworkError> {
+        let cert = self
+            .cert
+            .unwrap_or_else(super::cert::CertSource::dev_localhost);
+        let mut quic_server = super::quic::QuicServer::builder(self.server)
+            .cert_source(cert)
+            .build();
+        quic_server
+            .bind(&self.addr)
+            .await
+            .map_err(|e| NetworkError::Quic(e.to_string()))?;
+        Ok(quic_server)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_server_creation() {
+    #[tokio::test]
+    async fn test_server_creation() {
         let server = ProtocolServer::new();
-        assert!(!server.is_running());
+        assert_eq!(server.active_connection_count().await, 0);
+    }
+
+    /// 同一 remote_addr の 2 接続が互いを追い出さないこと。
+    ///
+    /// NAT 越しの再 dial や、 同一 host からの raw QUIC + WebTransport 併用で
+    /// `SocketAddr` は容易に衝突する。 台帳の key は接続ごとに一意な
+    /// `connection_id` でなければ、 2 本目の登録が 1 本目を silent に上書きし、
+    /// 1 本目の切断が 2 本目を broadcast 配信先から消してしまう。
+    #[tokio::test]
+    async fn active_connections_are_keyed_per_connection_not_per_addr() {
+        use super::super::test_support::MockConn;
+        use uuid::Uuid;
+
+        let server = ProtocolServer::new();
+        let addr: SocketAddr = "127.0.0.1:4433".parse().unwrap();
+
+        let id_a = Uuid::new_v4();
+        let id_b = Uuid::new_v4();
+        server
+            .add_active_connection(id_a, Arc::new(MockConn::new(addr)))
+            .await;
+        server
+            .add_active_connection(id_b, Arc::new(MockConn::new(addr)))
+            .await;
+
+        assert_eq!(
+            server.active_connection_count().await,
+            2,
+            "同一 addr でも別接続なら 2 件保持されるべき"
+        );
+
+        // 1 本目の切断は 2 本目を消さない
+        server.remove_active_connection(id_a).await;
+        assert_eq!(
+            server.active_connection_count().await,
+            1,
+            "片方の切断でもう片方が台帳から消えてはならない"
+        );
     }
 
     #[tokio::test]
@@ -738,11 +665,14 @@ mod tests {
         let mut rx = server.subscribe_connection_events();
 
         let addr: SocketAddr = "127.0.0.1:9999".parse().unwrap();
-        server.emit_connection_event(ConnectionEvent::Disconnected { remote_addr: addr });
+        server.emit_connection_event(ConnectionEvent::Disconnected {
+            connection_id: Uuid::new_v4(),
+            remote_addr: addr,
+        });
 
         let event = rx.recv_skip_lagged().await.unwrap();
         match event {
-            ConnectionEvent::Disconnected { remote_addr } => {
+            ConnectionEvent::Disconnected { remote_addr, .. } => {
                 assert_eq!(remote_addr, addr);
             }
             _ => panic!("Expected Disconnected event"),
@@ -762,13 +692,16 @@ mod tests {
 
         // capacity(2) を超える 4 件を送信 → subscriber は Lagged になる
         for _ in 0..4 {
-            let _ = tx.send(ConnectionEvent::Disconnected { remote_addr: addr });
+            let _ = tx.send(ConnectionEvent::Disconnected {
+                connection_id: Uuid::new_v4(),
+                remote_addr: addr,
+            });
         }
 
         // recv_skip_lagged は Lagged をスキップして最新のイベントを返す
         let event = rx.recv_skip_lagged().await.unwrap();
         match event {
-            ConnectionEvent::Disconnected { remote_addr } => {
+            ConnectionEvent::Disconnected { remote_addr, .. } => {
                 assert_eq!(remote_addr, addr);
             }
             _ => panic!("Expected Disconnected event"),
@@ -808,7 +741,10 @@ mod tests {
 
         // capacity を超える送信
         for _ in 0..4 {
-            let _ = tx.send(ConnectionEvent::Disconnected { remote_addr: addr });
+            let _ = tx.send(ConnectionEvent::Disconnected {
+                connection_id: Uuid::new_v4(),
+                remote_addr: addr,
+            });
         }
 
         // recv() は Lagged をそのまま返す
@@ -829,12 +765,15 @@ mod tests {
         let mut rx = server.subscribe_connection_events();
 
         let addr: SocketAddr = "127.0.0.1:7001".parse().unwrap();
-        server.emit_connection_event(ConnectionEvent::Disconnected { remote_addr: addr });
+        server.emit_connection_event(ConnectionEvent::Disconnected {
+            connection_id: Uuid::new_v4(),
+            remote_addr: addr,
+        });
 
         // inner() で内部の broadcast::Receiver を取得し、直接 recv() する
         let event = rx.inner().recv().await.unwrap();
         match event {
-            ConnectionEvent::Disconnected { remote_addr } => {
+            ConnectionEvent::Disconnected { remote_addr, .. } => {
                 assert_eq!(remote_addr, addr);
             }
             _ => panic!("Expected Disconnected event"),
@@ -854,13 +793,16 @@ mod tests {
 
         // capacity(2) を超える 4 件を送信 → subscriber は Lagged になる
         for _ in 0..4 {
-            let _ = tx.send(ConnectionEvent::Disconnected { remote_addr: addr });
+            let _ = tx.send(ConnectionEvent::Disconnected {
+                connection_id: Uuid::new_v4(),
+                remote_addr: addr,
+            });
         }
 
         // recv_skip_lagged で Lagged をスキップして最新イベントを受信
         let event = rx.recv_skip_lagged().await.unwrap();
         match &event {
-            ConnectionEvent::Disconnected { remote_addr } => {
+            ConnectionEvent::Disconnected { remote_addr, .. } => {
                 assert_eq!(*remote_addr, addr);
             }
             _ => panic!("Expected Disconnected event after lagged skip"),
@@ -873,6 +815,7 @@ mod tests {
         // Lagged 回復後に新しいイベントを送信
         let new_addr: SocketAddr = "127.0.0.1:7003".parse().unwrap();
         let _ = tx.send(ConnectionEvent::Connected {
+            connection_id: Uuid::new_v4(),
             remote_addr: new_addr,
             context: Arc::new(super::super::context::ConnectionContext::new()),
         });

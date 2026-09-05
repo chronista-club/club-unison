@@ -12,19 +12,12 @@
 //! let channel: UnisonChannel<JsonCodec> = ...;
 //! let resp: MyResponse = channel.request("method", &my_request).await?;
 //!
-//! // Protobuf — buffa::Message な型はすべて使える
+//! // Protobuf — buffa::Message な型 (= buffa-build で生成した型) はすべて使える
 //! let channel: UnisonChannel<ProtoCodec> = ...;
-//! let resp: proto::Ack = channel.request("subscribe", &proto::Subscribe { ... }).await?;
+//! let resp: MyAck = channel.request("subscribe", &MySubscribe { ... }).await?;
 //! ```
 
 use thiserror::Error;
-
-/// buffa 生成型（.proto → Rust）
-pub mod proto {
-    pub mod creo_sync {
-        include!(concat!(env!("OUT_DIR"), "/creo_sync.rs"));
-    }
-}
 
 /// Codec エラー型
 #[derive(Error, Debug)]
@@ -96,6 +89,18 @@ impl<T: buffa::Message + Default> Decodable<ProtoCodec> for T {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // ProtoCodec のテスト題材は core wire の buffa 生成型 (= 本 crate 唯一の .proto)
+    use crate::proto::{MessageType, PacketHeader, ProtocolMessage};
+
+    fn sample_message() -> ProtocolMessage {
+        ProtocolMessage {
+            id: 42,
+            method: "subscribe".into(),
+            msg_type: ::buffa::EnumValue::Known(MessageType::REQUEST),
+            payload: b"a,b".to_vec(),
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn test_json_codec_value_roundtrip() {
@@ -133,85 +138,6 @@ mod tests {
     }
 
     #[test]
-    fn test_proto_codec_roundtrip() {
-        use proto::creo_sync::Subscribe;
-
-        let msg = Subscribe {
-            category: "test".into(),
-            tags: "a,b".into(),
-            ..Default::default()
-        };
-
-        let encoded = Encodable::<ProtoCodec>::encode(&msg).unwrap();
-        let decoded: Subscribe = Decodable::<ProtoCodec>::decode(&encoded).unwrap();
-        assert_eq!(decoded.category, "test");
-        assert_eq!(decoded.tags, "a,b");
-    }
-
-    #[test]
-    fn test_proto_codec_decode_error() {
-        use proto::creo_sync::Subscribe;
-
-        // 不正なバイト列
-        let result = <Subscribe as Decodable<ProtoCodec>>::decode(&[0xFF, 0xFF, 0xFF]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_proto_codec_large_message() {
-        use proto::creo_sync::MemoryEvent;
-
-        let msg = MemoryEvent {
-            event_type: "created".into(),
-            memory_id: "mem_abc123".into(),
-            category: "x".repeat(10_000),
-            from: "creo-lead".into(),
-            timestamp: "2026-03-28T12:00:00Z".into(),
-            ..Default::default()
-        };
-
-        let encoded = Encodable::<ProtoCodec>::encode(&msg).unwrap();
-        let decoded: MemoryEvent = Decodable::<ProtoCodec>::decode(&encoded).unwrap();
-        assert_eq!(decoded.category.len(), 10_000);
-        assert_eq!(decoded.event_type, "created");
-    }
-
-    #[test]
-    fn test_proto_codec_empty_message() {
-        use proto::creo_sync::Subscribe;
-
-        // デフォルト（全フィールド空文字列）のメッセージ
-        let msg = Subscribe::default();
-        let encoded = Encodable::<ProtoCodec>::encode(&msg).unwrap();
-        // proto3 のデフォルト値はゼロバイトにエンコードされる
-        assert!(encoded.is_empty());
-        let decoded: Subscribe = Decodable::<ProtoCodec>::decode(&encoded).unwrap();
-        assert_eq!(decoded.category, "");
-    }
-
-    #[test]
-    fn test_json_and_proto_encode_different_bytes() {
-        // 同じ論理データでも JsonCodec と ProtoCodec では異なるバイト列になる
-        use proto::creo_sync::Ack;
-
-        let ack = Ack {
-            status: "ok".into(),
-            channel_ref: "ch-1".into(),
-            ..Default::default()
-        };
-
-        let proto_bytes = Encodable::<ProtoCodec>::encode(&ack).unwrap();
-
-        let json_value = serde_json::json!({"status": "ok", "channel_ref": "ch-1"});
-        let json_bytes = Encodable::<JsonCodec>::encode(&json_value).unwrap();
-
-        // 異なるフォーマットなのでバイト列は一致しない
-        assert_ne!(proto_bytes, json_bytes);
-        // protobuf のほうがコンパクト
-        assert!(proto_bytes.len() < json_bytes.len());
-    }
-
-    #[test]
     fn test_json_codec_empty_bytes_decode_error() {
         let result = <serde_json::Value as Decodable<JsonCodec>>::decode(&[]);
         assert!(result.is_err());
@@ -226,42 +152,64 @@ mod tests {
     }
 
     #[test]
-    fn test_proto_codec_truncated_bytes_decode_error() {
-        use proto::creo_sync::Subscribe;
-
-        let msg = Subscribe {
-            category: "test-category".into(),
-            tags: "a,b,c".into(),
-            ..Default::default()
-        };
+    fn test_proto_codec_roundtrip() {
+        let msg = sample_message();
         let encoded = Encodable::<ProtoCodec>::encode(&msg).unwrap();
+        let decoded: ProtocolMessage = Decodable::<ProtoCodec>::decode(&encoded).unwrap();
+        assert_eq!(decoded.id, 42);
+        assert_eq!(decoded.method, "subscribe");
+        assert_eq!(decoded.payload, b"a,b");
+    }
 
-        // 末尾を切り落とした truncated バイト列
-        let truncated = &encoded[..encoded.len() / 2];
-        let result = <Subscribe as Decodable<ProtoCodec>>::decode(truncated);
+    #[test]
+    fn test_proto_codec_decode_error() {
+        let result = <PacketHeader as Decodable<ProtoCodec>>::decode(&[0xFF, 0xFF, 0xFF]);
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_proto_codec_all_fields_roundtrip() {
-        use proto::creo_sync::MemoryEvent;
-
-        let msg = MemoryEvent {
-            event_type: "updated".into(),
-            memory_id: "mem_xyz789".into(),
-            category: "architecture".into(),
-            from: "worker-1".into(),
-            timestamp: "2026-03-28T15:30:00Z".into(),
-            ..Default::default()
+    fn test_proto_codec_large_message() {
+        let msg = ProtocolMessage {
+            payload: vec![b'x'; 10_000],
+            ..sample_message()
         };
-
         let encoded = Encodable::<ProtoCodec>::encode(&msg).unwrap();
-        let decoded: MemoryEvent = Decodable::<ProtoCodec>::decode(&encoded).unwrap();
-        assert_eq!(decoded.event_type, "updated");
-        assert_eq!(decoded.memory_id, "mem_xyz789");
-        assert_eq!(decoded.category, "architecture");
-        assert_eq!(decoded.from, "worker-1");
-        assert_eq!(decoded.timestamp, "2026-03-28T15:30:00Z");
+        let decoded: ProtocolMessage = Decodable::<ProtoCodec>::decode(&encoded).unwrap();
+        assert_eq!(decoded.payload.len(), 10_000);
+        assert_eq!(decoded.method, "subscribe");
+    }
+
+    #[test]
+    fn test_proto_codec_empty_message() {
+        // proto3 のデフォルト値はゼロバイトにエンコードされる
+        let msg = PacketHeader::default();
+        let encoded = Encodable::<ProtoCodec>::encode(&msg).unwrap();
+        assert!(encoded.is_empty());
+        let decoded: PacketHeader = Decodable::<ProtoCodec>::decode(&encoded).unwrap();
+        assert_eq!(decoded.version, 0);
+    }
+
+    #[test]
+    fn test_json_and_proto_encode_different_bytes() {
+        // 同じ論理データでも JsonCodec と ProtoCodec では異なるバイト列になる
+        let msg = sample_message();
+        let proto_bytes = Encodable::<ProtoCodec>::encode(&msg).unwrap();
+
+        let json_value = serde_json::json!({"id": 42, "method": "subscribe", "payload": "a,b"});
+        let json_bytes = Encodable::<JsonCodec>::encode(&json_value).unwrap();
+
+        assert_ne!(proto_bytes, json_bytes);
+        // protobuf のほうがコンパクト
+        assert!(proto_bytes.len() < json_bytes.len());
+    }
+
+    #[test]
+    fn test_proto_codec_truncated_bytes_decode_error() {
+        let encoded = Encodable::<ProtoCodec>::encode(&sample_message()).unwrap();
+        // 末尾を切り落とした truncated バイト列
+        let truncated = &encoded[..encoded.len() / 2];
+        let result = <ProtocolMessage as Decodable<ProtoCodec>>::decode(truncated);
+        assert!(result.is_err());
     }
 
     #[test]

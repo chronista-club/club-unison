@@ -1,4 +1,4 @@
-//! Large × E2E: `unison.discovery` channel round-trip
+//! Medium × Integration: `unison.discovery` channel round-trip
 //!
 //! Server に [`ProtocolServer::enable_discovery`] で KDL を載せて起動し、
 //! client が `unison.discovery` channel を open して `GetProtocol` request を
@@ -7,11 +7,12 @@
 //! Unison Hailing Epic α の P1 deliverable の E2E 検証。
 //! 設計: `spec/04-discovery/SPEC.md`
 //!
-//! すべて `#[ignore = "Large: E2E test"]` 付き — `cargo test -- --ignored`
+//! すべて `#[ignore = "Medium: 実 QUIC runtime が要る"]` 付き — `cargo test -- --ignored`
 //! で実行。
 
 use anyhow::Result;
 use serde_json::{Value, json};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
 use tracing::{Level, info};
@@ -59,7 +60,7 @@ fn init_tracing() {
 async fn start_discovery_server() -> Result<(ServerHandle, String)> {
     let server = ProtocolServer::with_identity("test-discovery-srv", "0.42.0", "test");
     server.enable_discovery(TEST_KDL).await?;
-    let handle = server.spawn_listen("[::1]:0").await?;
+    let handle = Arc::new(server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
     Ok((handle, format!("[{}]:{}", addr.ip(), addr.port())))
 }
@@ -76,12 +77,12 @@ fn parse_doc(value: Value) -> Result<ProtocolDocument> {
 /// E2E: enable_discovery → client.open_channel("unison.discovery")
 /// → GetProtocol → ProtocolDocument を受け取る
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_discovery_get_protocol_round_trip() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_discovery_server().await?;
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr).await?;
     assert!(client.is_connected().await);
 
@@ -143,12 +144,12 @@ async fn test_e2e_discovery_get_protocol_round_trip() -> Result<()> {
 
 /// E2E: 同じ server に対して GetProtocol を 2 度叩くと同じ hash / kdl / version を返す。
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_discovery_hash_is_deterministic() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_discovery_server().await?;
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr).await?;
     let channel = client.open_channel(DISCOVERY_CHANNEL_NAME).await?;
 
@@ -183,12 +184,12 @@ async fn test_e2e_discovery_hash_is_deterministic() -> Result<()> {
 /// E2E: enable_discovery を呼ぶと ServerIdentity.channels に
 /// unison.discovery が追加される (= client は接続直後に detect 可能)。
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_discovery_appears_in_server_identity() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_discovery_server().await?;
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr).await?;
 
     let identity = client.server_identity().await.expect("identity exists");

@@ -1,12 +1,21 @@
-//! Wire byte-compat fixture (= Phase 6b、 TS SDK との wire 一致検証)。
+//! Wire byte-compat golden test (= Phase 6b、 TS SDK との wire 一致検証)。
 //!
-//! 既知の `ProtocolMessage` を Rust の wire encoder で typed frame まで
-//! serialize し、 そのバイト列を hex として `tests/fixtures/wire/` に書き出す。
-//! TS 側 (`clients/typescript/tests/wire/byte_compat.test.ts`) が同じ論理 message
-//! から bytes を生成し、 この fixture と byte 一致することを assert する。
+//! `tests/fixtures/wire/*.hex` は **git にコミットされた golden**。 既知の
+//! `ProtocolMessage` を Rust の wire encoder で typed frame まで serialize し、
+//! その hex が golden と一致することを assert する。 TS 側
+//! (`clients/typescript/tests/wire/byte_compat.test.ts`) は同じ golden を読んで
+//! 自分の encoder 出力と突き合わせる。 両者が同じ 1 つの固定 bytes を向くので、
+//! live connection なしに「TS と Rust が同じ wire を喋る」ことが言える。
 //!
-//! これにより live connection なしで「TS が Rust と同じ wire を喋る」ことを
-//! 証明する (= real browser↔server round-trip は Phase 6d)。
+//! **golden は生成せず比較する。** 以前はこのテストが毎回 fixture を上書きして
+//! いたため、 wire format が変われば golden も黙って追従し、 回帰が検知できな
+//! かった。 意図的に wire を変えたときだけ明示的に再生成する:
+//!
+//! ```sh
+//! UPDATE_WIRE_FIXTURES=1 cargo test -p club-unison --test test_wire_byte_compat
+//! ```
+//!
+//! 再生成した差分は commit に含めること (= wire 変更のレビュー可能な証跡になる)。
 //!
 //! timestamp は `SystemTime::now()` 由来で非決定的なため、 fixture では header を
 //! 手組みして `timestamp = 0` に固定する (= 決定的 bytes)。
@@ -83,9 +92,41 @@ fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-/// fixture: channel `request` frame の reference bytes を書き出す。
+/// frame が golden fixture と byte 一致することを検証する。
+///
+/// `UPDATE_WIRE_FIXTURES` が設定されているときだけ golden を書き換える
+/// (= 意図的な wire 変更時の再生成モード)。 既定では **読むだけ**なので、
+/// `cargo test` が source tree を汚さない。
+fn assert_golden(name: &str, frame: &[u8]) {
+    let path = fixture_dir().join(name);
+    let actual = to_hex(frame);
+
+    if std::env::var_os("UPDATE_WIRE_FIXTURES").is_some() {
+        fs::create_dir_all(fixture_dir()).expect("create fixture dir");
+        fs::write(&path, &actual).expect("write fixture");
+        return;
+    }
+
+    let expected = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "golden fixture {} が読めない ({e})。\n\
+             wire を意図的に変えたなら UPDATE_WIRE_FIXTURES=1 で再生成する。",
+            path.display()
+        )
+    });
+
+    assert_eq!(
+        actual,
+        expected.trim(),
+        "\nwire golden {name} が一致しない。\n\
+         意図した wire 変更なら UPDATE_WIRE_FIXTURES=1 cargo test で再生成し、\n\
+         差分を commit に含めること (= TS 側 byte_compat.test.ts も同じ golden を読む)。"
+    );
+}
+
+/// golden: channel `request` frame が reference bytes と byte 一致する。
 #[test]
-fn emit_request_frame_fixture() {
+fn request_frame_matches_golden() {
     let msg = ProtocolMessage::new_encoded(
         7,
         "SubscribeMetric".to_string(),
@@ -94,18 +135,16 @@ fn emit_request_frame_fixture() {
     );
     let frame = encode_protocol_frame(msg);
 
-    let dir = fixture_dir();
-    fs::create_dir_all(&dir).expect("create fixture dir");
-    fs::write(dir.join("request_frame.hex"), to_hex(&frame)).expect("write fixture");
+    assert_golden("request_frame.hex", &frame);
 
     // sanity: frame は最低限の長さを持つ
     assert!(frame.len() > 4 + 1 + 4);
     assert_eq!(frame[4], FRAME_TYPE_PROTOCOL);
 }
 
-/// fixture: channel `event` frame の reference bytes を書き出す。
+/// golden: channel `event` frame が reference bytes と byte 一致する。
 #[test]
-fn emit_event_frame_fixture() {
+fn event_frame_matches_golden() {
     let msg = ProtocolMessage::new_encoded(
         0,
         "MetricUpdate".to_string(),
@@ -114,16 +153,14 @@ fn emit_event_frame_fixture() {
     );
     let frame = encode_protocol_frame(msg);
 
-    let dir = fixture_dir();
-    fs::create_dir_all(&dir).expect("create fixture dir");
-    fs::write(dir.join("event_frame.hex"), to_hex(&frame)).expect("write fixture");
+    assert_golden("event_frame.hex", &frame);
 
     assert!(frame.len() > 4 + 1 + 4);
 }
 
-/// fixture: `__identity` frame の reference bytes を書き出す。
+/// golden: `__identity` frame が reference bytes と byte 一致する。
 #[test]
-fn emit_identity_frame_fixture() {
+fn identity_frame_matches_golden() {
     let identity_json = br#"{"name":"test-server","version":"1.0.0","namespace":"club.chronista.test","channels":[],"metadata":null}"#;
     let msg = ProtocolMessage::new_encoded(
         0,
@@ -133,20 +170,18 @@ fn emit_identity_frame_fixture() {
     );
     let frame = encode_protocol_frame(msg);
 
-    let dir = fixture_dir();
-    fs::create_dir_all(&dir).expect("create fixture dir");
-    fs::write(dir.join("identity_frame.hex"), to_hex(&frame)).expect("write fixture");
+    assert_golden("identity_frame.hex", &frame);
 
     assert!(frame.len() > 4 + 1 + 4);
 }
 
-/// fixture: channel `open_ack` (= accept) frame の reference bytes を書き出す。
+/// golden: channel `open_ack` (= accept) frame が reference bytes と byte 一致する。
 ///
 /// Phase 6c: server が登録済み channel の open frame に対し返す ack。
 /// method `__channel_ack`、 msg_type Response、 payload `{}`、 id は open
 /// request の id を引き継ぐ (= ここでは 42)。
 #[test]
-fn emit_open_ack_frame_fixture() {
+fn open_ack_frame_matches_golden() {
     let msg = ProtocolMessage::new_encoded(
         42,
         "__channel_ack".to_string(),
@@ -155,19 +190,17 @@ fn emit_open_ack_frame_fixture() {
     );
     let frame = encode_protocol_frame(msg);
 
-    let dir = fixture_dir();
-    fs::create_dir_all(&dir).expect("create fixture dir");
-    fs::write(dir.join("open_ack_frame.hex"), to_hex(&frame)).expect("write fixture");
+    assert_golden("open_ack_frame.hex", &frame);
 
     assert!(frame.len() > 4 + 1 + 4);
     assert_eq!(frame[4], FRAME_TYPE_PROTOCOL);
 }
 
-/// fixture: channel open `nack` (= channel-not-found) frame の reference bytes。
+/// golden: channel open `nack` (= channel-not-found) frame が reference bytes と byte 一致する。
 ///
 /// Phase 6c: server が未登録 channel の open frame に対し返す Error frame。
 #[test]
-fn emit_open_nack_frame_fixture() {
+fn open_nack_frame_matches_golden() {
     let msg = ProtocolMessage::new_encoded(
         42,
         "__channel_ack".to_string(),
@@ -176,9 +209,7 @@ fn emit_open_nack_frame_fixture() {
     );
     let frame = encode_protocol_frame(msg);
 
-    let dir = fixture_dir();
-    fs::create_dir_all(&dir).expect("create fixture dir");
-    fs::write(dir.join("open_nack_frame.hex"), to_hex(&frame)).expect("write fixture");
+    assert_golden("open_nack_frame.hex", &frame);
 
     assert!(frame.len() > 4 + 1 + 4);
 }

@@ -84,26 +84,21 @@ fn bench_sustained_position_sync(c: &mut Criterion) {
                         .register_channel_datagram("position", 1, move |chan| {
                             let counter = Arc::clone(&server_echo_count_h);
                             async move {
-                                loop {
-                                    match chan.recv_event::<Transform>().await {
-                                        Ok(t) => {
-                                            counter.fetch_add(1, Ordering::Relaxed);
-                                            let _ = chan.send_event(&t).await;
-                                        }
-                                        Err(_) => break,
-                                    }
+                                while let Ok(t) = chan.recv_event::<Transform>().await {
+                                    counter.fetch_add(1, Ordering::Relaxed);
+                                    let _ = chan.send_event(&t).await;
                                 }
                             }
                         })
                         .await;
 
                     let handle = Arc::clone(&server)
-                        .spawn_listen_shared("[::1]:0")
+                        .listener("[::1]:0").spawn()
                         .await
-                        .expect("spawn_listen_shared");
+                        .expect("listener spawn");
                     let server_addr = handle.local_addr();
 
-                    let client = ProtocolClient::new_default().expect("client::new_default");
+                    let client = ProtocolClient::insecure_localhost().expect("insecure_localhost client");
                     client
                         .connect(&format!("[{}]:{}", server_addr.ip(), server_addr.port()))
                         .await

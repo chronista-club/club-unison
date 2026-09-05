@@ -1,4 +1,3 @@
-use super::TypeRegistry;
 use club_kdl::KdlDeserialize;
 use std::collections::HashMap;
 
@@ -339,7 +338,7 @@ impl Field {
             // `type="array"` = JSON array of any element (= items は untyped、
             // typed-element 構文 `array<T>` は別 Epic)。 これにより
             // `SchemaRegistry::validate_request` の Array arm + `mapping::field_type_to_schema`
-            // の Array branch が live になり、 docs/kdl-to-json-schema.md と一致する。
+            // の Array branch が live になり、 design/kdl-to-json-schema.md と一致する。
             "array" => FieldType::Array(Box::new(FieldType::Json)),
             // `type="map"` = JSON object with string keys → any values (= 慣用)、
             // typed-K/V 構文 `map<K, V>` は別 Epic。 これも対応する arm が live になる。
@@ -435,54 +434,4 @@ pub struct Constraints {
     pub min_length: Option<usize>,
     pub max_length: Option<usize>,
     pub pattern: Option<String>,
-}
-
-impl FieldType {
-    /// Get the Rust type representation
-    pub fn to_rust_type(&self, type_registry: &TypeRegistry) -> String {
-        match self {
-            FieldType::String => "String".to_string(),
-            FieldType::Int => "i64".to_string(),
-            FieldType::Float => "f64".to_string(),
-            FieldType::Bool => "bool".to_string(),
-            FieldType::Json => "serde_json::Value".to_string(),
-            FieldType::Array(inner) => format!("Vec<{}>", inner.to_rust_type(type_registry)),
-            FieldType::Map(key, value) => format!(
-                "HashMap<{}, {}>",
-                key.to_rust_type(type_registry),
-                value.to_rust_type(type_registry)
-            ),
-            FieldType::Enum(_values) => {
-                // This should be resolved to the actual enum name
-                "String".to_string()
-            }
-            FieldType::Object => "serde_json::Value".to_string(),
-            FieldType::Custom(name) => type_registry
-                .get_rust_type(name)
-                .unwrap_or_else(|| name.clone()),
-        }
-    }
-
-    /// Get the TypeScript type representation
-    pub fn to_typescript_type(&self, type_registry: &TypeRegistry) -> String {
-        match self {
-            FieldType::String => "string".to_string(),
-            FieldType::Int | FieldType::Float => "number".to_string(),
-            FieldType::Bool => "boolean".to_string(),
-            FieldType::Json | FieldType::Object => "any".to_string(),
-            FieldType::Array(inner) => format!("{}[]", inner.to_typescript_type(type_registry)),
-            FieldType::Map(_, value) => format!(
-                "Record<string, {}>",
-                value.to_typescript_type(type_registry)
-            ),
-            FieldType::Enum(values) => values
-                .iter()
-                .map(|v| format!("'{}'", v))
-                .collect::<Vec<_>>()
-                .join(" | "),
-            FieldType::Custom(name) => type_registry
-                .get_typescript_type(name)
-                .unwrap_or_else(|| name.clone()),
-        }
-    }
 }

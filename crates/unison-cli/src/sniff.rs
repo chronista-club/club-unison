@@ -11,8 +11,6 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::Args;
-use unison::ProtocolClient;
-use unison::network::quic::QuicClient;
 
 use crate::TrustMode;
 
@@ -35,13 +33,7 @@ pub struct SniffArgs {
 }
 
 pub async fn run(args: SniffArgs) -> Result<()> {
-    let quic = QuicClient::builder()
-        .trust_anchors(args.trust.to_anchors())
-        .build()
-        .context("QUIC client init failed")?;
-    let client = ProtocolClient::new(quic);
-
-    client.connect(&args.url).await.context("connect failed")?;
+    let client = crate::connect(&args.url, args.trust).await?;
     eprintln!(
         "connected to {} — opening channel '{}'",
         args.url, args.channel

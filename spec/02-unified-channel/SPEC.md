@@ -1,8 +1,8 @@
 # spec/02: Unison Protocol - Unified Channel プロトコル仕様
 
-**バージョン**: 2.2.0-draft (request の `description` / safety hint 属性 `readonly` `destructive` `idempotent` を追記)
-**最終更新**: 2026-07-14
-**ステータス**: Stable (v0.9.0 で 2.0.0 確定)、 additive 拡張中 (v0.10.0 datagram channel / request 属性)
+**バージョン**: 2.3.0 (旧 spec/03 の channel routing / UnisonChannel API / ConnectionContext を統合、 旧構文互換の記述を撤去)
+**最終更新**: 2026-09-05
+**ステータス**: Stable (v0.9.0 で 2.0.0 確定)、 additive 拡張中 (datagram channel / request 属性)
 
 ---
 
@@ -37,6 +37,39 @@ Unison Protocol の通信層は、**Unified Channel** アーキテクチャに�
 | ハンドラー登録 | `call_handlers` + `stream_handlers` + `channel_handlers` | **`channel_handlers` のみ** |
 | 型生成 | Service trait + `QuicBackedChannel<S,R>` | **`UnisonChannel` のみ** |
 
+### 1.2 アーキテクチャ上の位置づけ
+
+```mermaid
+graph TB
+    subgraph "アプリケーション層"
+        App[アプリケーションコード / channel handler]
+    end
+
+    subgraph "チャネル層"
+        UC[UnisonChannel&lt;C: Codec&gt;<br/>request + event 統合型]
+        DC[DatagramChannel&lt;C&gt;<br/>best-effort event]
+    end
+
+    subgraph "ストリーム層"
+        US[UnisonStream<br/>transport 非依存の双方向ストリーム]
+    end
+
+    subgraph "トランスポート層"
+        QUIC[raw QUIC (quinn)]
+        WT[WebTransport (wtransport)]
+    end
+
+    App --> UC
+    App --> DC
+    UC --> US
+    US --> QUIC
+    US --> WT
+    DC --> QUIC
+```
+
+`UnisonStream` は `UnisonConn` trait (= `accept_bi` / `open_bi` / datagram) の上に乗るため、
+raw QUIC と WebTransport のどちらの接続でも同じ `register_channel` ハンドラーが動く。
+
 ---
 
 ## 2. 設計思想
@@ -55,7 +88,7 @@ Unison Protocol の通信層は、**Unified Channel** アーキテクチャに�
 - **非同期優先**: async/await パターンを基盤
 - **チャネル統一**: 全通信パターンをチャネルで表現
 - **エラー耐性**: 包括的なエラーハンドリングと回復メカニズム
-- **トランスポート非依存**: QUIC、WebSocket、TCP 等に対応
+- **トランスポート非依存**: raw QUIC と WebTransport (= ブラウザ ingress) を同一 API で扱う
 
 ---
 
@@ -77,7 +110,7 @@ pub enum MessageType {
 ```mermaid
 graph LR
     subgraph "Request/Response パターン"
-        REQ["Request<br/>id=42, method='Query'"] --> RES["Response<br/>id=43, response_to=42"]
+        REQ["Request<br/>id=42, method='Query'"] --> RES["Response<br/>id=42 (= request と同じ id)"]
     end
 
     subgraph "Event パターン"
@@ -85,7 +118,7 @@ graph LR
     end
 
     subgraph "Error パターン"
-        ERR["Error<br/>id=44, response_to=42"]
+        ERR["Error<br/>id=42 (= request と同じ id)"]
     end
 ```
 
@@ -109,16 +142,17 @@ buffa-encoded bytes)。
 
 ### 3.3 Request/Response 相関
 
-メッセージの相関は `id` フィールドで行う。
+メッセージの相関は `ProtocolMessage.id` **だけ** で行う。 Response / Error は元の Request と
+**同じ `id`** を持ち、 受信側は pending map (`id → oneshot`) から該当 Request を解決する。
+packet header には相関用 field を持たない (= v2.0 で `response_to` 等の未使用 field を削除、
+[design/packet.md](../../design/packet.md) §2)。
 
-| 送信側 | id | response_to | 意味 |
-|--------|-----|-------------|------|
-| Request | > 0 | 0 | 応答を期待するリクエスト |
-| Response | > 0 | > 0 | リクエストに対する応答 |
-| Event | 0 | 0 | 一方向メッセージ（応答不要） |
-| Error | > 0 | > 0 | リクエストに対するエラー応答 |
-
-`response_to` フィールドは `UnisonPacketHeader` の一部であり、Response/Error は元の Request の `message_id` を `response_to` に設定する。
+| 送信側 | id | 意味 |
+|--------|-----|------|
+| Request | > 0 (送信側が生成、 接続内で一意) | 応答を期待するリクエスト |
+| Response | = Request の id | リクエストに対する応答 |
+| Error | = Request の id | リクエストに対するエラー応答 |
+| Event | 0 | 一方向メッセージ（応答不要） |
 
 ---
 
@@ -126,21 +160,31 @@ buffa-encoded bytes)。
 
 ### 4.1 基本型
 
-| 型 | 説明 | Rust マッピング | TypeScript マッピング |
-|------|-------------|--------------|---------------------|
-| `string` | UTF-8 テキスト | `String` | `string` |
-| `number` | 数値 | `f64` | `number` |
-| `int` | 整数 | `i64` | `number` |
-| `bool` | 真偽値 | `bool` | `boolean` |
-| `timestamp` | ISO-8601 日時 | `DateTime<Utc>` | `string` |
-| `json` | 任意の JSON | `serde_json::Value` | `any` |
-| `array` | アイテムのリスト | `Vec<T>` | `T[]` |
+parser (`parser::FieldType`) が認識する型。 runtime 検証 (`SchemaRegistry`) と
+MCP tool schema (`unison-mcp`、 [design/kdl-to-json-schema.md](../../design/kdl-to-json-schema.md)) が
+この表に従う。
+
+| 型 | 説明 | JSON Schema | 備考 |
+|------|-------------|--------------|------|
+| `string` | UTF-8 テキスト | `string` | |
+| `int` | 整数 | `integer` | |
+| `float` | 浮動小数 | `number` | |
+| `bool` | 真偽値 | `boolean` | |
+| `json` | 任意の JSON 値 | `{}` (any) | |
+| `object` | JSON object | `object` | key / value は untyped |
+| `array` | JSON array | `array` (items any) | `array<T>` の typed 要素は未対応 |
+| `map` | string key → any value | `object` (additionalProperties) | `map<K, V>` は未対応 |
+
+上記以外の型名 (例: `timestamp`) は **custom 型** として受理され、 検証も schema も
+「何でも通る」 (= any) になる。 意味付けは application 側の責務。 旧 docs にあった
+`number` は builtin ではない (= custom 扱いで untyped になる) ので、 数値は `int` / `float` を使う。
 
 ### 4.2 フィールド修飾子
 
-- `required=#true`: フィールドが必須（デフォルト: false）
-- `default=value`: オプションフィールドのデフォルト値
-- `description="text"`: フィールドドキュメンテーション
+- `required=#true`: フィールドが必須（デフォルト: false）。 runtime 検証で欠落を reject
+- `description="text"`: フィールドドキュメンテーション。 MCP tool schema に流れる
+- `default` / `min` / `max` / `min_length` / `max_length` / `pattern`: parser が保持するのみで
+  runtime 検証には使わない (= constraint validation は後続 phase)
 
 ### 4.3 プロトコル構造
 
@@ -270,33 +314,57 @@ protocol "creo-sync" version="2.0.0" {
 }
 ```
 
-### 4.5 旧構文との互換性（非推奨）
-
-旧 `send`/`recv`/`error` 構文は後方互換として認識されるが、新規スキーマでは非推奨とする。
-
-| 旧構文 | 新構文への変換 |
-|--------|-------------|
-| `send` + `recv` | `request` + `returns` |
-| `send` のみ | `event` |
-| `error` | `event`（エラー型として） |
-
 ---
 
 ## 5. メッセージフロー
 
-### 5.1 チャネル確立
+### 5.1 チャネル確立 (routing)
+
+チャネルは **1 channel = 1 QUIC bidi stream**。 開設側が新しい bidi stream を開き、 先頭に
+`__channel:{name}` の open frame を送る。 受け側は名前でハンドラーを引き、 同じ stream に
+ack / nack を 1 本返す。
 
 ```mermaid
 sequenceDiagram
-    participant C as Client
-    participant S as Server
+    participant C as Client (ProtocolClient)
+    participant S as Server (ProtocolServer)
 
-    C->>S: QUIC 接続確立
-    S->>C: ServerIdentity 送信（利用可能チャネル一覧）
+    C->>S: QUIC / WebTransport 接続確立
+    S->>C: __identity (Event) — ServerIdentity、 利用可能チャネル一覧 (spec/01 §5)
 
-    C->>S: open_bi() + __channel:query
-    Note over S: channel_handlers から<br/>"query" ハンドラーを取得
-    Note over C,S: チャネル確立完了
+    C->>S: open_bi() + ProtocolMessage { id: N, method: "__channel:query", type: Request }
+    alt handler あり
+        S->>C: __channel_ack { id: N, type: Response, payload: {} }
+        Note over C,S: チャネル確立、 以後この stream で request / event
+        S->>S: handler(ConnectionContext, UnisonStream) を spawn
+    else handler なし
+        S->>C: __channel_ack { id: N, type: Error, payload: {"error":"channel-not-found","channel":"query"} }
+        Note over C: open_channel() は HandlerNotFound で失敗
+    end
+```
+
+- `__identity` / `__channel:` / `__channel_ack` の `__` prefix は予約 method (application は使わない)
+- ack の `id` は open request の `id` と一致し、 client は自分の open と相関する
+- `from="server"` の channel は逆向きで、 server が `ConnectionContext::open_server_stream(name)`
+  で stream を開き、 client 側の `register_server_channel(name, handler)` に届く
+  ([design/server-initiated-stream.md](../../design/server-initiated-stream.md))
+- datagram channel (§8.5) は stream を開かず、 `channel_id` varint prefix で demux する
+
+#### API
+
+```rust
+// server: 名前 → handler。 handler は接続ごとに spawn され、 UnisonStream を直接扱う
+impl ProtocolServer {
+    pub async fn register_channel<F, Fut>(&self, name: &str, handler: F)
+    where
+        F: Fn(Arc<ConnectionContext>, UnisonStream) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<(), NetworkError>> + Send + 'static;
+}
+
+// client: 名前で開き、 ack を待って UnisonChannel を返す
+impl ProtocolClient {
+    pub async fn open_channel(&self, name: &str) -> Result<UnisonChannel, NetworkError>;
+}
 ```
 
 ### 5.2 Request/Response フロー
@@ -315,10 +383,10 @@ sequenceDiagram
 
     S->>S: リクエスト処理
 
-    S->>C: ProtocolMessage {<br/>  id: 43,<br/>  method: "Query",<br/>  msg_type: Response,<br/>  payload: {data: ...}<br/>}
+    S->>C: ProtocolMessage {<br/>  id: 42,<br/>  method: "Query",<br/>  msg_type: Response,<br/>  payload: {data: ...}<br/>}
 
     Note over C: recv ループが Response を受信
-    C->>C: response_to=42 の pending を解決
+    C->>C: id=42 の pending を解決
     C->>C: oneshot::Sender で呼び出し元に返却
 ```
 
@@ -359,86 +427,66 @@ sequenceDiagram
     C->>S: Request (id=42)
     S->>S: 処理失敗
 
-    S->>C: ProtocolMessage {<br/>  id: 43,<br/>  method: "Query",<br/>  msg_type: Error,<br/>  payload: {code: "NOT_FOUND", message: "..."}<br/>}
+    S->>C: ProtocolMessage {<br/>  id: 42,<br/>  method: "Query",<br/>  msg_type: Error,<br/>  payload: {code: "NOT_FOUND", message: "..."}<br/>}
 
     Note over C: pending id=42 を Error で解決
 ```
 
+### 5.5 UnisonChannel API
+
+`UnisonChannel<C: Codec = JsonCodec>` が request / event 両パターンを 1 型で提供する
+([channel.rs](../../crates/unison-protocol/src/network/channel.rs))。 内部で recv loop を
+1 本 spawn し、 `Response` / `Error` は `id` で pending の oneshot へ、 `Event` / `Request` は
+`recv()` の queue へ振り分ける。 接続断で loop が終わると残る pending は全て Error で解決される。
+
+```rust
+impl<C: Codec> UnisonChannel<C> {
+    pub fn new(stream: UnisonStream) -> Self;                       // handler / open_channel が呼ぶ
+    pub fn with_request_timeout(self, timeout: Duration) -> Self;   // 既定 30s
+    pub async fn request<Req: Encodable<C>, Resp: Decodable<C>>(&self, method: &str, req: &Req)
+        -> Result<Resp, NetworkError>;                              // id 生成 → pending → await
+    pub async fn send_event<T: Encodable<C>>(&self, method: &str, ev: &T) -> Result<(), NetworkError>;
+    pub async fn send_response<T: Encodable<C>>(&self, request_id: u64, method: &str, resp: &T)
+        -> Result<(), NetworkError>;                                // handler 側が Request に応える
+    pub async fn recv(&self) -> Result<ProtocolMessage, NetworkError>; // Event / Request を受ける
+    pub async fn send_raw(&self, data: &[u8]) -> Result<(), NetworkError>; // raw frame (0x01)、 codec / 圧縮なし
+    pub async fn recv_raw(&self) -> Result<Vec<u8>, NetworkError>;
+    pub async fn close(&self) -> Result<(), NetworkError>;
+}
+```
+
+`recv()` が `NetworkError::Protocol("Channel closed")` を返したら正常終端
+(`NetworkError::is_normal_close()` で判定できる)。
+
+### 5.6 ConnectionContext
+
+接続 1 本につき 1 つ生成され、 全 channel handler に `Arc<ConnectionContext>` で渡る
+([context.rs](../../crates/unison-protocol/src/network/context.rs))。
+
+| 項目 | 内容 |
+|------|------|
+| `connection_id: Uuid` | 接続の一意 ID |
+| `identity()` / `set_identity()` | 対向の `ServerIdentity` (client 側で `__identity` 受信後に set) |
+| `principal()` / `set_principal()` | 認証済み主体 ([design/connection-auth.md](../../design/connection-auth.md)) |
+| `open_server_stream(name)` | server 発 channel の stream を開く (`from="server"`) |
+| `register_channel` / `get_channel` / `remove_channel` / `channel_names` | この接続で開いた channel の handle 台帳 |
+
 ---
 
-## 6. コード生成
+## 6. スキーマの消費者
 
-### 6.1 Rust コード生成
+KDL スキーマは SSOT で、 本 crate の中では **runtime** に消費する。 型コードの生成は本 crate の
+責務ではない。
 
-KDL スキーマから以下の Rust コードが生成される:
-
-#### メッセージ構造体
-
-`request` と `event` の各フィールドから Serde 注釈付き構造体を生成。
-
-```rust
-// request "Query" から生成
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Query {
-    pub method: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub params: Option<serde_json::Value>,
-}
-
-// returns "Result" から生成
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QueryResult {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<serde_json::Value>,
-}
-
-// event "QueryError" から生成
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QueryError {
-    pub code: String,
-    pub message: String,
-}
-
-// event "MemoryEvent" から生成
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemoryEvent {
-    pub event_type: String,
-    pub memory_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub category: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub from: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timestamp: Option<String>,
-}
-```
-
-#### Connection 構造体
-
-プロトコル内の全チャネルを `UnisonChannel` としてまとめた接続構造体を生成。
-
-```rust
-/// コード生成で自動生成される接続構造体
-pub struct CreoSyncConnection {
-    pub query: UnisonChannel,
-    pub events: UnisonChannel,
-    pub control: UnisonChannel,
-    pub messaging: UnisonChannel,
-    pub urgent: UnisonChannel,
-}
-
-/// ConnectionBuilder トレイト
-#[async_trait]
-pub trait CreoSyncConnectionBuilder {
-    async fn build(client: &ProtocolClient) -> Result<CreoSyncConnection, NetworkError>;
-}
-```
-
-### 6.2 TypeScript コード生成（計画中）
-
-- **インターフェース定義**: 全型の TypeScript インターフェース
-- **クライアントクラス**: Promise ベースのクライアント実装
-- **型ガード**: 実行時型検証
+| 消費者 | 場所 | 何をするか |
+|--------|------|-----------|
+| `SchemaParser` | `parser/` | KDL → `ParsedSchema`。 datagram channel の `channel_id` 必須等の semantic 検証 |
+| `SchemaRegistry` | `network/schema_registry.rs` | request / event の payload を runtime 検証 (§4.1 の型、 `required`)。 schema 外の field は許容 (forward-compat) |
+| Discovery | `network/discovery.rs`、 [spec/04](../04-discovery/SPEC.md) | server が KDL 本文と hash を client に配る |
+| `DynamicProtocol` | `network/dynamic.rs` | 取得した KDL から型なしで channel を開く (= unison-mcp / CLI が使う) |
+| `unison-mcp` | `crates/unison-mcp` | request → MCP tool、 `returns` → `output_schema` ([design/kdl-to-json-schema.md](../../design/kdl-to-json-schema.md)) |
+| `club-kdl-codegen` | 別 crate | Rust / TypeScript の型生成 |
+| TS / Swift / Ruby client | `clients/` | wire 互換の client SDK ([design/typescript-client-api.md](../../design/typescript-client-api.md) 等) |
 
 ---
 
@@ -458,11 +506,11 @@ pub trait CreoSyncConnectionBuilder {
 
 ### 7.3 トランスポートセキュリティ
 
-- 本番使用には TLS（QUIC、WSS）を推奨
+- QUIC / WebTransport とも TLS 1.3 必須 (= transport が要求する)
 - 証明書検証とピン留め
 - 接続暗号化と完全性
 
-v0.7.0 以降、 TLS の cert / trust 戦略は **明示選択 API** (`CertSource` / `TrustAnchors`) で表現する。 v0.8.0 で **Builder API** (`QuicServer::builder()` / `QuicClient::builder()`) が推奨形となり、 v0.9.0 で旧 `configure_server()` / `configure_client()` の暗黙 default は削除された。 詳細は [`crate::network::cert`](../../crates/unison-protocol/src/network/cert.rs) / [`crate::network::trust`](../../crates/unison-protocol/src/network/trust.rs) と [`examples/builder_api.rs`](../../crates/unison-protocol/examples/builder_api.rs) 参照。
+v0.7.0 以降、 TLS の cert / trust 戦略は **明示選択 API** (`CertSource` / `TrustAnchors`) で表現する。 v0.8.0 で **Builder API** (`QuicServer::builder()` / `QuicClient::builder()`) が推奨形となり、 v0.9.0 で旧 `configure_server()` / `configure_client()` の暗黙 default は削除された。 詳細は [`crate::network::cert`](../../crates/unison-protocol/src/network/cert.rs) / [`crate::network::trust`](../../crates/unison-protocol/src/network/trust.rs) 参照。
 
 ---
 
@@ -485,7 +533,7 @@ v0.7.0 以降、 TLS の cert / trust 戦略は **明示選択 API** (`CertSourc
 - チャネル間の独立性により並行処理を最大化
 - 非同期ランタイム (tokio) を通じた同時リクエストハンドリング
 
-### 8.4 Wire format (v0.9.0 で buffa pivot 完了、 trait 抽象は v0.10+ 拡張用 hook)
+### 8.4 Wire format (v0.9.0 で buffa pivot 完了)
 
 v0.9.0 で wire format を **rkyv 0.7 archive** から **buffa (Anthropic 製 Protocol
 Buffers)** に切り替えた (= breaking change、 詳細は [`CHANGELOG.md`](../../CHANGELOG.md))。
@@ -511,19 +559,7 @@ Buffers)** に切り替えた (= breaking change、 詳細は [`CHANGELOG.md`](.
 
 旧 v0.8 系の rkyv 56-byte fixed header は v0.9.0 で **完全削除** された。
 
-#### `crate::wire::WireFormat` trait (拡張 hook)
-
-`crate::wire::WireFormat` trait は将来 (v0.10+) で **buffa 以外の wire format** を
-pluggable に追加する余地を確保するための表明。 v0.9.0 では具体実装は買わず、
-default の packet 経路 (= buffa direct) のみが稼働する。
-
-| 実装 | format | 想定用途 |
-|------|--------|---------|
-| (default) | buffa Protocol Buffers | v0.9.0+ の唯一の実装、 polyglot + schema evolution |
-| `MessagePackWire` (v0.10+) | MessagePack ([`zerompk`](https://crates.io/crates/zerompk) 等) | コンパクトな polyglot wire |
-| `CborWire` (v0.10+) | CBOR (`ciborium` 等) | IETF 標準互換 |
-
-設計詳細は [`design/wire-format.md`](../../design/wire-format.md) 参照。
+設計詳細は [`design/wire-format.md`](../../design/wire-format.md) と [`design/packet.md`](../../design/packet.md) 参照。
 
 ### 8.5 Datagram channel (v0.10.0 で channel API 統合完了)
 
@@ -615,7 +651,6 @@ v0.10.0 でも残存 (= channel API の制約に当てはまらない caller の
 
 - 同一 KDL channel 内の mixed backend (= stream + datagram event 共存) を許容化検討
 - Datagram channel に subscription model 導入 (= server-side filter)
-- buffa 以外の wire format (= MessagePack / CBOR) backend pluggable
 
 ---
 
@@ -628,10 +663,10 @@ v0.10.0 でも残存 (= channel API の制約に当てはまらない caller の
 
 ### 9.2 後方互換性
 
-- 旧 `send`/`recv` KDL 構文はパーサーが認識し、内部で `request`/`event` に変換
-- 旧 `service`/`method` 構文は非推奨警告を出力
-- 新しいオプションフィールドの追加: 互換
-- 新しい `request`/`event` の追加: 互換
+- 旧 `service` / `method` / `send` / `recv` 構文は **認識しない** (parse error)。 移行は
+  [guides/migration.md](../../guides/migration.md)
+- 新しいオプションフィールドの追加: 互換 (受信側は schema 外 field を許容)
+- 新しい `request` / `event` の追加: 互換
 
 ### 9.3 前方互換性
 
@@ -660,12 +695,20 @@ v0.10.0 でも残存 (= channel API の制約に当てはまらない caller の
 
 ### 仕様書
 
-- [spec/01: コアコンセプト](../01-core-concept/SPEC.md) - トランスポート層（QUIC）
-- [spec/03: チャネル仕様](../03-stream-channels/SPEC.md) - UnisonChannel 仕様
+- [spec/01: コアコンセプト](../01-core-concept/SPEC.md) - トランスポート層（QUIC）、 ServerIdentity
+- [spec/04: Discovery](../04-discovery/SPEC.md) - KDL の runtime 配布
 
 ### 設計ドキュメント
 
+- [design/wire-format.md](../../design/wire-format.md) / [design/packet.md](../../design/packet.md) - wire layout
+- [design/datagram-channel.md](../../design/datagram-channel.md) - datagram channel
+- [design/server-initiated-stream.md](../../design/server-initiated-stream.md) - `from="server"` channel
+- [design/kdl-to-json-schema.md](../../design/kdl-to-json-schema.md) - 型表の JSON Schema 写像
 - [KDL スキーマ例](../../schemas/) - 実際のスキーマ定義
+
+### ガイド
+
+- [guides/channel-guide.md](../../guides/channel-guide.md) - Rust 側 UnisonChannel API の使い方
 
 ### 参考資料
 
@@ -674,6 +717,6 @@ v0.10.0 でも残存 (= channel API の制約に当てはまらない caller の
 
 ---
 
-**仕様バージョン**: 2.2.0-draft
-**最終更新**: 2026-07-14
-**ステータス**: Draft
+**仕様バージョン**: 2.3.0
+**最終更新**: 2026-09-05
+**ステータス**: Stable

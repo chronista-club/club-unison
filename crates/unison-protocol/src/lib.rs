@@ -14,19 +14,29 @@
 //! ## クイックスタート
 //!
 //! ```rust,no_run
-//! # use anyhow::Result;
 //! # #[tokio::main]
-//! # async fn main() -> Result<()> {
-//! use unison::{UnisonProtocol, NetworkError};
+//! # async fn main() -> anyhow::Result<()> {
+//! use unison::{ProtocolServer, UnisonChannel};
+//! use unison::network::MessageType;
 //!
-//! // プロトコルスキーマを読み込み
-//! let mut protocol = UnisonProtocol::new();
-//! // protocol.load_schema(include_str!("../schemas/ping_pong.kdl"))?;
+//! // サーバーを作り、 channel handler を登録する。 handler は接続ごとに spawn される。
+//! let server = ProtocolServer::with_identity("demo", "1.0.0", "example");
+//! server
+//!     .register_channel("ping", |_ctx, stream| async move {
+//!         let ch = UnisonChannel::new(stream);
+//!         while let Ok(msg) = ch.recv().await {
+//!             if msg.msg_type == MessageType::Request {
+//!                 ch.send_response(msg.id, &msg.method, &serde_json::json!({"reply": "pong"}))
+//!                     .await?;
+//!             }
+//!         }
+//!         Ok(())
+//!     })
+//!     .await;
 //!
-//! // サーバーを作成し、チャネルハンドラーを登録
-//! let server = protocol.create_server();
-//! // server.register_channel("ping", |ctx, stream| async { Ok(()) }).await;
-//! // server.listen("[::1]:8080").await?;
+//! // background で listen し、 handle で shutdown できる
+//! let handle = std::sync::Arc::new(server).listener("[::1]:8080").spawn().await?;
+//! handle.shutdown().await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -48,9 +58,6 @@ pub mod parser;
 // フレーム層モジュール
 pub mod packet;
 
-// Wire format pluggable hook (v0.9.0 で導入、 v0.10+ で具体実装拡張)
-pub mod wire;
-
 // buffa-generated protocol types (v0.9.0 buffa pivot)
 //
 // build.rs が `proto/protocol.proto` を compile し `$OUT_DIR/protocol.{mod,rs,__view.rs,...}` を出力。
@@ -64,10 +71,6 @@ pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/protocol.mod.rs"));
 }
 
-// よく使用される型と関数のprelude
-pub mod prelude;
-
-// preludeの型を内部で使用
 use parser::{ParseError as UnisonParseError, ParsedSchema, SchemaParser};
 
 // よく使用されるトレイトとクライアント/サーバーの再エクスポート
@@ -100,7 +103,7 @@ impl UnisonProtocol {
 
     /// 新しいUnisonクライアントを作成
     pub fn create_client(&self) -> Result<ProtocolClient, anyhow::Error> {
-        ProtocolClient::new_default()
+        ProtocolClient::insecure_localhost()
     }
 
     /// 新しいUnisonサーバーを作成

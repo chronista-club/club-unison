@@ -22,6 +22,7 @@
 
 use anyhow::Result;
 use serde_json::{Value, json};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
 use tracing::{Level, info};
@@ -72,7 +73,7 @@ async fn start_echo_server_on(bind: &str) -> Result<(ServerHandle, ServerAddr)> 
         })
         .await;
 
-    let handle = server.spawn_listen(bind).await?;
+    let handle = Arc::new(server).listener(bind).spawn().await?;
     let local = handle.local_addr();
     info!(
         "dualstack echo server listening on {} (bind={})",
@@ -133,14 +134,14 @@ async fn assert_ping_pong(client: &ProtocolClient) -> Result<()> {
 // ─────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn ipv6_loopback_roundtrip() -> Result<()> {
     init_tracing();
 
     let (handle, addr) = start_echo_server_on("[::1]:0").await?;
     assert!(handle.local_addr().is_ipv6(), "[::1] should bind as IPv6");
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr.connect_str()).await?;
     assert!(client.is_connected().await);
 
@@ -156,7 +157,7 @@ async fn ipv6_loopback_roundtrip() -> Result<()> {
 // ─────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn ipv4_loopback_roundtrip() -> Result<()> {
     init_tracing();
 
@@ -166,7 +167,7 @@ async fn ipv4_loopback_roundtrip() -> Result<()> {
         "127.0.0.1 should bind as IPv4"
     );
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr.connect_str()).await?;
     assert!(client.is_connected().await);
 
@@ -185,7 +186,7 @@ async fn ipv4_loopback_roundtrip() -> Result<()> {
 /// それぞれ別 family のサーバーへ接続して round-trip する。
 /// V4→`0.0.0.0:0` / V6→`[::]:0` の per-family client bind が同居で破綻しないことを保証。
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn mixed_client_reaches_v6_and_v4() -> Result<()> {
     init_tracing();
 
@@ -195,13 +196,13 @@ async fn mixed_client_reaches_v6_and_v4() -> Result<()> {
     assert!(v4_handle.local_addr().is_ipv4());
 
     // IPv6 サーバーへ
-    let v6_client = ProtocolClient::new_default()?;
+    let v6_client = ProtocolClient::insecure_localhost()?;
     v6_client.connect(&v6_addr.connect_str()).await?;
     assert!(v6_client.is_connected().await, "v6 client should connect");
     assert_ping_pong(&v6_client).await?;
 
     // IPv4 サーバーへ (同一プロセス、別 family)
-    let v4_client = ProtocolClient::new_default()?;
+    let v4_client = ProtocolClient::insecure_localhost()?;
     v4_client.connect(&v4_addr.connect_str()).await?;
     assert!(v4_client.is_connected().await, "v4 client should connect");
     assert_ping_pong(&v4_client).await?;
@@ -218,7 +219,7 @@ async fn mixed_client_reaches_v6_and_v4() -> Result<()> {
 // ─────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn ipv6_unspecified_bind_is_v6() -> Result<()> {
     init_tracing();
 
@@ -228,7 +229,7 @@ async fn ipv6_unspecified_bind_is_v6() -> Result<()> {
         "[::] unspecified bind should listen as IPv6"
     );
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr.connect_str()).await?; // -> [::1]:port
     assert!(client.is_connected().await);
     assert_ping_pong(&client).await?;
@@ -243,7 +244,7 @@ async fn ipv6_unspecified_bind_is_v6() -> Result<()> {
 // ─────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn ipv4_unspecified_bind_is_v4() -> Result<()> {
     init_tracing();
 
@@ -253,7 +254,7 @@ async fn ipv4_unspecified_bind_is_v4() -> Result<()> {
         "0.0.0.0 unspecified bind should listen as IPv4"
     );
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr.connect_str()).await?; // -> 127.0.0.1:port
     assert!(client.is_connected().await);
     assert_ping_pong(&client).await?;

@@ -34,7 +34,7 @@ QUIC トランスポート上で**チャネル指向**の通信を実現し、�
 | **Channel 指向** | 各チャネルが独立した QUIC ストリームに 1:1 マッピング |
 | **型安全** | KDL スキーマから Rust/TypeScript コードを自動生成 |
 | **Identity** | 接続時に ServerIdentity を交換し、利用可能なチャネルを動的に通知 |
-| **ゼロコピーフレーム** | rkyv + zstd 圧縮による効率的なバイナリフォーマット |
+| **polyglot な wire** | buffa (protobuf) header + zstd 圧縮の可変長フレーム。 TS / Swift / Ruby client と byte 互換 |
 
 ### 1.2 読者対象
 
@@ -352,34 +352,23 @@ sequenceDiagram
 
 ### 7.1 UnisonPacket 構造
 
-rkyv（ゼロコピーシリアライゼーション）ベースのバイナリフレームフォーマット。
+buffa (Anthropic 製 Protocol Buffers) で encode した可変長 header と payload を、 先頭の
+u32 BE length prefix で区切るフレーム。 v0.9.0 で rkyv 固定長 header から移行した。
 
-```mermaid
-graph TB
-    subgraph "UnisonPacket"
-        direction TB
-
-        HEADER["UnisonPacketHeader<br/>56 bytes (rkyv serialized)"]
-        PAYLOAD["Payload<br/>可変長 (rkyv serialized, zstd 圧縮可)"]
-    end
-
-    subgraph "ヘッダーフィールド"
-        direction TB
-        V["version: u8"]
-        PT["packet_type: u8"]
-        F["flags: u16"]
-        PL["payload_length: u32"]
-        CL["compressed_length: u32"]
-        SN["sequence_number: u64"]
-        TS["timestamp: u64"]
-        SID["stream_id: u64"]
-        MID["message_id: u64"]
-        RT["response_to: u64"]
-    end
-
-    HEADER --> V
-    HEADER --> PT
+```text
+[u32 BE header_len] [buffa-encoded PacketHeader] [payload bytes (may be zstd compressed)]
 ```
+
+| header field | 意味 |
+|---|---|
+| `version: u8` | protocol version (現在 0x01)、 不一致は拒否 |
+| `packet_type: u8` | `Data` / `Control` |
+| `flags: u16` | `COMPRESSED` (bit 0) |
+| `payload_length: u32` / `compressed_length: u32` | 圧縮前後の payload 長 (0 = 非圧縮) |
+| `timestamp: u64` | Unix ns |
+
+request / response の相関は header ではなく `ProtocolMessage.id` で行う (spec/02 §3.3)。
+詳細は [design/packet.md](../../design/packet.md) と [design/wire-format.md](../../design/wire-format.md)。
 
 ### 7.2 ProtocolMessage
 
@@ -388,7 +377,7 @@ pub struct ProtocolMessage {
     pub id: u64,             // メッセージ ID
     pub method: String,      // メソッド名 (例: "Query", "__channel:events")
     pub msg_type: MessageType, // メッセージ種別
-    pub payload: String,     // JSON ペイロード
+    pub payload: Vec<u8>,    // Codec (JsonCodec / ProtoCodec) で encode した bytes
 }
 ```
 
@@ -446,7 +435,6 @@ pub struct ProtocolMessage {
 ### 仕様書
 
 - [spec/02: Unified Channel プロトコル](../02-unified-channel/SPEC.md) -- KDL スキーマとメッセージフロー
-- [spec/03: チャネル仕様](../03-stream-channels/SPEC.md) -- UnisonChannel 仕様
 
 ### 設計ドキュメント
 

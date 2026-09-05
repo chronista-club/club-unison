@@ -23,16 +23,16 @@ fn init_tracing() {
 
 /// connect 成功時に `Connected { remote_addr }` event が fire される
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_client_event_connected_on_connect() -> Result<()> {
     init_tracing();
 
     let server = Arc::new(ProtocolServer::new());
-    let handle = Arc::clone(&server).spawn_listen_shared("[::1]:0").await?;
+    let handle = Arc::clone(&server).listener("[::1]:0").spawn().await?;
     let server_addr = handle.local_addr();
     info!("Server bound to {}", server_addr);
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     let mut rx = client.subscribe_connection_events();
 
     // 接続 (= subscribe は接続 *前* に行ったので Connected を取れる)
@@ -60,15 +60,15 @@ async fn test_medium_client_event_connected_on_connect() -> Result<()> {
 
 /// 明示 disconnect で `Disconnected { reason }` event が fire される
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_client_event_disconnected_on_explicit_disconnect() -> Result<()> {
     init_tracing();
 
     let server = Arc::new(ProtocolServer::new());
-    let handle = Arc::clone(&server).spawn_listen_shared("[::1]:0").await?;
+    let handle = Arc::clone(&server).listener("[::1]:0").spawn().await?;
     let server_addr = handle.local_addr();
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     let mut rx = client.subscribe_connection_events();
     client
         .connect(&format!("[{}]:{}", server_addr.ip(), server_addr.port()))
@@ -104,15 +104,15 @@ async fn test_medium_client_event_disconnected_on_explicit_disconnect() -> Resul
 
 /// Server shutdown による drop detection で Disconnected event が fire される
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_client_event_disconnected_on_server_shutdown() -> Result<()> {
     init_tracing();
 
     let server = Arc::new(ProtocolServer::new());
-    let handle = Arc::clone(&server).spawn_listen_shared("[::1]:0").await?;
+    let handle = Arc::clone(&server).listener("[::1]:0").spawn().await?;
     let server_addr = handle.local_addr();
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     let mut rx = client.subscribe_connection_events();
     client
         .connect(&format!("[{}]:{}", server_addr.ip(), server_addr.port()))
@@ -145,15 +145,15 @@ async fn test_medium_client_event_disconnected_on_server_shutdown() -> Result<()
 
 /// 複数 subscriber が同 event を独立に受け取れる (= broadcast 性質、 integration version)
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_client_event_multiple_subscribers() -> Result<()> {
     init_tracing();
 
     let server = Arc::new(ProtocolServer::new());
-    let handle = Arc::clone(&server).spawn_listen_shared("[::1]:0").await?;
+    let handle = Arc::clone(&server).listener("[::1]:0").spawn().await?;
     let server_addr = handle.local_addr();
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     let mut rx_a = client.subscribe_connection_events();
     let mut rx_b = client.subscribe_connection_events();
 

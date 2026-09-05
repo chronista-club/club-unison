@@ -81,23 +81,20 @@ fn bench_datagram_channel_burst(c: &mut Criterion) {
                         let server = Arc::new(ProtocolServer::new());
                         server
                             .register_channel_datagram("position", 1, |chan| async move {
-                                loop {
-                                    match chan.recv_event::<Payload>().await {
-                                        Ok(p) => {
-                                            let _ = chan.send_event(&p).await;
-                                        }
-                                        Err(_) => break,
-                                    }
+                                while let Ok(p) = chan.recv_event::<Payload>().await {
+                                    let _ = chan.send_event(&p).await;
                                 }
                             })
                             .await;
                         let handle = Arc::clone(&server)
-                            .spawn_listen_shared("[::1]:0")
+                            .listener("[::1]:0")
+                            .spawn()
                             .await
-                            .expect("spawn_listen_shared");
+                            .expect("listener spawn");
                         let server_addr = handle.local_addr();
 
-                        let client = ProtocolClient::new_default().expect("client::new_default");
+                        let client = ProtocolClient::insecure_localhost()
+                            .expect("insecure_localhost client");
                         client
                             .connect(&format!("[{}]:{}", server_addr.ip(), server_addr.port()))
                             .await

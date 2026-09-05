@@ -10,11 +10,10 @@ use super::channel::UnisonChannel;
 use super::context::ConnectionContext;
 use super::datagram_channel::DatagramChannel;
 use super::datagram_dispatcher::DatagramDispatcher;
+use super::frame::{CHANNEL_ACK_METHOD, FRAME_TYPE_PROTOCOL, read_typed_frame, write_typed_frame};
 use super::identity::ServerIdentity;
-use super::quic::{
-    CHANNEL_ACK_METHOD, FRAME_TYPE_PROTOCOL, QuicClient, UnisonStream, read_typed_frame,
-    write_typed_frame,
-};
+use super::quic::QuicClient;
+use super::stream::UnisonStream;
 use super::{MessageType, NetworkError, ProtocolMessage};
 
 /// Client side connection event (v0.10.0 で追加、 [`ProtocolServer::ConnectionEvent`] と parallel)
@@ -101,16 +100,15 @@ impl ProtocolClient {
         }
     }
 
-    /// Create a new client with QUIC transport.
+    /// **サーバー証明書を検証しない** client を構築する (= dev / test 用)。
     ///
-    /// **注意**: この constructor は [`QuicClient::new`] を経由し、証明書検証を
-    /// 行わない insecure な client を構築する (構築時に `tracing::warn!` が出る)。
-    /// production では [`QuicClient::builder`] + [`ProtocolClient::new`] で
-    /// 明示的に [`TrustAnchors`] を指定すること。
+    /// [`QuicClient::insecure_localhost`] を transport に使う。 接続先は loopback に
+    /// 制限される。 それ以外へ繋ぐ、 あるいは検証したい場合は
+    /// [`QuicClient::builder`] で [`TrustAnchors`] を明示し、 [`new`](Self::new) に渡す。
     ///
     /// [`TrustAnchors`]: crate::network::trust::TrustAnchors
-    pub fn new_default() -> Result<Self> {
-        let transport = QuicClient::new()?;
+    pub fn insecure_localhost() -> Result<Self> {
+        let transport = QuicClient::insecure_localhost()?;
         let (event_tx, _) = broadcast::channel(16);
         Ok(Self {
             transport: Arc::new(transport),
@@ -173,10 +171,16 @@ impl ProtocolClient {
     /// `open_ack` を待つことで、 fire-and-forget だった旧挙動の「accept されたか
     /// 分からない」問題を解消する。
     pub async fn open_channel(&self, channel_name: &str) -> Result<UnisonChannel, NetworkError> {
-        let connection_guard = self.transport.connection().read().await;
-        let connection = connection_guard
-            .as_ref()
-            .ok_or(NetworkError::NotConnected)?;
+        // Connection を clone して guard は即座に手放す。 以降 open_bi / ack 待ちで
+        // await するため、 guard を握ったままだと server の応答を待つ間ずっと
+        // `disconnect()` の write lock が取れなくなる (= open_datagram_channel_with と同形)。
+        let connection = {
+            let connection_guard = self.transport.connection().read().await;
+            connection_guard
+                .as_ref()
+                .ok_or(NetworkError::NotConnected)?
+                .clone()
+        };
 
         // 新しい双方向ストリームを開く
         let (mut send_stream, mut recv_stream) = connection
@@ -226,12 +230,9 @@ impl ProtocolClient {
         }
 
         // UnisonStreamを作成してUnisonChannelでラップ
-        // quinn のストリームを transport 非依存の trait object へ box する。
-        let conn_arc: Arc<dyn super::conn::UnisonConn> = Arc::new(connection.clone());
         let stream = UnisonStream::from_streams(
             request_id,
             format!("__channel:{}", channel_name),
-            conn_arc,
             Box::new(send_stream),
             Box::new(recv_stream),
         );
@@ -517,7 +518,7 @@ where
             frame_type
         )));
     }
-    let frame = super::ProtocolFrame::from_bytes(&frame_bytes)
+    let frame = crate::packet::UnisonPacket::from_bytes(&frame_bytes)
         .map_err(|e| NetworkError::Protocol(format!("Failed to decode open_ack frame: {}", e)))?;
     let msg = ProtocolMessage::from_frame(&frame)
         .map_err(|e| NetworkError::Protocol(format!("Failed to parse open_ack: {}", e)))?;
@@ -538,7 +539,7 @@ mod tests {
     /// event が無ければ recv が pending (= 別 task で連動して event を待つ pattern を担保)
     #[tokio::test]
     async fn subscribe_before_connect_receives_subsequent_events() {
-        let client = ProtocolClient::new_default().unwrap();
+        let client = ProtocolClient::insecure_localhost().unwrap();
         let mut rx = client.subscribe_connection_events();
 
         // 手動で event を publish (= 実 connect なしで broadcast 動作を確認)
@@ -563,7 +564,7 @@ mod tests {
     /// 複数 subscriber が同 event を独立に受信できる (= broadcast 性質)
     #[tokio::test]
     async fn multiple_subscribers_receive_same_event() {
-        let client = ProtocolClient::new_default().unwrap();
+        let client = ProtocolClient::insecure_localhost().unwrap();
         let mut rx_a = client.subscribe_connection_events();
         let mut rx_b = client.subscribe_connection_events();
 
@@ -586,7 +587,7 @@ mod tests {
     #[tokio::test]
     async fn recv_skip_lagged_skips_lag_returns_latest() {
         // capacity 16 を超えて publish → Lagged を生成
-        let client = ProtocolClient::new_default().unwrap();
+        let client = ProtocolClient::insecure_localhost().unwrap();
         let mut rx = client.subscribe_connection_events();
 
         for i in 0..20 {
@@ -607,7 +608,7 @@ mod tests {
     /// Receiver の inner() は &mut broadcast::Receiver を返す (= server 側 parallel API)
     #[tokio::test]
     async fn receiver_inner_exposes_broadcast_receiver() {
-        let client = ProtocolClient::new_default().unwrap();
+        let client = ProtocolClient::insecure_localhost().unwrap();
         let mut rx = client.subscribe_connection_events();
         // inner() の型が broadcast::Receiver であることを compile-check
         let _inner: &mut broadcast::Receiver<ClientConnectionEvent> = rx.inner();

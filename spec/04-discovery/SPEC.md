@@ -390,12 +390,10 @@ let result = proto.call("memory.search", json!({ "query": "..." })).await?;
 
 - [spec/01: Core Concept](../01-core-concept/SPEC.md) — ServerIdentity (§5)、 QUIC 通信
 - [spec/02: Unified Channel](../02-unified-channel/SPEC.md) — KDL 構文、 MessageType、 channel mechanics
-- [spec/03: Stream Channels](../03-stream-channels/SPEC.md) — UnisonChannel API、 routing
 
 ### Schema
 
 - [schemas/discovery.kdl](../../schemas/discovery.kdl) — 本 channel の KDL 定義 (SSOT)
-- [schemas/hierophant.kdl](../../schemas/hierophant.kdl) — KDL 記法 reference (parallel example)
 - [schemas/ping_pong.kdl](../../schemas/ping_pong.kdl) — minimal KDL reference
 
 ### 実装 (= 本 spec の implementation 対応箇所、 Hailing-α P1-P3c で実装)

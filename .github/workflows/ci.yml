@@ -55,12 +55,11 @@ jobs:
           key: clippy-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: clippy-
 
-      - name: Run clippy (lib)
-        run: cargo clippy --lib --workspace -- -D warnings
-
-      - name: Run clippy (tests)
-        run: cargo clippy --tests --workspace -- -D warnings
-        continue-on-error: true
+      # lib / bins / tests / benches / examples を全部同じ厳しさで見る。
+      # 以前は --lib だけが -D warnings で、 tests は continue-on-error だった
+      # ため、 test / bench / bin の警告が無期限に溜まっていた。
+      - name: Run clippy (all targets)
+        run: cargo clippy --all-targets --workspace -- -D warnings
 
   # ===========================================
   # テスト
@@ -99,8 +98,14 @@ jobs:
         if: runner.os == 'macOS'
         run: echo "RUSTFLAGS=-C symbol-mangling-version=v0" >> "$GITHUB_ENV"
 
-      - name: Run tests (lib unit + integration)
+      - name: Run tests (lib unit + Small)
         run: cargo test --workspace --verbose
+
+      # 実 QUIC connection を張る Medium test。 `#[ignore]` 付きなので上の
+      # ステップでは走らない。 これを回さないと QUIC lifecycle / identity
+      # handshake / datagram / mesh trust / dial race の回帰が CI をすり抜ける。
+      - name: Run tests (Medium, 実 QUIC)
+        run: cargo test --workspace --verbose -- --ignored
 
   # ===========================================
   # 依存関係チェック（ライセンス・セキュリティ）
@@ -172,6 +177,41 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+  # ===========================================
+  # Ruby クライアント (magnus native extension)
+  # ===========================================
+  # ext/unison_client は crates.io の club-unison に依存する gem なので、
+  # workspace の変更ではなく **公開済み crate に対して** gem がビルド・動作する
+  # ことを見る job。 rb-sys は Ruby ABI を要求するため素の `cargo clippy` は
+  # 通らず、 `rake compile` (= rb_sys が Ruby env を注入) が唯一のビルド経路。
+  # test/e2e/ は `unison` バイナリが要るので default の `rake test` からは外れ、
+  # ここでは走らない。
+  ruby:
+    name: Ruby Client
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/ruby
+    steps:
+      - uses: actions/checkout@v4
+
+      # club-unison の build script (buffa-build) が protoc を要求する。
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+          working-directory: clients/ruby
+
+      - name: Compile native extension and run tests
+        run: bundle exec rake test
 
   # ===========================================
   # クロス言語 E2E（TS SDK ↔ Rust server）

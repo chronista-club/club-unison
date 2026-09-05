@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use super::protocol_cache::ProtocolCache;
-use super::quic::UnisonStream;
-use super::{MessageType, NetworkError, UnisonChannel};
+use super::stream::UnisonStream;
+use super::{NetworkError, UnisonChannel};
 
 /// `unison.discovery` channel name (= `schemas/discovery.kdl` 側と一致)
 pub const DISCOVERY_CHANNEL_NAME: &str = "unison.discovery";
@@ -89,48 +89,34 @@ pub async fn handle_channel(
     stream: UnisonStream,
 ) -> Result<(), NetworkError> {
     let channel = UnisonChannel::new(stream);
-    loop {
-        match channel.recv().await {
-            Ok(msg) if msg.msg_type == MessageType::Request => {
-                if msg.method == GET_PROTOCOL_METHOD {
-                    // format は v0.1.0 では未使用 (= 同じ ProtocolDocument を返す、
-                    // future hint として field は受理するだけ)。 malformed payload は
-                    // default `"kdl"` 扱いで debug log 出すが reject しない (= 寛容)。
-                    if msg.payload_as_value().is_err() {
-                        tracing::debug!(
-                            "discovery: GetProtocol payload non-JSON, treating as default"
-                        );
-                    }
-
-                    let doc = ProtocolDocument::from_cache(&cache);
-                    let payload = serde_json::to_value(&doc)?;
-                    channel
-                        .send_response(msg.id, GET_PROTOCOL_METHOD, &payload)
-                        .await?;
-
-                    tracing::debug!(
-                        version = %cache.version,
-                        hash = %&cache.hash[..16.min(cache.hash.len())],
-                        "discovery: served GetProtocol"
-                    );
-                } else {
-                    tracing::warn!(
-                        method = %msg.method,
-                        "discovery: unknown request method, ignoring (= forward-compat)"
-                    );
-                }
+    while let Some(msg) = super::channel::next_request(&channel, DISCOVERY_CHANNEL_NAME).await? {
+        if msg.method == GET_PROTOCOL_METHOD {
+            // format は v0.1.0 では未使用 (= 同じ ProtocolDocument を返す、
+            // future hint として field は受理するだけ)。 malformed payload は
+            // default `"kdl"` 扱いで debug log 出すが reject しない (= 寛容)。
+            if msg.payload_as_value().is_err() {
+                tracing::debug!("discovery: GetProtocol payload non-JSON, treating as default");
             }
-            Ok(msg) => {
-                tracing::debug!(
-                    method = %msg.method,
-                    msg_type = ?msg.msg_type,
-                    "discovery: ignored non-request"
-                );
-            }
-            Err(e) if e.is_normal_close() => return Ok(()),
-            Err(e) => return Err(e),
+
+            let doc = ProtocolDocument::from_cache(&cache);
+            let payload = serde_json::to_value(&doc)?;
+            channel
+                .send_response(msg.id, GET_PROTOCOL_METHOD, &payload)
+                .await?;
+
+            tracing::debug!(
+                version = %cache.version,
+                hash = %&cache.hash[..16.min(cache.hash.len())],
+                "discovery: served GetProtocol"
+            );
+        } else {
+            tracing::warn!(
+                method = %msg.method,
+                "discovery: unknown request method, ignoring (= forward-compat)"
+            );
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]

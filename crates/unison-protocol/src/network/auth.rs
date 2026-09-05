@@ -37,8 +37,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use super::context::{ConnectionContext, Principal};
-use super::quic::UnisonStream;
-use super::{MessageType, NetworkError, UnisonChannel};
+use super::stream::UnisonStream;
+use super::{NetworkError, UnisonChannel};
 
 /// `unison.auth` channel name (= `schemas/auth.kdl` 側と一致)
 pub const AUTH_CHANNEL_NAME: &str = "unison.auth";
@@ -88,71 +88,59 @@ pub async fn handle_channel(
     stream: UnisonStream,
 ) -> Result<(), NetworkError> {
     let channel = UnisonChannel::new(stream);
-    loop {
-        match channel.recv().await {
-            Ok(msg) if msg.msg_type == MessageType::Request => {
-                if msg.method == AUTHENTICATE_METHOD {
-                    let credential = match msg.payload_as_value() {
-                        Ok(value) => match serde_json::from_value::<AuthenticateRequest>(value) {
-                            Ok(req) => req.credential,
-                            Err(e) => {
-                                // malformed payload は認証拒否 (= verifier に渡さない)。
-                                tracing::debug!(error = %e, "auth: malformed Authenticate payload");
-                                channel
-                                    .send_response(
-                                        msg.id,
-                                        AUTHENTICATE_METHOD,
-                                        &serde_json::to_value(AuthResult { ok: false })?,
-                                    )
-                                    .await?;
-                                continue;
-                            }
-                        },
-                        Err(e) => {
-                            tracing::debug!(error = %e, "auth: non-JSON Authenticate payload");
-                            channel
-                                .send_response(
-                                    msg.id,
-                                    AUTHENTICATE_METHOD,
-                                    &serde_json::to_value(AuthResult { ok: false })?,
-                                )
-                                .await?;
-                            continue;
-                        }
-                    };
-
-                    let principal = verifier(credential).await;
-                    let ok = principal.is_some();
-                    if let Some(p) = principal {
-                        ctx.set_principal(p).await;
+    while let Some(msg) = super::channel::next_request(&channel, AUTH_CHANNEL_NAME).await? {
+        if msg.method == AUTHENTICATE_METHOD {
+            let credential = match msg.payload_as_value() {
+                Ok(value) => match serde_json::from_value::<AuthenticateRequest>(value) {
+                    Ok(req) => req.credential,
+                    Err(e) => {
+                        // malformed payload は認証拒否 (= verifier に渡さない)。
+                        tracing::debug!(error = %e, "auth: malformed Authenticate payload");
+                        channel
+                            .send_response(
+                                msg.id,
+                                AUTHENTICATE_METHOD,
+                                &serde_json::to_value(AuthResult { ok: false })?,
+                            )
+                            .await?;
+                        continue;
                     }
+                },
+                Err(e) => {
+                    tracing::debug!(error = %e, "auth: non-JSON Authenticate payload");
                     channel
                         .send_response(
                             msg.id,
                             AUTHENTICATE_METHOD,
-                            &serde_json::to_value(AuthResult { ok })?,
+                            &serde_json::to_value(AuthResult { ok: false })?,
                         )
                         .await?;
-
-                    tracing::debug!(ok, "auth: served Authenticate");
-                } else {
-                    tracing::warn!(
-                        method = %msg.method,
-                        "auth: unknown request method, ignoring (= forward-compat)"
-                    );
+                    continue;
                 }
+            };
+
+            let principal = verifier(credential).await;
+            let ok = principal.is_some();
+            if let Some(p) = principal {
+                ctx.set_principal(p).await;
             }
-            Ok(msg) => {
-                tracing::debug!(
-                    method = %msg.method,
-                    msg_type = ?msg.msg_type,
-                    "auth: ignored non-request"
-                );
-            }
-            Err(e) if e.is_normal_close() => return Ok(()),
-            Err(e) => return Err(e),
+            channel
+                .send_response(
+                    msg.id,
+                    AUTHENTICATE_METHOD,
+                    &serde_json::to_value(AuthResult { ok })?,
+                )
+                .await?;
+
+            tracing::debug!(ok, "auth: served Authenticate");
+        } else {
+            tracing::warn!(
+                method = %msg.method,
+                "auth: unknown request method, ignoring (= forward-compat)"
+            );
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]

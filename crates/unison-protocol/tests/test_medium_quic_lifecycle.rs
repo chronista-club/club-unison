@@ -6,6 +6,7 @@
 //! すべて `#[ignore]` 付き — `cargo test -- --ignored` で実行。
 
 use anyhow::Result;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
 use tracing::{Level, info};
@@ -53,14 +54,14 @@ async fn register_echo_handler(server: &ProtocolServer) {
 // Test 1: サーバー起動 → ポート割り当て → シャットダウン
 // ─────────────────────────────────────────────────
 
-/// spawn_listen でポート 0 に bind → local_addr() で割り当てポートを取得 → shutdown
+/// listener(..).spawn() でポート 0 に bind → local_addr() で割り当てポートを取得 → shutdown
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_quic_server_bind_and_shutdown() -> Result<()> {
     init_tracing();
 
     let server = ProtocolServer::new();
-    let handle = server.spawn_listen("[::1]:0").await?;
+    let handle = Arc::new(server).listener("[::1]:0").spawn().await?;
 
     let addr = handle.local_addr();
     info!("Server bound to {}", addr);
@@ -82,18 +83,18 @@ async fn test_medium_quic_server_bind_and_shutdown() -> Result<()> {
 
 /// クライアントがサーバーに接続し、接続状態を確認し、切断する
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_quic_connection_lifecycle() -> Result<()> {
     init_tracing();
 
     // サーバー起動
     let server = ProtocolServer::new();
-    let handle = server.spawn_listen("[::1]:0").await?;
+    let handle = Arc::new(server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
     info!("Server listening on {}", addr);
 
     // クライアント接続
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client
         .connect(&format!("[{}]:{}", addr.ip(), addr.port()))
         .await?;
@@ -117,7 +118,7 @@ async fn test_medium_quic_connection_lifecycle() -> Result<()> {
 
 /// 接続直後にサーバーから ServerIdentity を受信する
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_quic_identity_handshake() -> Result<()> {
     init_tracing();
 
@@ -125,11 +126,11 @@ async fn test_medium_quic_identity_handshake() -> Result<()> {
     let server = ProtocolServer::with_identity("test-server", "0.1.0", "test-ns");
     register_echo_handler(&server).await;
 
-    let handle = server.spawn_listen("[::1]:0").await?;
+    let handle = Arc::new(server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
 
     // クライアント接続（Identity Handshake は connect() 内で自動実行）
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client
         .connect(&format!("[{}]:{}", addr.ip(), addr.port()))
         .await?;
@@ -164,7 +165,7 @@ async fn test_medium_quic_identity_handshake() -> Result<()> {
 
 /// open_channel → request → response の完全なフロー
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_quic_channel_request_response() -> Result<()> {
     init_tracing();
 
@@ -172,11 +173,11 @@ async fn test_medium_quic_channel_request_response() -> Result<()> {
     let server = ProtocolServer::new();
     register_echo_handler(&server).await;
 
-    let handle = server.spawn_listen("[::1]:0").await?;
+    let handle = Arc::new(server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
 
     // クライアント接続
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client
         .connect(&format!("[{}]:{}", addr.ip(), addr.port()))
         .await?;
@@ -208,17 +209,17 @@ async fn test_medium_quic_channel_request_response() -> Result<()> {
 
 /// 同一チャネルで複数の Request/Response を連続実行
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_quic_sequential_requests() -> Result<()> {
     init_tracing();
 
     let server = ProtocolServer::new();
     register_echo_handler(&server).await;
 
-    let handle = server.spawn_listen("[::1]:0").await?;
+    let handle = Arc::new(server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client
         .connect(&format!("[{}]:{}", addr.ip(), addr.port()))
         .await?;
@@ -255,15 +256,15 @@ async fn test_medium_quic_sequential_requests() -> Result<()> {
 
 /// サーバーがシャットダウンした後、クライアントの接続状態が反映される
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_quic_server_shutdown_disconnects_client() -> Result<()> {
     init_tracing();
 
     let server = ProtocolServer::new();
-    let handle = server.spawn_listen("[::1]:0").await?;
+    let handle = Arc::new(server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client
         .connect(&format!("[{}]:{}", addr.ip(), addr.port()))
         .await?;

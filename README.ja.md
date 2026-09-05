@@ -11,7 +11,7 @@ KDL スキーマベースの型安全な QUIC 通信フレームワーク。
 ```toml
 [dependencies]
 # crates.io package = `club-unison`、Rust crate identifier = `unison`
-club-unison = "1.9.0"
+club-unison = "2.0.0"
 tokio = { version = "1.52", features = ["full"] }
 ```
 
@@ -160,12 +160,12 @@ channel.send_response(id, method, payload).await?;
 // Event push（一方向）
 channel.send_event("UserCreated", payload).await?;
 
-// Raw bytes（rkyv/zstd をバイパス、オーディオ等に）
+// Raw bytes（buffa/zstd をバイパス、オーディオ等に）
 channel.send_raw(&pcm_data).await?;
 let data = channel.recv_raw().await?;
 ```
 
-フレームの先頭 1 バイトで Protocol frame (`0x00`, rkyv + zstd) と Raw frame (`0x01`, 生バイト) を区別する。2KB 以上のペイロードは自動で zstd 圧縮される。
+フレームの先頭 1 バイトで Protocol frame (`0x00`, buffa + zstd) と Raw frame (`0x01`, 生バイト) を区別する。2KB 以上のペイロードは自動で zstd 圧縮される。
 
 ---
 
@@ -216,14 +216,8 @@ protocol "my-service" version="1.0.0" {
 | クレート | 説明 |
 |---------|------|
 | [`unison-protocol`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-protocol) | コアライブラリ。crates.io では `club-unison` として公開、Rust crate identifier は `unison`。KDL スキーマ、QUIC、チャネル、パケット |
-| [`unison-agent`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-agent) | [Claude Agent SDK](https://crates.io/crates/claude-agent-sdk) 統合。AgentClient、InteractiveClient、MCP ツール公開 |
-
-### unison-agent の例
-
-```bash
-cargo run -p unison-agent --example simple_query        # 単発クエリ
-cargo run -p unison-agent --example interactive_chat    # マルチターン会話
-```
+| [`unison-mcp`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-mcp) | MCP bridge（`unison-mcp` バイナリ）。サーバーの KDL を実行時に discovery し、`request` ごとに MCP tool を合成して AI agent から呼べるようにする |
+| [`unison-cli`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-cli) | 開発者向け CLI（`unison` バイナリ）: `ping` / `call` / `sniff` / `mock`（KDL から stub server）/ `schema lint` |
 
 ---
 

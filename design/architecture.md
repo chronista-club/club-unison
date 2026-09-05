@@ -1,8 +1,7 @@
 # Unison Protocol アーキテクチャ設計
 
-**バージョン**: 0.2.0-draft
-**最終更新**: 2026-02-16
-**ステータス**: Draft
+**最終更新**: 2026-09-05
+**ステータス**: Stable (living doc、 workspace の実態に追従させる)
 
 ---
 
@@ -19,349 +18,188 @@
 
 ## 1. 概要
 
-Unison ProtocolはCargoワークスペースとして構成され、プロトコル定義・パーサー・ネットワーク通信を一つのクレートに統合している。QUICベースのChannel指向通信を提供する。KDLスキーマからの型コード生成は `club-kdl-codegen` crate に分離されている。
+Unison Protocol は Cargo ワークスペースとして構成され、 コア crate `club-unison`
+(lib identifier `unison`) が KDL スキーマの parser、 wire packet、 QUIC / WebTransport
+の runtime、 Unified Channel を提供する。 その上に MCP bridge と開発者 CLI が乗り、
+TypeScript / Swift / Ruby の client が `clients/` に同居する。 KDL からの型コード生成は
+`club-kdl-codegen` crate に分離されている。
 
 ---
 
 ## 2. ワークスペース構成
 
 ```
-unison/
-  Cargo.toml              -- ワークスペースルート (edition = 2024, rust-version = 1.93)
-  schemas/                 -- KDLプロトコル定義（テスト用）
+club-unison/
+  Cargo.toml                -- workspace root (edition 2024、 rust-version と version は
+                               [workspace.package] が SSOT)
   crates/
-    unison-protocol/       -- コアクレート（パーサー、ネットワーク）
-    unison-agent/          -- エージェント実装
+    unison-protocol/        -- club-unison: parser / packet / codec / network
+    unison-mcp/             -- MCP bridge (bin `unison-mcp`)、 rmcp 3
+    unison-cli/             -- 開発者 CLI (bin `unison`): ping / call / sniff / mock / schema lint
+  clients/
+    typescript/             -- @chronista-club/unison-client (WebTransport、 npm)
+    swift/                  -- UnisonClient (SwiftPM、 manifest は repo root の Package.swift)
+    ruby/                   -- unison-client gem (Magnus で club-unison を wrap)
+  schemas/                  -- KDL: auth / discovery / ping_pong / hierophant
+  spec/ design/ guides/     -- What&Why / How / Usage
 ```
 
-### ワークスペース共通設定
-
-| 設定 | 値 |
-|------|-----|
-| edition | 2024 |
-| rust-version | 1.93 |
-| version | 0.3.1 |
-| resolver | 2 |
+CI (`.github/workflows/ci.yml`) は fmt / clippy (`--lib -D warnings`) / test (ubuntu + macos) /
+cargo-deny / MSRV / TS typecheck / cross-language E2E / Swift build+test を回す。
 
 ### 主要依存クレート
 
 | 用途 | クレート |
 |------|---------|
-| シリアライゼーション | serde, serde_json, rkyv |
-| QUIC | quinn 0.11, rustls 0.23 |
+| シリアライゼーション | serde, serde_json (JSON codec)、 buffa (wire、 protobuf) |
+| QUIC / TLS | quinn 0.11, rustls 0.23 (ring), rcgen (自己署名 / mesh CA), webpki-roots |
+| WebTransport | wtransport 0.7 (ブラウザ ingress) |
 | 圧縮 | zstd |
 | 非同期ランタイム | tokio |
-| KDLパース | kdl, club-kdl |
-| CGP | cgp 0.4.2 |
-| エラーハンドリング | thiserror, anyhow, miette |
+| KDL パース | kdl, club-kdl (derive) |
+| エラー | thiserror (型付き)、 anyhow (transport 境界) |
+| その他 | sha2 (discovery の schema hash)、 uuid (connection id)、 tracing |
+| unison-mcp | rmcp 3 (server / transport-io / elicitation)、 schemars |
+| unison-cli | clap 4 |
 
 ---
 
 ## 3. unison-protocol モジュール構成
 
-### 3.1 トップレベルモジュール
+### 3.1 トップレベル
 
 ```
 crates/unison-protocol/src/
-  lib.rs                   -- エントリポイント、UnisonProtocol構造体
-  prelude.rs               -- よく使用される型のreexport
-  core/
-    mod.rs                 -- コア型定義
+  lib.rs             -- UnisonProtocol (schema loader + client/server factory)、 主要型の re-export、
+                        `proto` (buffa 生成の wire 型を build.rs から include)
+  codec/mod.rs       -- Codec / Encodable / Decodable、 JsonCodec、 ProtoCodec
   parser/
-    mod.rs                 -- SchemaParserエントリポイント
-    schema.rs              -- ParsedSchema、スキーマ構造
-    types.rs               -- TypeRegistry、型定義
-  packet/
-    mod.rs                 -- UnisonPacket、UnisonPacketBuilder、UnisonPacketView
-    header.rs              -- UnisonPacketHeader (56 bytes)、PacketType
-    flags.rs               -- PacketFlags ビットフラグ
-    payload.rs             -- Payloadable trait、各種ペイロード型
-    config.rs              -- PacketConfig、CompressionConfig
-    serialization.rs       -- PacketSerializer / PacketDeserializer
-  context/
-    mod.rs                 -- CGPベースコンテキスト
-    adapter.rs             -- コンテキストアダプター
-    handlers.rs            -- ハンドラー実装
-  network/
-    mod.rs                 -- NetworkError、ProtocolMessage、MessageType、トレイト群
-    quic.rs                -- QuicClient、QuicServer、UnisonStream
-    server.rs              -- ProtocolServer（チャネルハンドラー管理）
-    client.rs              -- ProtocolClient（チャネル開設・通信）
-    channel.rs             -- UnisonChannel、StreamSender/Receiver
-    identity.rs            -- ServerIdentity、ChannelInfo、ChannelUpdate
-    context.rs             -- ConnectionContext（接続状態管理）
-    service.rs             -- Service trait、UnisonService、RealtimeService
+    mod.rs           -- SchemaParser、 ParseError
+    schema.rs        -- ParsedSchema / Protocol / Channel / Field / FieldType (club-kdl derive)
+  packet/            -- UnisonPacket wire frame (design/packet.md)
+    mod.rs           -- UnisonPacket
+    header.rs        -- UnisonPacketHeader、 PacketType
+    flags.rs         -- PacketFlags (COMPRESSED)
+    config.rs        -- PacketConfig / CompressionConfig
+    serialization.rs -- PacketSerializer / PacketDeserializer、 zstd
+  network/           -- runtime (下表)
 ```
 
-### 3.2 network/ 配下の責務
+### 3.2 network/ の責務
 
-```mermaid
-graph TB
-    subgraph "network/ モジュール"
-        MOD["mod.rs<br/>-- NetworkError enum<br/>-- ProtocolMessage struct<br/>-- MessageType enum<br/>-- トレイト定義<br/>(UnisonClient, UnisonServer,<br/>SystemStream 等)"]
-
-        QUIC["quic.rs<br/>-- QuicClient: QUIC接続・送受信<br/>-- QuicServer: 接続受付・ルーティング<br/>-- UnisonStream: 双方向ストリーム実装<br/>-- read_frame / write_frame<br/>-- TLS証明書管理"]
-
-        SERVER["server.rs<br/>-- ProtocolServer: チャネルハンドラーレジストリ<br/>-- ChannelHandler 登録・ルーティング<br/>-- ServerIdentity 構築<br/>-- UnisonService 管理"]
-
-        CLIENT["client.rs<br/>-- ProtocolClient: チャネル通信<br/>-- open_channel(): UnisonChannel開設<br/>-- Identity受信処理<br/>-- ConnectionContext管理"]
-
-        CHANNEL["channel.rs<br/>-- UnisonChannel: 統合チャネル型<br/>(request/response + event push)"]
-
-        IDENTITY["identity.rs<br/>-- ServerIdentity: ノード自己紹介<br/>-- ChannelInfo / ChannelDirection<br/>-- ChannelStatus / ChannelUpdate<br/>-- __identity メッセージ変換"]
-
-        CONTEXT["context.rs<br/>-- ConnectionContext: 接続状態<br/>-- ChannelHandle: チャネルメタデータ<br/>-- Arc&lt;RwLock&gt; による並行安全性"]
-
-        SERVICE["service.rs<br/>-- Service trait: 高レベルサービスIF<br/>-- RealtimeService trait<br/>-- UnisonService: Service実装<br/>-- ServiceConfig / ServiceStats"]
-    end
-
-    MOD --> QUIC
-    MOD --> SERVER
-    MOD --> CLIENT
-    MOD --> CHANNEL
-    MOD --> IDENTITY
-    MOD --> CONTEXT
-    MOD --> SERVICE
-
-    QUIC --> SERVER
-    CLIENT --> QUIC
-    CLIENT --> CHANNEL
-    CLIENT --> CONTEXT
-    CLIENT --> IDENTITY
-    SERVER --> IDENTITY
-    SERVER --> CONTEXT
-    CHANNEL --> QUIC
-    SERVICE --> QUIC
-```
-
-### 3.3 packet/ 配下の責務
-
-| ファイル | 責務 |
-|---------|------|
-| `mod.rs` | `UnisonPacket<T>` -- ジェネリックフレーム構造体。`Bytes`で生データ保持、遅延デシリアライズ |
-| `header.rs` | `UnisonPacketHeader` -- 56バイト固定長ヘッダー。version, packet_type, flags, lengths, IDs |
-| `flags.rs` | `PacketFlags` -- ビットフラグ（COMPRESSED, PRIORITY_HIGH, REQUIRES_ACK等） |
-| `payload.rs` | `Payloadable` trait + ペイロード型: `StringPayload`, `BytesPayload`, `JsonPayload`, `RkyvPayload<T>`, `EmptyPayload` |
-| `config.rs` | `PacketConfig` -- 最大ペイロードサイズ、圧縮設定 |
-| `serialization.rs` | `PacketSerializer` / `PacketDeserializer` -- rkyv + zstd のシリアライズ/デシリアライズ |
+| module | 責務 |
+|--------|------|
+| `mod.rs` | `NetworkError` / `ErrorCategory`、 `ProtocolMessage` / `MessageType`、 `UNISON_ALPN`、 re-export |
+| `conn.rs` / `conn_quinn.rs` | `UnisonConn` / `UnisonSend` / `UnisonRecv` trait (transport 抽象) と quinn 実装 |
+| `webtransport.rs` | wtransport 実装 + `WebTransportServer` (ブラウザ ingress) |
+| `frame.rs` | typed frame の wire I/O (`[u32 len][u8 tag][payload]`)、 `__channel_ack` |
+| `stream.rs` | `UnisonStream` (transport 非依存の双方向 stream、 handler に渡る型)、 `TypedFrame` |
+| `channel.rs` | `UnisonChannel<C>` (request / event / raw、 recv loop、 pending map) |
+| `datagram_channel.rs` / `datagram_dispatcher.rs` | `DatagramChannel<C>` と connection 単位の `channel_id` demux |
+| `quic.rs` | `QuicClient` / `QuicServer` (builder、 addr 解決、 SNI、 `connect_race` 入口) |
+| `dial.rs` | Happy Eyeballs v2 の staggered race (design/happy-eyeballs-dial.md) |
+| `dispatch.rs` | 接続ごとの accept loop: identity 送信、 `__channel:` routing、 handler spawn |
+| `server.rs` | `ProtocolServer` (handler registry、 接続台帳、 `broadcast`、 `ConnectionEvent`、 listen 系) |
+| `client.rs` | `ProtocolClient` (connect / open_channel / open_datagram_channel / auth / `ClientConnectionEvent`) |
+| `context.rs` | `ConnectionContext` (connection_id、 identity、 principal、 channel 台帳、 server 発 stream) |
+| `identity.rs` | `ServerIdentity` / `ChannelInfo` (`__identity` handshake、 spec/01 §5) |
+| `auth.rs` | `unison.auth` 組み込み channel (design/connection-auth.md) |
+| `discovery.rs` / `protocol_cache.rs` / `schema_registry.rs` / `dynamic.rs` | `unison.discovery` channel、 KDL 本文 + hash の cache、 runtime 検証、 型なし channel (spec/04) |
+| `cert.rs` / `trust.rs` / `mesh.rs` | `CertSource` (server 側 TLS)、 `TrustAnchors` (client 側検証)、 `InternalMeshKeypair` / `MeshCa` |
 
 ---
 
 ## 4. データフロー
 
-### 4.1 Request/Response フロー（UnisonChannel経由）
-
-```mermaid
-sequenceDiagram
-    participant App as Application
-    participant UC as UnisonChannel
-    participant US as UnisonStream
-    participant Net as QUIC Connection
-    participant QS as QuicServer
-    participant CH as ChannelHandler
-
-    App->>UC: request("method", payload)
-    UC->>UC: ProtocolMessage作成<br/>(id, method, Request, payload)
-    UC->>US: send(message)
-    US->>US: message.into_frame()
-    US->>Net: write_frame(frame_bytes)
-
-    Net->>QS: accept_bi()
-    QS->>QS: read_frame() -> ProtocolMessage
-    QS->>QS: method.strip_prefix("__channel:")
-    QS->>CH: handler(ctx, UnisonStream)
-    Note over CH: チャネルハンドラー内で<br/>request を処理し response を返す
-
-    CH-->>Net: write_frame(response)
-    Net-->>US: read_frame()
-    US-->>UC: pending requestのoneshotに送信
-    UC-->>App: Result<Value>
-```
-
-### 4.2 Channelフロー（開設〜通信）
+### 4.1 チャネル開設と Request/Response
 
 ```mermaid
 sequenceDiagram
     participant App as Application
     participant PC as ProtocolClient
-    participant Net as QUIC Connection
-    participant QS as QuicServer
+    participant Net as QUIC / WebTransport
+    participant D as dispatch::handle_connection
     participant PS as ProtocolServer
     participant CH as ChannelHandler
 
     App->>PC: open_channel("events")
-
-    PC->>Net: open_bi()
-    PC->>PC: ProtocolMessage作成<br/>(method: "__channel:events",<br/>type: Request)
-    PC->>PC: write_frame(frame_bytes)
-    PC->>PC: UnisonStream::from_streams()
-    PC->>PC: UnisonChannel::new(stream)
-    PC-->>App: UnisonChannel
-
-    Net->>QS: accept_bi()
-    QS->>QS: read_frame() -> ProtocolMessage
-    QS->>QS: method.strip_prefix("__channel:")
-    QS->>PS: get_channel_handler("events")
-    PS-->>QS: ChannelHandler
-
-    QS->>CH: handler(ctx, UnisonStream)
-    Note over CH: ストリームは生存したまま<br/>ChannelHandlerが管理
-
-    loop チャネル通信
-        App->>PC: channel.request("method", payload)
-        PC->>Net: write_frame(Request)
-        Net->>CH: read_frame() -> Request
-        CH-->>Net: write_frame(Response)
-        Net-->>PC: recv loop -> pending に振り分け
-        PC-->>App: Result<Value>
+    PC->>Net: open_bi() + typed frame { __channel:events, Request, id=N }
+    Net->>D: accept_bi() → read_typed_frame
+    D->>PS: get_channel_handler("events")
+    alt handler あり
+        D->>Net: __channel_ack { id=N, Response }
+        D->>CH: spawn handler(ctx, UnisonStream::from_streams)
+        Net-->>PC: ack → UnisonChannel::new(stream)
+        PC-->>App: UnisonChannel
+    else なし
+        D->>Net: __channel_ack { id=N, Error, channel-not-found }
+        PC-->>App: Err(HandlerNotFound)
     end
 
-    App->>PC: channel.close()
-    PC->>Net: send_stream.finish()
+    loop チャネル通信
+        App->>PC: channel.request("Query", req)   -- id 生成、 pending 登録
+        PC->>Net: typed frame (Request)
+        Net->>CH: channel.recv() → Request
+        CH-->>Net: channel.send_response(id, "Query", resp)
+        Net-->>PC: recv loop → pending[id] を解決
+        PC-->>App: Ok(resp)
+    end
 ```
 
-### 4.3 Identityフロー
+### 4.2 Identity handshake
 
-```mermaid
-sequenceDiagram
-    participant C as ProtocolClient
-    participant Net as QUIC Connection
-    participant S as QuicServer
-    participant PS as ProtocolServer
-    participant CTX as ConnectionContext
+接続確立直後に server が `__identity` Event を **server 発の stream** で 1 本送る。 client は
+`QuicClient` の `client_accept_bi_loop` でそれを oneshot に流し、 `ProtocolClient::connect` が
+`ConnectionContext::set_identity` に保存する。 以後 `server_identity()` で利用可能 channel
+一覧が読める (spec/01 §5、 spec/02 §5.1)。
 
-    C->>Net: QUIC接続確立
-    Net->>S: accept(connecting)
+### 4.3 Datagram channel
 
-    S->>CTX: ConnectionContext::new()
-    S->>PS: build_identity()
-    PS->>PS: channel_handlers.keys() から<br/>ChannelInfo一覧を構築
-    PS-->>S: ServerIdentity
-
-    S->>CTX: set_identity(identity)
-    S->>S: identity.to_protocol_message()<br/>(__identity, Event)
-    S->>Net: open_bi() + write_all(frame) + finish()
-
-    Net-->>C: transport.receive()
-    C->>C: response.method == "__identity"
-    C->>C: ServerIdentity::from_protocol_message()
-    C->>CTX: context.set_identity(identity)
-
-    Note over C: server_identity() で<br/>利用可能チャネル一覧にアクセス可能
-```
+`register_channel_datagram(name, channel_id, handler)` / `open_datagram_channel(name, channel_id)`
+で virtual stream を作る。 wire は `[varint channel_id][codec payload]` で、 packet header も
+typed frame も経由しない。 受信は connection 単位の `DatagramDispatcher` が `channel_id` で
+mpsc に振り分ける。 `ProtocolServer::broadcast` が全 active connection への配信入口
+(design/datagram-channel.md)。
 
 ---
 
 ## 5. エラーハンドリング
 
-### 5.1 NetworkError enum
-
-`NetworkError` はネットワーク層の全エラーを統一的に表現する。
+`NetworkError` (thiserror) がネットワーク層の統一 error。 `ErrorCategory`
+(transport / protocol / application / resource) は TS SDK と値を揃えた分類で、 retry 可否や
+log level の判断に使う。
 
 ```rust
 pub enum NetworkError {
-    Connection(String),         // 接続エラー（切断、タイムアウト等）
-    Protocol(String),           // プロトコルレベルのエラー（不正メッセージ等）
-    Serialization(serde_json::Error),  // JSONシリアライゼーションエラー
-    FrameSerialization(SerializationError), // rkyv/zstdフレームエラー
-    Quic(String),               // QUICトランスポートエラー
-    Timeout,                    // タイムアウト
-    HandlerNotFound { method: String }, // 未登録メソッド呼び出し
-    NotConnected,               // 未接続状態でのオペレーション
-    UnsupportedTransport(String), // 非サポートトランスポート
+    Connection(String),                     // 接続断、 stream 非アクティブ
+    Protocol(String),                       // 不正メッセージ、 channel 状態 (正常終端もここ、 is_normal_close())
+    Serialization(serde_json::Error),       // JSON codec
+    Codec(CodecError),                      // Codec trait
+    FrameSerialization(SerializationError), // packet (buffa / zstd / version)
+    Quic(String),                           // transport 操作 (quinn / wtransport / TLS / bind)
+    Timeout,                                // request timeout
+    HandlerNotFound { method: String },     // channel-not-found nack
+    NotConnected,
+    UnsupportedTransport(String),
 }
 ```
 
-### 5.2 エラー発生箇所
-
-| エラー種別 | 発生箇所 | 原因 |
-|-----------|---------|------|
-| `Connection` | QuicClient, UnisonStream | 接続断、ストリーム非アクティブ |
-| `Protocol` | ProtocolClient, QuicServer | メッセージパースエラー、不正な応答 |
-| `Serialization` | ProtocolMessage | JSONシリアライゼーション/デシリアライゼーション |
-| `FrameSerialization` | UnisonPacket | rkyv/zstdエラー、バージョン不互換 |
-| `Quic` | QuicClient, QuicServer, UnisonStream | QUICストリーム操作エラー |
-| `Timeout` | RealtimeService | 受信タイムアウト |
-| `HandlerNotFound` | ProtocolServer | 未登録メソッドの呼び出し |
-| `NotConnected` | ProtocolClient | 接続前のチャネル/RPC操作 |
+transport 直下 (`quic.rs` / `frame.rs` / `stream.rs` / `dispatch.rs` / `cert.rs` / `trust.rs`) は
+`anyhow::Result` を使い、 `server.rs` / `client.rs` の境界で `NetworkError::Quic(String)` に
+畳んでいる。 この境界は俯瞰 (2026-09-05) の MEDIUM #21 として整理予定。
 
 ---
 
 ## 6. 拡張ポイント
 
-### 6.1 Trait一覧
+| 拡張点 | 場所 | 差し込めるもの |
+|--------|------|----------------|
+| `UnisonConn` / `UnisonSend` / `UnisonRecv` | `network/conn.rs` | transport。 現在 quinn と wtransport の 2 実装 |
+| `Codec` + `Encodable<C>` / `Decodable<C>` | `codec/mod.rs` | payload 形式。 `JsonCodec` (serde) と `ProtoCodec` (buffa) |
+| `CertSource` / `TrustAnchors` | `network/cert.rs` / `trust.rs` | server 証明書の出所と client の検証方針 (dev_localhost / system / pinned / mesh CA) |
+| channel handler | `ProtocolServer::register_channel` / `register_channel_datagram` / `ProtocolClient::register_server_channel` | application protocol そのもの |
+| `Verifier` | `ProtocolServer::enable_auth` | 接続 credential の検証 (design/connection-auth.md) |
+| discovery | `ProtocolServer::enable_discovery(kdl)` | KDL の runtime 配布 (spec/04) |
 
-以下のトレイトにより、カスタム実装の差し込みが可能である。
-
-#### クライアント側
-
-| Trait | 責務 | 主要メソッド |
-|-------|------|------------|
-| `UnisonClient` | 接続管理 | `connect()`, `disconnect()`, `is_connected()` |
-
-> **Note**: 旧 `ProtocolClientTrait`, `UnisonClientExt` は Unified Channel 統合により削除済み。
-
-#### サーバー側
-
-| Trait | 責務 | 主要メソッド |
-|-------|------|------------|
-| `UnisonServer` | サーバーライフサイクル | `listen()`, `stop()`, `is_running()` |
-
-> **Note**: 旧 `ProtocolServerTrait`, `UnisonServerExt` は Unified Channel 統合により削除済み。ハンドラー登録は `ProtocolServer::register_channel()` メソッドで行う。
-
-#### チャネル・ストリーム・サービス
-
-| Trait / 型 | 責務 | 主要メソッド |
-|------------|------|------------|
-| `UnisonChannel` | 統合チャネル（request/response + event） | `request()`, `send_event()`, `recv()`, `close()` |
-| `SystemStream` | 双方向ストリームI/O | `send()`, `receive()`, `is_active()`, `close()`, `get_handle()` |
-| `Service` | 高レベルサービスIF | `service_type()`, `service_name()`, `handle_request()`, `shutdown()` |
-| `RealtimeService` | リアルタイム通信拡張 | `send_realtime()`, `receive_with_timeout()`, `get_performance_stats()` |
-
-### 6.2 拡張パターン
-
-```mermaid
-graph TB
-    subgraph "アプリケーション層"
-        APP["アプリケーション"]
-    end
-
-    subgraph "チャネル層"
-        UCH["UnisonChannel<br/>(request + event 統合)"]
-    end
-
-    subgraph "拡張ポイント"
-        UC["UnisonClient"]
-        US["UnisonServer"]
-        SS["SystemStream"]
-        SVC["Service / RealtimeService"]
-    end
-
-    subgraph "デフォルト実装"
-        PC["ProtocolClient"]
-        PS["ProtocolServer"]
-        USTREAM["UnisonStream"]
-        USVC["UnisonService"]
-    end
-
-    APP --> UCH
-    APP --> SVC
-
-    UCH --> PC
-    UC --> PC
-    US --> PS
-    SS --> USTREAM
-    SVC --> USVC
-    SS --> SVC
-```
-
-カスタム実装の例:
-- `SystemStream` を実装して、QUIC以外のトランスポート上でストリームを動作させる
-- `Service` を実装して、ドメイン固有のサービスロジックを提供する
-- `UnisonChannel` をベースに、チャネルハンドラーでドメイン固有のプロトコルを構築する
-
----
-
-**設計バージョン**: 0.2.0-draft
-**最終更新**: 2026-02-16
-**ステータス**: Draft
+trait を新設するより、 `register_channel` に handler を積む方が Unison 流。 独自 transport が
+要る場合だけ `UnisonConn` を実装する。

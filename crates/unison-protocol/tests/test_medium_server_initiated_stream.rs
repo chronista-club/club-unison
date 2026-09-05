@@ -42,7 +42,7 @@ async fn wait_for_ctx(
 /// server が `open_server_stream` で push した N 件を、client handler が
 /// **全件・同順**で受信する（reliable server→client）。
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_server_initiated_reliable_ordered_delivery() -> Result<()> {
     init_tracing();
     const N: i64 = 200;
@@ -50,26 +50,23 @@ async fn test_server_initiated_reliable_ordered_delivery() -> Result<()> {
     // ─── Server setup ──────────────────────────────────
     let server = Arc::new(ProtocolServer::new());
     let mut events = server.subscribe_connection_events();
-    let handle = Arc::clone(&server).spawn_listen_shared("[::1]:0").await?;
+    let handle = Arc::clone(&server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
 
     // ─── Client: handler を connect 前に登録 ────────────
     let (tx, mut rx) = mpsc::unbounded_channel::<i64>();
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client
         .register_server_channel("relay", move |stream| {
             let tx = tx.clone();
             async move {
-                // raw UnisonStream を直読（= QUIC backpressure、取りこぼし無し）
-                loop {
-                    match stream.recv_frame().await {
-                        Ok(msg) => {
-                            let v = msg.payload_as_value()?;
-                            let seq = v.get("seq").and_then(|s| s.as_i64()).unwrap_or(-1);
-                            let _ = tx.send(seq);
-                        }
-                        Err(_) => break, // end of stream（server が close）
-                    }
+                // raw UnisonStream を直読（= QUIC backpressure、取りこぼし無し）。
+                // recv_frame の Err = end of stream（server が close）なので
+                // while let がそのまま終端条件になる。
+                while let Ok(msg) = stream.recv_frame().await {
+                    let v = msg.payload_as_value()?;
+                    let seq = v.get("seq").and_then(|s| s.as_i64()).unwrap_or(-1);
+                    let _ = tx.send(seq);
                 }
                 Ok(())
             }
@@ -123,16 +120,16 @@ async fn test_server_initiated_reliable_ordered_delivery() -> Result<()> {
 /// handler 未登録の channel へ push しても、client は drop + warn するだけで
 /// 接続は壊れない（後方互換 = 無回帰）。
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_server_initiated_unregistered_channel_no_regression() -> Result<()> {
     init_tracing();
 
     let server = Arc::new(ProtocolServer::new());
     let mut events = server.subscribe_connection_events();
-    let handle = Arc::clone(&server).spawn_listen_shared("[::1]:0").await?;
+    let handle = Arc::clone(&server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     // handler は登録しない
     client
         .connect(&format!("[{}]:{}", addr.ip(), addr.port()))

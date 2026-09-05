@@ -30,6 +30,7 @@
 
 use anyhow::Result;
 use serde_json::json;
+use std::sync::Arc;
 use tracing::{Level, info};
 
 use unison::network::channel::UnisonChannel;
@@ -213,6 +214,6 @@ async fn main() -> Result<()> {
     info!("  Press Ctrl-C to stop");
     info!("================================================================");
 
-    server.listen(addr).await?;
+    Arc::new(server).listener(addr).run().await?;
     Ok(())
 }

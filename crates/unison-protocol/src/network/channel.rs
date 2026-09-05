@@ -17,7 +17,7 @@ use tokio::task::JoinHandle;
 
 use crate::codec::{Codec, Decodable, Encodable, JsonCodec};
 
-use super::quic::{TypedFrame, UnisonStream};
+use super::stream::{TypedFrame, UnisonStream};
 use super::{MessageType, NetworkError, ProtocolMessage};
 
 /// デフォルトの request タイムアウト（30秒）
@@ -181,9 +181,7 @@ impl<C: Codec> UnisonChannel<C> {
             Ok(Ok(msg)) => msg,
             Ok(Err(_)) => {
                 self.pending.lock().await.remove(&id);
-                return Err(NetworkError::Protocol(
-                    "Request cancelled: channel closed".to_string(),
-                ));
+                return Err(NetworkError::ChannelEof(super::ChannelEof::Request));
             }
             Err(_) => {
                 self.pending.lock().await.remove(&id);
@@ -249,7 +247,7 @@ impl<C: Codec> UnisonChannel<C> {
         let mut rx = self.raw_rx.lock().await;
         rx.recv()
             .await
-            .ok_or_else(|| NetworkError::Protocol("Raw channel closed".to_string()))
+            .ok_or(NetworkError::ChannelEof(super::ChannelEof::RecvRaw))
     }
 
     /// Event 受信（サーバーからのプッシュ、または非 Response メッセージ）
@@ -257,7 +255,7 @@ impl<C: Codec> UnisonChannel<C> {
         let mut rx = self.event_rx.lock().await;
         rx.recv()
             .await
-            .ok_or_else(|| NetworkError::Protocol("Channel closed".to_string()))
+            .ok_or(NetworkError::ChannelEof(super::ChannelEof::Recv))
     }
 
     /// チャネルを閉じる
@@ -268,5 +266,32 @@ impl<C: Codec> UnisonChannel<C> {
         }
         // ストリームを閉じる
         self.stream.close_stream().await
+    }
+}
+
+/// built-in channel (= `unison.auth` / `unison.discovery`) の recv ループで、
+/// 次に処理すべき request を待つ。
+///
+/// 非 request なメッセージは debug log を出して読み飛ばし、 channel の正常終端では
+/// `Ok(None)` を返す。 built-in channel が増えても「終端の扱い」と「未知メッセージへの
+/// 寛容さ」 (= forward-compat) が 1 箇所に集まるようにするための helper。
+pub(crate) async fn next_request<C: Codec>(
+    channel: &UnisonChannel<C>,
+    channel_name: &str,
+) -> Result<Option<ProtocolMessage>, NetworkError> {
+    loop {
+        match channel.recv().await {
+            Ok(msg) if msg.msg_type == MessageType::Request => return Ok(Some(msg)),
+            Ok(msg) => {
+                tracing::debug!(
+                    channel = channel_name,
+                    method = %msg.method,
+                    msg_type = ?msg.msg_type,
+                    "ignored non-request message"
+                );
+            }
+            Err(e) if e.is_normal_close() => return Ok(None),
+            Err(e) => return Err(e),
+        }
     }
 }

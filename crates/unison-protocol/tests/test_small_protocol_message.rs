@@ -228,29 +228,33 @@ fn test_integ_decode_payload_json() {
     assert_eq!(decoded, original);
 }
 
+/// ProtoCodec テスト用の buffa 生成型 (= core wire の PacketHeader を題材に流用)
+fn sample_proto_header() -> unison::proto::PacketHeader {
+    unison::proto::PacketHeader {
+        version: 1,
+        payload_length: 128,
+        timestamp: 42,
+        ..Default::default()
+    }
+}
+
 /// decode_payload で ProtoCodec 経由のデコード
 #[test]
 fn test_integ_decode_payload_proto() {
     use buffa::Message;
     use unison::codec::ProtoCodec;
-    use unison::codec::proto::creo_sync::Subscribe;
-
-    let subscribe = Subscribe {
-        category: "design".into(),
-        tags: "arch".into(),
-        ..Default::default()
-    };
+    use unison::proto::PacketHeader;
 
     let msg = ProtocolMessage::new_encoded(
         1,
-        "subscribe".to_string(),
+        "header".to_string(),
         MessageType::Request,
-        subscribe.encode_to_vec(),
+        sample_proto_header().encode_to_vec(),
     );
 
-    let decoded: Subscribe = msg.decode_payload::<_, ProtoCodec>().unwrap();
-    assert_eq!(decoded.category, "design");
-    assert_eq!(decoded.tags, "arch");
+    let decoded: PacketHeader = msg.decode_payload::<_, ProtoCodec>().unwrap();
+    assert_eq!(decoded.version, 1);
+    assert_eq!(decoded.timestamp, 42);
 }
 
 /// new_encoded → into_frame → from_frame → decode_payload の一気通貫
@@ -258,19 +262,13 @@ fn test_integ_decode_payload_proto() {
 fn test_integ_proto_frame_roundtrip() {
     use buffa::Message;
     use unison::codec::ProtoCodec;
-    use unison::codec::proto::creo_sync::Ack;
-
-    let ack = Ack {
-        status: "ok".into(),
-        channel_ref: "ctrl-1".into(),
-        ..Default::default()
-    };
+    use unison::proto::PacketHeader;
 
     let msg = ProtocolMessage::new_encoded(
         42,
         "ack".to_string(),
         MessageType::Response,
-        ack.encode_to_vec(),
+        sample_proto_header().encode_to_vec(),
     );
 
     // フレーム化 → バイト列 → 復元
@@ -280,28 +278,21 @@ fn test_integ_proto_frame_roundtrip() {
     let restored = ProtocolMessage::from_frame(&restored_frame).unwrap();
 
     // ProtoCodec でデコード
-    let decoded: Ack = restored.decode_payload::<_, ProtoCodec>().unwrap();
-    assert_eq!(decoded.status, "ok");
-    assert_eq!(decoded.channel_ref, "ctrl-1");
+    let decoded: PacketHeader = restored.decode_payload::<_, ProtoCodec>().unwrap();
+    assert_eq!(decoded.version, 1);
+    assert_eq!(decoded.payload_length, 128);
 }
 
 /// payload_as_value は proto バイト列に対してエラーを返すこと
 #[test]
 fn test_integ_payload_as_value_with_proto_bytes_fails() {
     use buffa::Message;
-    use unison::codec::proto::creo_sync::Subscribe;
-
-    let subscribe = Subscribe {
-        category: "test".into(),
-        tags: "a,b".into(),
-        ..Default::default()
-    };
 
     let msg = ProtocolMessage::new_encoded(
         1,
-        "subscribe".to_string(),
+        "header".to_string(),
         MessageType::Request,
-        subscribe.encode_to_vec(),
+        sample_proto_header().encode_to_vec(),
     );
 
     // payload_as_value() は JSON を仮定するので proto bytes ではエラー
@@ -313,7 +304,7 @@ fn test_integ_payload_as_value_with_proto_bytes_fails() {
 #[test]
 fn test_integ_decode_payload_wrong_codec_json_to_proto() {
     use unison::codec::ProtoCodec;
-    use unison::codec::proto::creo_sync::Subscribe;
+    use unison::proto::PacketHeader;
 
     let msg = ProtocolMessage::new_with_json(
         1,
@@ -324,7 +315,7 @@ fn test_integ_decode_payload_wrong_codec_json_to_proto() {
     .unwrap();
 
     // JSON bytes を ProtoCodec (buffa) でデコード → エラー
-    let result = msg.decode_payload::<Subscribe, ProtoCodec>();
+    let result = msg.decode_payload::<PacketHeader, ProtoCodec>();
     assert!(result.is_err());
 }
 
@@ -333,19 +324,12 @@ fn test_integ_decode_payload_wrong_codec_json_to_proto() {
 fn test_integ_decode_payload_wrong_codec_proto_to_json() {
     use buffa::Message;
     use unison::codec::JsonCodec;
-    use unison::codec::proto::creo_sync::Subscribe;
-
-    let subscribe = Subscribe {
-        category: "test".into(),
-        tags: "a,b".into(),
-        ..Default::default()
-    };
 
     let msg = ProtocolMessage::new_encoded(
         1,
         "test".to_string(),
         MessageType::Request,
-        subscribe.encode_to_vec(),
+        sample_proto_header().encode_to_vec(),
     );
 
     // Proto bytes を JsonCodec でデコード → エラー
@@ -408,15 +392,13 @@ fn test_integ_new_with_json_encodes_valid_json() {
 fn test_integ_proto_large_payload_compression_roundtrip() {
     use buffa::Message;
     use unison::codec::ProtoCodec;
-    use unison::codec::proto::creo_sync::MemoryEvent;
+    use unison::proto::ProtocolMessage as WireMessage;
 
     // 圧縮閾値 (2048B) を超える proto ペイロードを生成
-    let msg = MemoryEvent {
-        event_type: "bulk_import".into(),
-        memory_id: "mem_large".into(),
-        category: "x".repeat(5000),
-        from: "importer".into(),
-        timestamp: "2026-03-28T00:00:00Z".into(),
+    let msg = WireMessage {
+        id: 7,
+        method: "bulk_import".into(),
+        payload: vec![b'x'; 5000],
         ..Default::default()
     };
 
@@ -442,9 +424,9 @@ fn test_integ_proto_large_payload_compression_roundtrip() {
     let restored = ProtocolMessage::from_frame(&restored_frame).unwrap();
 
     // ProtoCodec でデコードして検証
-    let decoded: MemoryEvent = restored.decode_payload::<_, ProtoCodec>().unwrap();
-    assert_eq!(decoded.event_type, "bulk_import");
-    assert_eq!(decoded.category.len(), 5000);
+    let decoded: WireMessage = restored.decode_payload::<_, ProtoCodec>().unwrap();
+    assert_eq!(decoded.method, "bulk_import");
+    assert_eq!(decoded.payload.len(), 5000);
 }
 
 /// id=0 の ProtocolMessage がフレーム往復後も id=0 で戻ること

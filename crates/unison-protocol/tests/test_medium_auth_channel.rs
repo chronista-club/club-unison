@@ -1,4 +1,4 @@
-//! Large × E2E: connection-level auth primitive (`unison.auth`) round-trip
+//! Medium × Integration: connection-level auth primitive (`unison.auth`) round-trip
 //!
 //! Server に [`ProtocolServer::enable_auth`] で verifier (= policy) を注入して起動し、
 //! client が credential を提示して認証 → 以降の channel が `ctx.principal()` で
@@ -7,7 +7,7 @@
 //! 設計: `design/connection-auth.md`
 //! SSOT memory: mem_1CcTT4yxguA1KjGJXXHFor / handoff: mem_1CcTTLKuuTYGfATSKdSo8J
 //!
-//! すべて `#[ignore = "Large: E2E test"]` 付き — `cargo test -- --ignored` で実行。
+//! すべて `#[ignore = "Medium: 実 QUIC runtime が要る"]` 付き — `cargo test -- --ignored` で実行。
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -75,7 +75,7 @@ async fn start_auth_server() -> Result<(ServerHandle, String)> {
         })
         .await;
     server.register_channel(SECRET_CHANNEL, handle_secret).await;
-    let handle = server.spawn_listen("[::1]:0").await?;
+    let handle = Arc::new(server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
     Ok((handle, format!("[{}]:{}", addr.ip(), addr.port())))
 }
@@ -84,12 +84,12 @@ async fn start_auth_server() -> Result<(ServerHandle, String)> {
 // Test 1: 正当 credential → principal set → gated method 通過
 // ─────────────────────────────────────────────────────────────────────
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_auth_valid_credential_passes_gate() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_auth_server().await?;
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect_with_credential(&addr, GOOD_TOKEN).await?;
 
     let channel = client.open_channel(SECRET_CHANNEL).await?;
@@ -116,12 +116,12 @@ async fn test_e2e_auth_valid_credential_passes_gate() -> Result<()> {
 // Test 2: 不正 credential → connect_with_credential が拒否される
 // ─────────────────────────────────────────────────────────────────────
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_auth_invalid_credential_rejected() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_auth_server().await?;
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     let result = client.connect_with_credential(&addr, b"wrong-token").await;
 
     assert!(
@@ -138,13 +138,13 @@ async fn test_e2e_auth_invalid_credential_rejected() -> Result<()> {
 // Test 3: 未認証 (plain connect) → principal None → gated method が拒否反応
 // ─────────────────────────────────────────────────────────────────────
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_auth_unauthenticated_is_gated() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_auth_server().await?;
 
     // credential を出さず素の connect → principal は立たない
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr).await?;
 
     let channel = client.open_channel(SECRET_CHANNEL).await?;
@@ -170,7 +170,7 @@ async fn test_e2e_auth_unauthenticated_is_gated() -> Result<()> {
 // Test 4: enable_auth を呼ばない server は従来通り動く (= opt-in、 非破壊)
 // ─────────────────────────────────────────────────────────────────────
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_no_enable_auth_is_nonbreaking() -> Result<()> {
     init_tracing();
 
@@ -192,12 +192,12 @@ async fn test_e2e_no_enable_auth_is_nonbreaking() -> Result<()> {
             }
         })
         .await;
-    let handle = server.spawn_listen("[::1]:0").await?;
+    let handle = Arc::new(server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
     let addr = format!("[{}]:{}", addr.ip(), addr.port());
 
     // 素の connect で従来通り動作する
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr).await?;
     let channel = client.open_channel("echo").await?;
     let resp: Value = timeout(

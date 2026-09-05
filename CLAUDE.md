@@ -39,12 +39,32 @@ channel "name" from="client" lifetime="persistent" {
 ## テスト
 
 ```bash
-# 標準テスト実行 (lib unit + integration tests を全部走らせる)
+# 標準テスト実行 (lib unit + Small の integration test)
 RUSTFLAGS="-C symbol-mangling-version=v0" cargo test --workspace
 
-# clippy
-cargo clippy --lib --workspace -- -D warnings
+# 実 QUIC を使う Medium test (= #[ignore] 付き)
+RUSTFLAGS="-C symbol-mangling-version=v0" cargo test --workspace -- --ignored
+
+# clippy (lib / bins / tests / benches / examples を同じ厳しさで)
+cargo clippy --all-targets --workspace -- -D warnings
 ```
+
+### テストファイルの命名 = テストの層
+
+`crates/*/tests/` のファイル名は `test_<layer>_<topic>.rs`。 **層は名前で分かる**。
+
+| 層 | 意味 | `#[ignore]` | ファイル名 |
+|----|------|------------|-----------|
+| `small` | 実 I/O なし。 parser / wire / in-memory の handler | なし (常時実行) | `test_small_*.rs` |
+| `medium` | 実 QUIC connection を localhost で張る | あり | `test_medium_*.rs` |
+
+Medium は `#[ignore = "Medium: 実 QUIC runtime が要る"]` で理由を揃える。 例外は
+`test_medium_accept_resilience.rs` と `test_medium_alpn_enforcement.rs` で、
+過去に実害を出したバグの回帰テストなので `#[ignore]` を付けず常時走らせる
+(= handshake だけで完結し数百 ms で終わるため)。
+
+Large (= 別プロセス / 複数言語) は Rust の `tests/` ではなく CI の
+`Cross-Language E2E` job と `clients/*` 側が担う。
 
 ## ドキュメント構造
 
