@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
@@ -98,7 +97,7 @@ impl ConnectionEventReceiver {
 pub type ChannelHandler = Arc<
     dyn Fn(
             Arc<super::context::ConnectionContext>,
-            super::quic::UnisonStream,
+            super::stream::UnisonStream,
         ) -> Pin<Box<dyn futures_util::Future<Output = Result<(), NetworkError>> + Send>>
         + Send
         + Sync,
@@ -153,7 +152,6 @@ impl ServerHandle {
 
 /// プロトコルサーバー実装
 pub struct ProtocolServer {
-    running: Arc<AtomicBool>,
     /// サーバー識別情報
     server_name: String,
     server_version: String,
@@ -178,7 +176,6 @@ impl ProtocolServer {
         // 仮に超過した場合は RecvError::Lagged が返り、recv_skip_lagged() で対処可能。
         let (tx, _) = tokio::sync::broadcast::channel(64);
         Self {
-            running: Arc::new(AtomicBool::new(false)),
             server_name: "unison".to_string(),
             server_version: env!("CARGO_PKG_VERSION").to_string(),
             server_namespace: "default".to_string(),
@@ -200,10 +197,6 @@ impl ProtocolServer {
     }
 
     /// サーバー実行状態の確認
-    pub fn is_running(&self) -> bool {
-        self.running.load(Ordering::SeqCst)
-    }
-
     /// 登録済みチャネルからServerIdentityを構築
     pub async fn build_identity(&self) -> ServerIdentity {
         let mut identity = ServerIdentity::new(
@@ -309,7 +302,7 @@ impl ProtocolServer {
     /// チャネルハンドラーを登録
     pub async fn register_channel<F, Fut>(&self, name: &str, handler: F)
     where
-        F: Fn(Arc<super::context::ConnectionContext>, super::quic::UnisonStream) -> Fut
+        F: Fn(Arc<super::context::ConnectionContext>, super::stream::UnisonStream) -> Fut
             + Send
             + Sync
             + 'static,
@@ -317,7 +310,7 @@ impl ProtocolServer {
     {
         let handler = Arc::new(
             move |ctx: Arc<super::context::ConnectionContext>,
-                  stream: super::quic::UnisonStream| {
+                  stream: super::stream::UnisonStream| {
                 Box::pin(handler(ctx, stream))
                     as Pin<Box<dyn futures_util::Future<Output = Result<(), NetworkError>> + Send>>
             },
@@ -493,7 +486,6 @@ impl ProtocolServer {
         use super::quic::QuicServer;
 
         let protocol_server = Arc::new(self);
-        protocol_server.running.store(true, Ordering::SeqCst);
 
         let mut quic_server = QuicServer::new(Arc::clone(&protocol_server));
         quic_server
@@ -503,13 +495,10 @@ impl ProtocolServer {
 
         tracing::info!("Unison Protocol server listening on {} via QUIC", addr);
 
-        let result = quic_server
+        quic_server
             .start()
             .await
-            .map_err(|e| NetworkError::Quic(e.to_string()));
-
-        protocol_server.running.store(false, Ordering::SeqCst);
-        result
+            .map_err(|e| NetworkError::Quic(e.to_string()))
     }
 
     /// バックグラウンドでサーバーを起動し、ServerHandle を返す
@@ -581,116 +570,13 @@ impl ProtocolServer {
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 
-        protocol_server.running.store(true, Ordering::SeqCst);
-
         tracing::info!("Unison Protocol server spawned on {} via QUIC", local_addr);
 
-        let server_clone = Arc::clone(&protocol_server);
         let join_handle = tokio::spawn(async move {
-            let result = quic_server
+            quic_server
                 .start_with_shutdown(shutdown_rx)
                 .await
-                .map_err(|e| NetworkError::Quic(e.to_string()));
-
-            server_clone.running.store(false, Ordering::SeqCst);
-
-            result
-        });
-
-        Ok(ServerHandle {
-            join_handle,
-            shutdown_tx: Some(shutdown_tx),
-            local_addr,
-        })
-    }
-
-    /// WebTransport ingress を起動する (= ブラウザクライアント受け口、 Phase 6a)。
-    ///
-    /// raw QUIC の [`listen`](Self::listen) と並立する。 受け付けた接続は raw QUIC
-    /// と **同一の** `handle_connection` へ流れるため、 `register_channel` で登録
-    /// したハンドラーは transport を問わず動作する。
-    ///
-    /// `addr` は `SocketAddr` 文字列 (例: `"[::]:4433"`)。 `cert_source` は raw
-    /// QUIC 側と共有でき、 TLS 信頼モデルを 2 ingress で統一できる。
-    ///
-    /// **注意**: self を消費するため、 `subscribe_connection_events()` は事前に。
-    pub async fn listen_webtransport(
-        self,
-        addr: &str,
-        cert_source: super::cert::CertSource,
-    ) -> Result<(), NetworkError> {
-        use super::webtransport::WebTransportServer;
-
-        let socket_addr: SocketAddr = addr
-            .parse()
-            .map_err(|e| NetworkError::Quic(format!("WebTransport bind addr parse 失敗: {}", e)))?;
-
-        let protocol_server = Arc::new(self);
-        protocol_server.running.store(true, Ordering::SeqCst);
-
-        let mut wt_server = WebTransportServer::new(Arc::clone(&protocol_server), cert_source);
-        wt_server
-            .bind(socket_addr)
-            .await
-            .map_err(|e| NetworkError::Quic(e.to_string()))?;
-
-        tracing::info!(
-            "Unison Protocol server listening on {} via WebTransport",
-            addr
-        );
-
-        let result = wt_server
-            .start()
-            .await
-            .map_err(|e| NetworkError::Quic(e.to_string()));
-
-        protocol_server.running.store(false, Ordering::SeqCst);
-        result
-    }
-
-    /// バックグラウンドで WebTransport ingress を起動し、 [`ServerHandle`] を返す。
-    ///
-    /// [`spawn_listen`](Self::spawn_listen) の WebTransport 版。 raw QUIC ingress と
-    /// 同時に走らせたい場合は、 `Arc<Self>` を共有して両方を spawn すればよい。
-    pub async fn spawn_listen_webtransport(
-        self: Arc<Self>,
-        addr: &str,
-        cert_source: super::cert::CertSource,
-    ) -> Result<ServerHandle, NetworkError> {
-        use super::webtransport::WebTransportServer;
-
-        let socket_addr: SocketAddr = addr
-            .parse()
-            .map_err(|e| NetworkError::Quic(format!("WebTransport bind addr parse 失敗: {}", e)))?;
-
-        let protocol_server = self;
-
-        let mut wt_server = WebTransportServer::new(Arc::clone(&protocol_server), cert_source);
-        wt_server
-            .bind(socket_addr)
-            .await
-            .map_err(|e| NetworkError::Quic(e.to_string()))?;
-
-        let local_addr = wt_server
-            .local_addr()
-            .ok_or_else(|| NetworkError::Quic("WebTransport server not bound".to_string()))?;
-
-        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-        protocol_server.running.store(true, Ordering::SeqCst);
-
-        tracing::info!(
-            "Unison Protocol server spawned on {} via WebTransport",
-            local_addr
-        );
-
-        let server_clone = Arc::clone(&protocol_server);
-        let join_handle = tokio::spawn(async move {
-            let result = wt_server
-                .start_with_shutdown(shutdown_rx)
-                .await
-                .map_err(|e| NetworkError::Quic(e.to_string()));
-            server_clone.running.store(false, Ordering::SeqCst);
-            result
+                .map_err(|e| NetworkError::Quic(e.to_string()))
         });
 
         Ok(ServerHandle {
@@ -711,10 +597,10 @@ impl Default for ProtocolServer {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_server_creation() {
+    #[tokio::test]
+    async fn test_server_creation() {
         let server = ProtocolServer::new();
-        assert!(!server.is_running());
+        assert_eq!(server.active_connection_count().await, 0);
     }
 
     #[tokio::test]

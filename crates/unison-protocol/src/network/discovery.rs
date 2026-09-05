@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use super::protocol_cache::ProtocolCache;
-use super::quic::UnisonStream;
+use super::stream::UnisonStream;
 use super::{MessageType, NetworkError, UnisonChannel};
 
 /// `unison.discovery` channel name (= `schemas/discovery.kdl` 側と一致)

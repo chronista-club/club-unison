@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::Args;
-use unison::network::quic::UnisonStream;
+use unison::network::UnisonStream;
 use unison::network::{MessageType, UnisonChannel};
 use unison::parser::{ChannelBackend, Field, FieldType, SchemaParser};
 use unison::{ProtocolServer, UnisonProtocol};

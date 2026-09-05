@@ -176,7 +176,7 @@ pub enum RaceError {
 /// - relay は最劣後（末尾）
 ///
 /// 現状は IPv6 GUA のみ運用（ADR-020 §D3、IPv4 deferred）ゆえ direct は順序保持で足りる。
-pub fn rank(candidates: Vec<Candidate>, my_addrs: &[IpAddr]) -> Vec<Candidate> {
+fn rank(candidates: Vec<Candidate>, my_addrs: &[IpAddr]) -> Vec<Candidate> {
     let (direct, relay): (Vec<_>, Vec<_>) = candidates.into_iter().partition(Candidate::is_direct);
     // TODO(§S6): direct.sort_by_key(|c| prefix_distance(c, my_addrs))  // 同一サイト優先
     // TODO(§S6): family interleave（IPv4 導入後）

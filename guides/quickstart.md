@@ -52,7 +52,7 @@ protocol "quickstart" version="1.0.0" {
     // server push 専用 channel
     channel "clock" from="client" lifetime="persistent" {
         event "Tick" {
-            field "seq" type="number"
+            field "seq" type="int"
         }
     }
 }

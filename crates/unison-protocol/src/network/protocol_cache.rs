@@ -64,19 +64,6 @@ impl ProtocolCache {
             codecs: Arc::from(vec!["json".to_string()]),
         })
     }
-
-    /// ファイルから KDL を読み込んで `ProtocolCache` を構築する。
-    ///
-    /// # Errors
-    /// 読み込み失敗時は [`NetworkError::Connection`]、 KDL 不正時は
-    /// [`NetworkError::Protocol`]。
-    pub fn from_file(path: impl AsRef<std::path::Path>) -> Result<Self, NetworkError> {
-        let path = path.as_ref();
-        let kdl = std::fs::read_to_string(path).map_err(|e| {
-            NetworkError::Connection(format!("discovery: failed to read {}: {e}", path.display()))
-        })?;
-        Self::new(kdl)
-    }
 }
 
 /// bytes の SHA-256 を 64 文字 lowercase hex で返す。
@@ -159,29 +146,5 @@ protocol "demo" version="1.2.3" {
     fn cache_rejects_malformed_kdl() {
         let bad = "this is not valid kdl }{}{)(";
         assert!(ProtocolCache::new(bad).is_err());
-    }
-
-    /// ファイル read OK → KDL parse → cache 構築
-    #[test]
-    fn cache_from_file_reads_and_parses() {
-        // 既存 schemas/ping_pong.kdl を使う (= 小さくて読みやすい)
-        let path = std::env::var("CARGO_MANIFEST_DIR")
-            .map(|d| std::path::PathBuf::from(d).join("../../schemas/ping_pong.kdl"))
-            .unwrap_or_else(|_| std::path::PathBuf::from("../../schemas/ping_pong.kdl"));
-        let cache = ProtocolCache::from_file(&path).expect("read + parse");
-        assert_eq!(&*cache.version, "2.0.0");
-        assert!(cache.kdl.contains("ping-pong"));
-    }
-
-    /// 存在しないファイルは Connection error
-    #[test]
-    fn cache_from_file_missing_returns_connection_error() {
-        let result = ProtocolCache::from_file("/nonexistent/path/to/file.kdl");
-        match result {
-            Err(NetworkError::Connection(msg)) => {
-                assert!(msg.contains("failed to read"), "got: {msg}");
-            }
-            other => panic!("expected Connection error, got: {other:?}"),
-        }
     }
 }

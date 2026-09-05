@@ -10,11 +10,10 @@ use super::channel::UnisonChannel;
 use super::context::ConnectionContext;
 use super::datagram_channel::DatagramChannel;
 use super::datagram_dispatcher::DatagramDispatcher;
+use super::frame::{CHANNEL_ACK_METHOD, FRAME_TYPE_PROTOCOL, read_typed_frame, write_typed_frame};
 use super::identity::ServerIdentity;
-use super::quic::{
-    CHANNEL_ACK_METHOD, FRAME_TYPE_PROTOCOL, QuicClient, UnisonStream, read_typed_frame,
-    write_typed_frame,
-};
+use super::quic::QuicClient;
+use super::stream::UnisonStream;
 use super::{MessageType, NetworkError, ProtocolMessage};
 
 /// Client side connection event (v0.10.0 で追加、 [`ProtocolServer::ConnectionEvent`] と parallel)

@@ -1,4 +1,4 @@
-use unison::prelude::*;
+use unison::parser::{ChannelBackend, ChannelFrom, ChannelLifetime, SchemaParser};
 
 #[test]
 fn test_basic_kdl_parsing() {

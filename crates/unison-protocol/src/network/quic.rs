@@ -1,13 +1,10 @@
 //! Raw QUIC transport — [`QuicClient`] / [`QuicServer`] と接続ハンドラー。
 //!
 //! typed-frame の wire I/O は [`super::frame`]、 handler-facing なストリーム型
-//! [`UnisonStream`] は [`super::stream`] に分離されている。 後方互換のため、
-//! それらは本モジュールからも re-export されている (= `network::quic::*` の
-//! import パスを維持)。
+//! [`UnisonStream`](super::stream::UnisonStream) は [`super::stream`] にある。
 
 use anyhow::{Context, Result};
 use quinn::{ClientConfig, Connection, Endpoint, ServerConfig};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::{ClientConfig as RustlsClientConfig, ServerConfig as RustlsServerConfig};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -23,17 +20,7 @@ use super::dispatch::{
 };
 use super::{NetworkError, ProtocolMessage, context::ConnectionContext, server::ProtocolServer};
 
-// 後方互換: typed-frame wire I/O と handler-facing stream 型は専用モジュールへ
-// 移動したが、 `network::quic::*` の public import パスを保つため再公開する。
-pub use super::frame::{
-    CHANNEL_ACK_METHOD, FRAME_TYPE_PROTOCOL, FRAME_TYPE_RAW, read_frame, read_typed_frame,
-    write_frame, write_typed_frame,
-};
-pub use super::stream::{TypedFrame, UnisonStream};
-
-/// Default certificate file paths for assets/certs directory
-pub const DEFAULT_CERT_PATH: &str = "assets/certs/cert.pem";
-pub const DEFAULT_KEY_PATH: &str = "assets/certs/private_key.der";
+use super::stream::UnisonStream;
 
 /// Default port for QUIC connections
 const DEFAULT_PORT: u16 = 8080;
@@ -652,46 +639,6 @@ impl QuicServer {
         }
     }
 
-    /// QUIC/TLS 1.3用の自己署名証明書を生成（本番環境使用に最適化）
-    pub fn generate_self_signed_cert()
-    -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
-        let subject_alt_names = vec![
-            "localhost".to_string(),
-            "*.unison.svc.cluster.local".to_string(),
-            "dev.chronista.club".to_string(),
-        ];
-
-        let cert_key = rcgen::generate_simple_self_signed(subject_alt_names)?;
-        let cert_der_bytes = cert_key.cert.der().to_vec();
-        let private_key_der_bytes = cert_key.signing_key.serialize_der();
-
-        let private_key = PrivateKeyDer::try_from(private_key_der_bytes)
-            .map_err(|e| anyhow::anyhow!("Failed to wrap private key: {}", e))?;
-
-        Ok((vec![CertificateDer::from(cert_der_bytes)], private_key))
-    }
-
-    /// 外部ファイルから証明書を読み込み（本番環境デプロイ用）
-    pub fn load_cert_from_files(
-        cert_path: &str,
-        key_path: &str,
-    ) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
-        let cert_pem = std::fs::read_to_string(cert_path)?;
-        let key_der = std::fs::read(key_path)?;
-
-        let cert_chain = rustls_pemfile::certs(&mut cert_pem.as_bytes())
-            .collect::<Result<Vec<_>, _>>()
-            .context("Failed to parse certificate")?;
-        let certs = cert_chain;
-
-        // Convert to owned data for static lifetime
-        let key_der_owned = key_der.clone();
-        let private_key = PrivateKeyDer::try_from(key_der_owned.as_ref())
-            .map_err(|e| anyhow::anyhow!("Failed to parse private key: {}", e))?;
-
-        Ok((certs, private_key.clone_key()))
-    }
-
     /// Configure server with TLS, given a [`CertSource`].
     ///
     /// v0.7.0+: operator must explicitly choose how to obtain the certificate.
@@ -883,10 +830,10 @@ mod tests {
         identity_tx: &mut Option<oneshot::Sender<ProtocolMessage>>,
     ) {
         let msg = make_message(method);
-        if msg.method == "__identity" {
-            if let Some(tx) = identity_tx.take() {
-                let _ = tx.send(msg);
-            }
+        if msg.method == "__identity"
+            && let Some(tx) = identity_tx.take()
+        {
+            let _ = tx.send(msg);
         }
         // else: server-initiated 非 identity frame は drop (= 何もしない)
     }

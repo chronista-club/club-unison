@@ -1,4 +1,4 @@
-use unison::prelude::*;
+use unison::parser::{ChannelFrom, ChannelLifetime, SchemaParser};
 
 #[test]
 fn test_creo_sync_channel_types() {

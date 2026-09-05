@@ -15,8 +15,11 @@ Unisonプロトコルの正式な要求仕様・機能仕様です。
 
 | 番号 | 仕様書 | 概要 | ステータス |
 |-----|--------|------|-----------|
-| 01 | [コアネットワーク](01-core-concept/SPEC.md) | QUIC採用、3層アーキテクチャ（Agent/Hub/Root）、ディスカバリー機構 | Draft |
-| 02 | [Unified Channel](02-unified-channel/SPEC.md) | KDLベースのスキーマ定義、Unified Channel通信 | Draft |
+| 01 | [コアネットワーク](01-core-concept/SPEC.md) | QUIC採用、Everything is a Channel、ServerIdentity | Draft |
+| 02 | [Unified Channel](02-unified-channel/SPEC.md) | KDL スキーマ、channel routing、request / event、datagram channel | Stable |
+| 04 | [Discovery](04-discovery/SPEC.md) | `unison.discovery` channel による KDL の runtime 配布と hash | Stable |
+
+番号 03 は欠番 (旧「Stream Channels」spec は 02 に統合)。
 
 ## 仕様書の構成
 
