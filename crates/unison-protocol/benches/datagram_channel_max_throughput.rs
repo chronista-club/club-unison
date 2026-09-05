@@ -68,14 +68,9 @@ fn bench_max_throughput(c: &mut Criterion) {
                 .register_channel_datagram("position", 1, move |chan| {
                     let counter = Arc::clone(&server_echo_count_h);
                     async move {
-                        loop {
-                            match chan.recv_event::<Transform>().await {
-                                Ok(t) => {
-                                    counter.fetch_add(1, Ordering::Relaxed);
-                                    let _ = chan.send_event(&t).await;
-                                }
-                                Err(_) => break,
-                            }
+                        while let Ok(t) = chan.recv_event::<Transform>().await {
+                            counter.fetch_add(1, Ordering::Relaxed);
+                            let _ = chan.send_event(&t).await;
                         }
                     }
                 })

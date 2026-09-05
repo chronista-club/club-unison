@@ -35,14 +35,9 @@ async fn register_echo_handler(server: &ProtocolServer) {
     server
         .register_channel_datagram("position", 1, |chan| async move {
             // 受信した Transform をそのまま echo back
-            loop {
-                match chan.recv_event::<Transform>().await {
-                    Ok(transform) => {
-                        // 同じ channel に send_event = 同じ connection に send_datagram
-                        let _ = chan.send_event(&transform).await;
-                    }
-                    Err(_) => break,
-                }
+            while let Ok(transform) = chan.recv_event::<Transform>().await {
+                // 同じ channel に send_event = 同じ connection に send_datagram
+                let _ = chan.send_event(&transform).await;
             }
         })
         .await;
@@ -119,25 +114,15 @@ async fn test_medium_datagram_multiple_channels() -> Result<()> {
     // 2 つの datagram channel を登録
     server
         .register_channel_datagram("position", 1, |chan| async move {
-            loop {
-                match chan.recv_event::<Transform>().await {
-                    Ok(t) => {
-                        let _ = chan.send_event(&t).await;
-                    }
-                    Err(_) => break,
-                }
+            while let Ok(t) = chan.recv_event::<Transform>().await {
+                let _ = chan.send_event(&t).await;
             }
         })
         .await;
     server
         .register_channel_datagram("presence", 2, |chan| async move {
-            loop {
-                match chan.recv_event::<Transform>().await {
-                    Ok(t) => {
-                        let _ = chan.send_event(&t).await;
-                    }
-                    Err(_) => break,
-                }
+            while let Ok(t) = chan.recv_event::<Transform>().await {
+                let _ = chan.send_event(&t).await;
             }
         })
         .await;
