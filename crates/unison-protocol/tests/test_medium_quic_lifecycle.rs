@@ -54,9 +54,9 @@ async fn register_echo_handler(server: &ProtocolServer) {
 // Test 1: サーバー起動 → ポート割り当て → シャットダウン
 // ─────────────────────────────────────────────────
 
-/// spawn_listen でポート 0 に bind → local_addr() で割り当てポートを取得 → shutdown
+/// listener(..).spawn() でポート 0 に bind → local_addr() で割り当てポートを取得 → shutdown
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_quic_server_bind_and_shutdown() -> Result<()> {
     init_tracing();
 
@@ -83,7 +83,7 @@ async fn test_medium_quic_server_bind_and_shutdown() -> Result<()> {
 
 /// クライアントがサーバーに接続し、接続状態を確認し、切断する
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_quic_connection_lifecycle() -> Result<()> {
     init_tracing();
 
@@ -118,7 +118,7 @@ async fn test_medium_quic_connection_lifecycle() -> Result<()> {
 
 /// 接続直後にサーバーから ServerIdentity を受信する
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_quic_identity_handshake() -> Result<()> {
     init_tracing();
 
@@ -165,7 +165,7 @@ async fn test_medium_quic_identity_handshake() -> Result<()> {
 
 /// open_channel → request → response の完全なフロー
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_quic_channel_request_response() -> Result<()> {
     init_tracing();
 
@@ -209,7 +209,7 @@ async fn test_medium_quic_channel_request_response() -> Result<()> {
 
 /// 同一チャネルで複数の Request/Response を連続実行
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_quic_sequential_requests() -> Result<()> {
     init_tracing();
 
@@ -256,7 +256,7 @@ async fn test_medium_quic_sequential_requests() -> Result<()> {
 
 /// サーバーがシャットダウンした後、クライアントの接続状態が反映される
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_quic_server_shutdown_disconnects_client() -> Result<()> {
     init_tracing();
 

@@ -1,4 +1,4 @@
-//! Large × E2E: `unison.discovery` channel round-trip
+//! Medium × Integration: `unison.discovery` channel round-trip
 //!
 //! Server に [`ProtocolServer::enable_discovery`] で KDL を載せて起動し、
 //! client が `unison.discovery` channel を open して `GetProtocol` request を
@@ -7,7 +7,7 @@
 //! Unison Hailing Epic α の P1 deliverable の E2E 検証。
 //! 設計: `spec/04-discovery/SPEC.md`
 //!
-//! すべて `#[ignore = "Large: E2E test"]` 付き — `cargo test -- --ignored`
+//! すべて `#[ignore = "Medium: 実 QUIC runtime が要る"]` 付き — `cargo test -- --ignored`
 //! で実行。
 
 use anyhow::Result;
@@ -77,7 +77,7 @@ fn parse_doc(value: Value) -> Result<ProtocolDocument> {
 /// E2E: enable_discovery → client.open_channel("unison.discovery")
 /// → GetProtocol → ProtocolDocument を受け取る
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_discovery_get_protocol_round_trip() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_discovery_server().await?;
@@ -144,7 +144,7 @@ async fn test_e2e_discovery_get_protocol_round_trip() -> Result<()> {
 
 /// E2E: 同じ server に対して GetProtocol を 2 度叩くと同じ hash / kdl / version を返す。
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_discovery_hash_is_deterministic() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_discovery_server().await?;
@@ -184,7 +184,7 @@ async fn test_e2e_discovery_hash_is_deterministic() -> Result<()> {
 /// E2E: enable_discovery を呼ぶと ServerIdentity.channels に
 /// unison.discovery が追加される (= client は接続直後に detect 可能)。
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_discovery_appears_in_server_identity() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_discovery_server().await?;

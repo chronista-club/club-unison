@@ -90,11 +90,11 @@ fn bench_datagram_channel_burst(c: &mut Criterion) {
                             .listener("[::1]:0")
                             .spawn()
                             .await
-                            .expect("spawn_listen_shared");
+                            .expect("listener spawn");
                         let server_addr = handle.local_addr();
 
-                        let client =
-                            ProtocolClient::insecure_localhost().expect("client::new_default");
+                        let client = ProtocolClient::insecure_localhost()
+                            .expect("insecure_localhost client");
                         client
                             .connect(&format!("[{}]:{}", server_addr.ip(), server_addr.port()))
                             .await

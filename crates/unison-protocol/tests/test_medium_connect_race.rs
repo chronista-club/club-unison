@@ -96,7 +96,7 @@ fn fast_cfg() -> RaceCfg {
 // ─────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn connect_race_prefers_live_over_dead_decoy() -> Result<()> {
     init_tracing();
 
@@ -126,7 +126,7 @@ async fn connect_race_prefers_live_over_dead_decoy() -> Result<()> {
 // ─────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn connect_race_single_live_candidate() -> Result<()> {
     init_tracing();
 

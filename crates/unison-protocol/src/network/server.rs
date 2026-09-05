@@ -132,7 +132,7 @@ pub(crate) struct DatagramHandlerEntry {
 
 /// サーバーのライフサイクルを管理するハンドル
 ///
-/// `spawn_listen()` が返す。shutdown シグナル送信と完了待ちを提供。
+/// `listener(..).spawn()` が返す。shutdown シグナル送信と完了待ちを提供。
 pub struct ServerHandle {
     join_handle: JoinHandle<Result<(), NetworkError>>,
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,

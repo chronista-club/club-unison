@@ -134,7 +134,7 @@ async fn assert_ping_pong(client: &ProtocolClient) -> Result<()> {
 // ─────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn ipv6_loopback_roundtrip() -> Result<()> {
     init_tracing();
 
@@ -157,7 +157,7 @@ async fn ipv6_loopback_roundtrip() -> Result<()> {
 // ─────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn ipv4_loopback_roundtrip() -> Result<()> {
     init_tracing();
 
@@ -186,7 +186,7 @@ async fn ipv4_loopback_roundtrip() -> Result<()> {
 /// それぞれ別 family のサーバーへ接続して round-trip する。
 /// V4→`0.0.0.0:0` / V6→`[::]:0` の per-family client bind が同居で破綻しないことを保証。
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn mixed_client_reaches_v6_and_v4() -> Result<()> {
     init_tracing();
 
@@ -219,7 +219,7 @@ async fn mixed_client_reaches_v6_and_v4() -> Result<()> {
 // ─────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn ipv6_unspecified_bind_is_v6() -> Result<()> {
     init_tracing();
 
@@ -244,7 +244,7 @@ async fn ipv6_unspecified_bind_is_v6() -> Result<()> {
 // ─────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn ipv4_unspecified_bind_is_v4() -> Result<()> {
     init_tracing();
 

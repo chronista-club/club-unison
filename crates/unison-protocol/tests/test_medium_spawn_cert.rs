@@ -1,23 +1,26 @@
-//! Medium x Integration: `spawn_listen_*_with_cert` の cert 適用 E2E
+//! Medium x Integration: 高レベル spawn 経路が cert を honor することの E2E
 //!
-//! chronista-hub handoff の回帰テスト。 `ProtocolServer::spawn_listen` /
-//! `spawn_listen_shared` は内部で `QuicServer::builder().build()` (= `dev_localhost` 固定) を
-//! ハードコードしており、 `QuicServer::builder().cert_source()` をバイパスしていた。
-//! 結果 spawn 経路で立てたサーバーは dev_localhost cert しか出せず、 非 loopback
-//! 公開 (tailnet / public federation) ができなかった。
+//! chronista-hub handoff の回帰テスト。 かつての `spawn_listen` / `spawn_listen_shared`
+//! は内部で `QuicServer::builder().build()` (= `dev_localhost` 固定) をハードコード
+//! しており、 `cert_source()` をバイパスしていた。 結果 spawn 経路で立てたサーバーは
+//! dev_localhost cert しか出せず、 非 loopback 公開 (tailnet / public federation) が
+//! できなかった。
 //!
-//! v1.2.0 で追加した [`ProtocolServer::spawn_listen_with_cert`] /
-//! [`ProtocolServer::spawn_listen_shared_with_cert`] が cert を honor することを、
-//! mesh 発行の Custom trust path で検証する:
+//! v1.2.0 で cert を渡せる spawn 経路が入り、 2.0.0 でその 5 変種が
+//! [`ProtocolServer::listener`] → [`ServerListener::cert`] → `spawn()` の 1 本に
+//! 統合された。 現在の経路が cert を honor することを mesh 発行の Custom trust で
+//! 検証する:
 //!
-//! - server: `spawn_listen_shared_with_cert(mesh_cert)` で mesh SelfSigned cert を載せる
+//! - server: `listener(addr).cert(mesh_cert).spawn()` で mesh SelfSigned cert を載せる
 //! - client: `TrustAnchors::Custom([mesh CA])` でその CA を信頼 (= SkipVerification 不使用)
 //!
 //! spawn 経路が cert を無視して dev_localhost に fallback していた旧実装では、
 //! client が信頼するのは mesh CA なので cert mismatch で handshake が落ちる。
-//! 本テストが通ること自体が「spawn 経路が cert_source を honor する」証拠。
+//! 本テストが通ること自体が「spawn 経路が cert を honor する」証拠。
 //!
 //! `#[ignore]` 付き — `cargo test -- --ignored` で実行 (実 QUIC runtime 必須)。
+//!
+//! [`ServerListener::cert`]: unison::network::ServerListener::cert
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -39,8 +42,8 @@ fn init_tracing() {
         .try_init();
 }
 
-/// ping-pong サーバーを **新 spawn API** (`spawn_listen_shared_with_cert`) で起動し、
-/// `ServerHandle` と接続用アドレスを返す。 manual builder ではなく高レベル spawn
+/// ping-pong サーバーを高レベル spawn 経路 (`listener(..).cert(..).spawn()`) で
+/// 起動し、 `ServerHandle` と接続用アドレスを返す。 manual builder ではなくこの
 /// 経路を通すのが本テストの主眼 (= gap が塞がった経路の検証)。
 async fn spawn_with_cert(
     cert: CertSource,
@@ -83,13 +86,13 @@ async fn spawn_with_cert(
 }
 
 // ─────────────────────────────────────────────────
-// positive: spawn_listen_shared_with_cert に渡した mesh cert が適用され、
+// positive: listener(..).cert(..) に渡した mesh cert が適用され、
 // Custom trust client が round-trip できる (= 旧 dev_localhost 固定なら落ちる)
 // ─────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
-async fn spawn_listen_shared_with_cert_honors_cert_source() -> Result<()> {
+#[ignore = "Medium: 実 QUIC runtime が要る"]
+async fn spawn_path_honors_cert_source() -> Result<()> {
     init_tracing();
 
     // SAN = "::1" (= 接続先と一致する IP SAN)。 mesh が server cert + client CA を払い出す。
@@ -106,7 +109,7 @@ async fn spawn_listen_shared_with_cert_honors_cert_source() -> Result<()> {
     client.connect(&addr).await?;
     assert!(
         client.is_connected().await,
-        "spawn_listen_shared_with_cert に渡した cert で接続成功すべき"
+        "listener(..).cert(..) に渡した cert で接続成功すべき"
     );
 
     let channel = client.open_channel("ping-pong").await?;

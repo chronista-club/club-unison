@@ -1,10 +1,10 @@
-//! Large × E2E: unison-mcp が discovery server から synthesized typed tools を
+//! Medium × Integration: unison-mcp が discovery server から synthesized typed tools を
 //! 動的に exposure し、 invoke 時に DynamicChannel 経由で validation + dispatch
 //! することを検証する。
 //!
 //! Unison Hailing α Epic P3b の E2E。
 //!
-//! すべて `#[ignore = "Large: E2E test"]` 付き — `cargo test -- --ignored` で実行。
+//! すべて `#[ignore]` 付き — `cargo test -- --ignored` で実行。
 
 use anyhow::Result;
 use rmcp::ErrorData as McpError;
@@ -126,7 +126,7 @@ protocol "test-synth" version="0.43.0" {
 "#;
 
 /// 指定 addr に TEST_KDL_V2 の server を起動する (= schema 進化後の server を模擬)。
-/// `spawn_listen` は self を consume するため、 bind retry は server ごと作り直す
+/// `listener(..).spawn()` は Arc<ProtocolServer> を consume するため、 bind retry は server ごと作り直す
 /// (= 直前の server の UDP socket close 直後は bind が失敗し得る)。
 async fn start_test_server_v2(addr: &str) -> Result<(ServerHandle, String)> {
     let mut last_err: Option<anyhow::Error> = None;
@@ -190,7 +190,7 @@ async fn start_mcp_with_endpoint(endpoint: &str) -> Result<UnisonMcp> {
 // ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_synthesis_lists_static_plus_synthesized_tools() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_test_server().await?;
@@ -276,7 +276,7 @@ async fn test_e2e_synthesis_lists_static_plus_synthesized_tools() -> Result<()> 
 // ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_synthesis_invoke_synthesized_tool_round_trip() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_test_server().await?;
@@ -320,7 +320,7 @@ async fn test_e2e_synthesis_invoke_synthesized_tool_round_trip() -> Result<()> {
 // ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_synthesis_validation_error_fails_fast() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_test_server().await?;
@@ -367,7 +367,7 @@ where
 // ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_synthesis_find_tool_finds_synthesized() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_test_server().await?;
@@ -391,7 +391,7 @@ async fn test_e2e_synthesis_find_tool_finds_synthesized() -> Result<()> {
 // ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_discover_refreshes_synthesized_tools() -> Result<()> {
     init_tracing();
     let (h1, addr) = start_test_server().await?;
@@ -454,7 +454,7 @@ async fn test_e2e_discover_refreshes_synthesized_tools() -> Result<()> {
 // ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_discover_non_default_endpoint_is_one_off() -> Result<()> {
     init_tracing();
     let (h1, addr1) = start_test_server().await?;
@@ -498,7 +498,7 @@ async fn test_e2e_discover_non_default_endpoint_is_one_off() -> Result<()> {
 // ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_discover_same_hash_refreshes_without_tool_change() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_test_server().await?;

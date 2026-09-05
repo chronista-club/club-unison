@@ -23,7 +23,7 @@ fn init_tracing() {
 
 /// connect 成功時に `Connected { remote_addr }` event が fire される
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_client_event_connected_on_connect() -> Result<()> {
     init_tracing();
 
@@ -60,7 +60,7 @@ async fn test_medium_client_event_connected_on_connect() -> Result<()> {
 
 /// 明示 disconnect で `Disconnected { reason }` event が fire される
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_client_event_disconnected_on_explicit_disconnect() -> Result<()> {
     init_tracing();
 
@@ -104,7 +104,7 @@ async fn test_medium_client_event_disconnected_on_explicit_disconnect() -> Resul
 
 /// Server shutdown による drop detection で Disconnected event が fire される
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_client_event_disconnected_on_server_shutdown() -> Result<()> {
     init_tracing();
 
@@ -145,7 +145,7 @@ async fn test_medium_client_event_disconnected_on_server_shutdown() -> Result<()
 
 /// 複数 subscriber が同 event を独立に受け取れる (= broadcast 性質、 integration version)
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_client_event_multiple_subscribers() -> Result<()> {
     init_tracing();
 

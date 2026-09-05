@@ -1,10 +1,10 @@
-//! Large x E2E: QUIC プロトコル統合テスト
+//! Medium x Integration: QUIC プロトコル一気通貫フロー
 //!
 //! 実際の QUIC サーバー/クライアント間で完全なプロトコルフローを検証する。
 //! スキーマ読み込み → サーバー起動 → クライアント接続 → Identity ハンドシェイク
 //! → チャネル通信 → 切断 → シャットダウン。
 //!
-//! すべて `#[ignore = "Large: E2E test"]` 付き — `cargo test -- --ignored` で実行。
+//! すべて `#[ignore = "Medium: 実 QUIC runtime が要る"]` 付き — `cargo test -- --ignored` で実行。
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -114,7 +114,7 @@ async fn start_e2e_server() -> Result<(ServerHandle, String)> {
 
 /// スキーマ読み込み → サーバー → クライアント → チャネル → request/response → close
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_full_protocol_flow() -> Result<()> {
     init_tracing();
 
@@ -166,7 +166,7 @@ async fn test_e2e_full_protocol_flow() -> Result<()> {
 
 /// Echo ハンドラーの各種変換を E2E で検証
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_echo_transformations() -> Result<()> {
     init_tracing();
 
@@ -225,7 +225,7 @@ async fn test_e2e_echo_transformations() -> Result<()> {
 
 /// Health メソッドでサーバー稼働状態を確認
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_health_check() -> Result<()> {
     init_tracing();
 
@@ -258,7 +258,7 @@ async fn test_e2e_health_check() -> Result<()> {
 
 /// ネスト、配列、Unicode を含む複雑な JSON の E2E 往復
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_complex_json_roundtrip() -> Result<()> {
     init_tracing();
 
@@ -303,7 +303,7 @@ async fn test_e2e_complex_json_roundtrip() -> Result<()> {
 
 /// 50 件の連続 ping リクエストを E2E で実行し、レイテンシを計測
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_sequential_throughput() -> Result<()> {
     init_tracing();
 
@@ -343,7 +343,7 @@ async fn test_e2e_sequential_throughput() -> Result<()> {
 
 /// アクティブなチャネル通信中にサーバーをシャットダウン → クライアントが検知
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_graceful_shutdown() -> Result<()> {
     init_tracing();
 

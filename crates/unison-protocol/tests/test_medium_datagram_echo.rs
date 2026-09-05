@@ -45,7 +45,7 @@ async fn register_echo_handler(server: &ProtocolServer) {
 
 /// Server に handler を register → client が open + send_event → echo を受信できる
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_datagram_echo_round_trip() -> Result<()> {
     init_tracing();
 
@@ -106,7 +106,7 @@ async fn test_medium_datagram_echo_round_trip() -> Result<()> {
 
 /// 複数 datagram channel が同 connection で並列に動く (= channel_id demux 検証)
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_datagram_multiple_channels() -> Result<()> {
     init_tracing();
 
@@ -195,7 +195,7 @@ async fn test_medium_datagram_multiple_channels() -> Result<()> {
 
 /// Server.broadcast: 全 active connection に同 event を送る
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_medium_datagram_broadcast_to_all_clients() -> Result<()> {
     init_tracing();
 

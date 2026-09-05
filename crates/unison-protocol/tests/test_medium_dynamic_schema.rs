@@ -1,4 +1,4 @@
-//! Large × E2E: `DynamicProtocol` + `SchemaRegistry` against a P1 discovery server
+//! Medium × Integration: `DynamicProtocol` + `SchemaRegistry` against a P1 discovery server
 //!
 //! Server に `enable_discovery` で KDL を載せて起動し、 client が
 //! [`DynamicProtocol::fetch`] で schema を fetch、 validation 付きで request を
@@ -7,7 +7,7 @@
 //! Unison Hailing Epic α の P2-Rust deliverable の E2E 検証。
 //! 設計: `spec/04-discovery/SPEC.md` §8。
 //!
-//! すべて `#[ignore = "Large: E2E test"]` 付き — `cargo test -- --ignored` で実行。
+//! すべて `#[ignore = "Medium: 実 QUIC runtime が要る"]` 付き — `cargo test -- --ignored` で実行。
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -105,7 +105,7 @@ async fn start_dynamic_server() -> Result<(ServerHandle, String)> {
 
 /// E2E: DynamicProtocol::fetch が registry を build、 metadata が KDL と一致
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_dynamic_fetch_builds_registry() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_dynamic_server().await?;
@@ -150,7 +150,7 @@ async fn test_e2e_dynamic_fetch_builds_registry() -> Result<()> {
 
 /// E2E: validation を通過した request が server に届き response が返る
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_dynamic_valid_request_round_trip() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_dynamic_server().await?;
@@ -184,7 +184,7 @@ async fn test_e2e_dynamic_valid_request_round_trip() -> Result<()> {
 
 /// E2E: missing required field → ValidationError、 server に到達しない
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_dynamic_missing_required_is_fail_fast() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_dynamic_server().await?;
@@ -211,7 +211,7 @@ async fn test_e2e_dynamic_missing_required_is_fail_fast() -> Result<()> {
 
 /// E2E: type mismatch → ValidationError、 server に到達しない
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_dynamic_type_mismatch_is_fail_fast() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_dynamic_server().await?;
@@ -248,7 +248,7 @@ async fn test_e2e_dynamic_type_mismatch_is_fail_fast() -> Result<()> {
 
 /// E2E: unknown method → ValidationError、 server に到達しない
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_dynamic_unknown_method_is_fail_fast() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_dynamic_server().await?;
@@ -274,7 +274,7 @@ async fn test_e2e_dynamic_unknown_method_is_fail_fast() -> Result<()> {
 
 /// E2E: open_channel に unknown channel → ValidationError、 server に到達しない
 #[tokio::test]
-#[ignore = "Large: E2E test"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_e2e_dynamic_unknown_channel_is_fail_fast() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_dynamic_server().await?;

@@ -40,7 +40,7 @@ fn init_tracing() {
 
 /// mesh 証明書を載せた ping-pong サーバーを起動し、 shutdown sender と接続用アドレスを返す。
 ///
-/// `QuicServer::builder().cert_source(...)` を使う点が高レベル `spawn_listen`
+/// `QuicServer::builder().cert_source(...)` を使う点が高レベル `listener(..).spawn()`
 /// (= dev_localhost 固定) との違い。 accept ループ (identity + channel dispatch) は
 /// `start_with_shutdown` でそのまま回す。
 async fn spawn_mesh_server(cert: CertSource, bind: &str) -> Result<(oneshot::Sender<()>, String)> {
@@ -100,7 +100,7 @@ async fn spawn_mesh_server(cert: CertSource, bind: &str) -> Result<(oneshot::Sen
 // ─────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn connects_when_san_matches() -> Result<()> {
     init_tracing();
 
@@ -142,7 +142,7 @@ async fn connects_when_san_matches() -> Result<()> {
 // ─────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn rejected_when_san_mismatches() -> Result<()> {
     init_tracing();
 
