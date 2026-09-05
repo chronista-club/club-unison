@@ -16,8 +16,9 @@ magnus = "0.8"
 # club-unison 本体（QUIC / channel / wire）。crate の package 名は club-unison、
 # lib 名は unison なので Rust 側は `use unison::...`。
 # raw QUIC の ALPN "unison" は 1.3.0 導入。これ未満だと empty ALPN で
-# ALPN-enforcing server に拒否されるため、floor を 1.3 にする (= ^1.3)。
-club-unison = "1.3"
+# ALPN-enforcing server に拒否される。2.0.0 で listen 系 API と
+# ProtocolClient::insecure_localhost への改名が入ったので floor を 2.0 にする。
+club-unison = "2.0"
 # block_on で async API を Ruby の同期呼び出しへ橋渡しするための runtime。
 tokio = { version = "1", features = ["rt-multi-thread"] }
 # channel payload の Ruby 値 ⇄ serde_json::Value 変換。serde_magnus は magnus

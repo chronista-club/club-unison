@@ -175,12 +175,12 @@ impl Client {
     ///
     /// Does not open a connection; call `#connect` for that.
     ///
-    /// **Warning**: backed by `ProtocolClient::new_default()`, which builds an
-    /// **insecure** client — TLS certificate verification is skipped (intended
-    /// for loopback / development). A secure constructor taking explicit trust
-    /// anchors is future work.
+    /// **Warning**: backed by `ProtocolClient::insecure_localhost()`, which
+    /// builds an **insecure** client — TLS certificate verification is skipped
+    /// (intended for loopback / development). A secure constructor taking
+    /// explicit trust anchors is future work.
     fn new() -> Result<Self, Error> {
-        let inner = ProtocolClient::new_default()
+        let inner = ProtocolClient::insecure_localhost()
             .map_err(|e| unison_error(format!("Unison::Client.new failed: {e}")))?;
         Ok(Self { inner })
     }

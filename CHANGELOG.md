@@ -6,6 +6,13 @@
 このプロジェクトは [セマンティックバージョニング](https://semver.org/lang/ja/) に準拠しています。
 ## [Unreleased]
 
+### Changed
+
+- **Ruby gem の native ext が `club-unison = "2.0"` を使うようになった。**
+  1.3 を pin していたので 2.0.0 の API 変更 (`new_default` → `insecure_localhost`)
+  に追随。 `rake test` 6 件と `rake test:e2e` (実 QUIC + `unison mock`) の通過を確認。
+
+
 ## [2.0.0] - 2026-09-06 — 呼び出し元の無い public API と化石 docs の一掃
 
 > 2026-09-05 に workspace 全体を俯瞰し (Explore agent 3 本 + 手動裏取り、 34 項目)、
