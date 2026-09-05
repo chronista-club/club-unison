@@ -42,7 +42,7 @@ async fn wait_for_ctx(
 /// server が `open_server_stream` で push した N 件を、client handler が
 /// **全件・同順**で受信する（reliable server→client）。
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_server_initiated_reliable_ordered_delivery() -> Result<()> {
     init_tracing();
     const N: i64 = 200;
@@ -120,7 +120,7 @@ async fn test_server_initiated_reliable_ordered_delivery() -> Result<()> {
 /// handler 未登録の channel へ push しても、client は drop + warn するだけで
 /// 接続は壊れない（後方互換 = 無回帰）。
 #[tokio::test]
-#[ignore = "Medium: requires QUIC runtime"]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn test_server_initiated_unregistered_channel_no_regression() -> Result<()> {
     init_tracing();
 

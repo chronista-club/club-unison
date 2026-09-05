@@ -98,8 +98,14 @@ jobs:
         if: runner.os == 'macOS'
         run: echo "RUSTFLAGS=-C symbol-mangling-version=v0" >> "$GITHUB_ENV"
 
-      - name: Run tests (lib unit + integration)
+      - name: Run tests (lib unit + Small)
         run: cargo test --workspace --verbose
+
+      # 実 QUIC connection を張る Medium test。 `#[ignore]` 付きなので上の
+      # ステップでは走らない。 これを回さないと QUIC lifecycle / identity
+      # handshake / datagram / mesh trust / dial race の回帰が CI をすり抜ける。
+      - name: Run tests (Medium, 実 QUIC)
+        run: cargo test --workspace --verbose -- --ignored
 
   # ===========================================
   # 依存関係チェック（ライセンス・セキュリティ）

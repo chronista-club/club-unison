@@ -9,6 +9,14 @@
 
 ### Fixed
 
+- **CI が実 QUIC のテストを一度も走らせていなかった (俯瞰の追加分)。**
+  `#[ignore]` 付きの Medium test 65 件 (QUIC lifecycle / identity handshake /
+  datagram / mesh trust / Happy Eyeballs dial race / auth / discovery ほか) は
+  `cargo test --workspace` では実行されず、 CI に `-- --ignored` のステップが
+  無かった。 これらの回帰は CI をすり抜けていた。 test job にステップを追加。
+- **Ruby CI job に `protoc` が入っていなかった。**
+  `club-unison` の build script (buffa-build) が protoc を要求するため、
+  他の Rust job と同じく `protobuf-compiler` を入れる。
 - **wire golden test が回帰を検知していなかった (俯瞰 MEDIUM #31)。**
   `test_wire_byte_compat.rs` は 5 つの fixture を毎回 `fs::write` で上書きするだけで、
   一度も assert していなかった。 wire format が変われば golden も黙って追従するため、
@@ -18,6 +26,16 @@
 
 ### Changed
 
+- **テストファイル名を層に揃えた (俯瞰 MEDIUM #30)。**
+  `test_<layer>_<topic>.rs` に統一し、 `small` (実 I/O なし・常時実行) と
+  `medium` (実 QUIC・`#[ignore]`) を名前で見分けられるようにした。 4 つの命名
+  スキームが混在し、 `test_integ_*` の 7 件中 4 件は実 QUIC を使わない Small
+  だった。 `simple_quic_test.rs` は QUIC 通信を一切せず、 4 本のうち 3 本が
+  `#[test]` の付かないヘルパーだったので、 独立した test に分割した上で
+  `test_small_cert_trust_config.rs` に改名。 規則は `CLAUDE.md` に記載。
+- **doc に残っていた死語 API を実体に合わせた。** `spawn_listen*` /
+  `new_default` は 2.0.0 で消えているのに、 テストと bench の doc / expect
+  メッセージに 10 箇所残っていた。
 - **重複の整理 (俯瞰 MEDIUM #17 / #24 / #27)。** 公開 API の形は変わらない。
   - `QuicServer::start` / `WebTransportServer::start` が
     `start_with_shutdown` の accept ループを丸ごと複製していたのを、
