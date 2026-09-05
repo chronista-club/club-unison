@@ -24,6 +24,18 @@
   golden との**比較**に変更し、 再生成は `UPDATE_WIRE_FIXTURES=1` を明示したときだけに。
   副次的に `cargo test` が source tree へ書き込まなくなった。
 
+### Added
+
+- **`unison schema-lint` が宣言のない型名を警告するようになった (俯瞰 MEDIUM #28)。**
+  `Field::field_type()` は既知の型名に当てはまらないものを全部
+  `FieldType::Custom` にする。 Custom は下流で完全に素通しされ、
+  `SchemaRegistry::validate_request` の型検査は `true` を返し、 unison-mcp が
+  合成する JSON Schema にも型制約が付かない。 つまり `type="strng"` のような
+  打ち間違いは、 そのフィールドの型検査を黙って無効化していた。
+  `typedef` / `enum` で宣言されていない Custom 名を警告する。 invariant 違反とは
+  別枠の警告なので exit code は変えない。 `number` → `float`、
+  `array<T>` は未実装構文、 といった直し方の示唆も出す。
+
 ### Changed
 
 - **テストファイル名を層に揃えた (俯瞰 MEDIUM #30)。**
