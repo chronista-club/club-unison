@@ -689,44 +689,18 @@ impl QuicServer {
         self.endpoint.as_ref().and_then(|ep| ep.local_addr().ok())
     }
 
+    /// 接続の待ち受けを開始する (= endpoint が閉じるまでブロック)。
+    ///
+    /// 停止したい場合は [`start_with_shutdown`](Self::start_with_shutdown)。
     pub async fn start(&self) -> Result<()> {
-        let endpoint = self
-            .endpoint
-            .as_ref()
-            .context("Server not bound to an address")?;
-
-        info!("QUIC server listening for connections");
-
-        while let Some(connecting) = endpoint.accept().await {
-            // handshake 完了 (`connecting.await`) は **per-connection task 内**で行う。
-            // 以前は accept loop 内で `connecting.await?` していたため、incoming handshake が
-            // 1 つでも失敗すると `?` が accept loop 全体を終了させ、以降の新規接続を一切
-            // 受け付けなくなる「片肺死」が起きていた (既存の spawn 済み接続だけ生存)。
-            // 例: federation direct-dial の cert mismatch (`UnknownIssuer`) や ALPN mismatch。
-            // 修正 2026-07-13、回帰テスト test_medium_accept_resilience、creo
-            // mem_1CcvYA5TRF4EcFafbyKqPg。
-            let server = Arc::clone(&self.server);
-            let ctx = Arc::new(ConnectionContext::new());
-            tokio::spawn(async move {
-                let connection = match connecting.await {
-                    Ok(c) => c,
-                    Err(e) => {
-                        warn!("QUIC handshake failed (accept loop 継続): {}", e);
-                        return;
-                    }
-                };
-                info!("New QUIC connection from: {}", connection.remote_address());
-                let conn: Arc<dyn UnisonConn> = Arc::new(connection);
-                if let Err(e) = handle_connection(conn, server, ctx).await {
-                    error!("Connection error: {}", e);
-                }
-            });
-        }
-
-        Ok(())
+        // sender をこの関数のスコープに保持したまま await するので、 shutdown は発火しない。
+        let (_never, rx) = tokio::sync::oneshot::channel();
+        self.start_with_shutdown(rx).await
     }
 
-    /// shutdown シグナルを受け付けるバージョンの start
+    /// shutdown シグナルを受け付けながら待ち受ける。
+    ///
+    /// `shutdown_rx` が発火するか endpoint が閉じるまでループする。
     pub async fn start_with_shutdown(
         &self,
         mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
@@ -736,7 +710,7 @@ impl QuicServer {
             .as_ref()
             .context("Server not bound to an address")?;
 
-        info!("QUIC server listening for connections (with shutdown support)");
+        info!("QUIC server listening for connections");
 
         loop {
             tokio::select! {

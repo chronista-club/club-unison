@@ -9,6 +9,20 @@
 
 ### Changed
 
+- **重複の整理 (俯瞰 MEDIUM #17 / #24 / #27)。** 公開 API の形は変わらない。
+  - `QuicServer::start` / `WebTransportServer::start` が
+    `start_with_shutdown` の accept ループを丸ごと複製していたのを、
+    「発火しない shutdown receiver を渡すだけ」 の 4 行に。 accept ループの
+    片肺死対策 (2026-07-13) が 1 箇所にまとまり、 片方だけ直す事故が起きなくなる。
+  - `unison.auth` / `unison.discovery` の handler が同じ 5 分岐の recv ループを
+    持っていたのを `channel::next_request` helper に集約。 channel の正常終端の扱いと
+    未知メッセージへの寛容さ (= forward-compat) が 1 箇所に集まる。
+  - `unison-cli` の `ping` / `call` / `sniff` が同じ 7 行の接続 prologue を
+    複製していたのを `build_client` / `connect` helper に。
+
+
+### Changed
+
 - **breaking**: **listen 系 5 メソッドを [`ServerListener`] builder に統合。**
   `listen` / `spawn_listen` / `spawn_listen_shared` / `spawn_listen_with_cert` /
   `spawn_listen_shared_with_cert` は 3 つの直交軸 (`self` か `Arc<Self>` か、 block か

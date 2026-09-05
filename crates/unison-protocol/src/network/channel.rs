@@ -268,3 +268,30 @@ impl<C: Codec> UnisonChannel<C> {
         self.stream.close_stream().await
     }
 }
+
+/// built-in channel (= `unison.auth` / `unison.discovery`) の recv ループで、
+/// 次に処理すべき request を待つ。
+///
+/// 非 request なメッセージは debug log を出して読み飛ばし、 channel の正常終端では
+/// `Ok(None)` を返す。 built-in channel が増えても「終端の扱い」と「未知メッセージへの
+/// 寛容さ」 (= forward-compat) が 1 箇所に集まるようにするための helper。
+pub(crate) async fn next_request<C: Codec>(
+    channel: &UnisonChannel<C>,
+    channel_name: &str,
+) -> Result<Option<ProtocolMessage>, NetworkError> {
+    loop {
+        match channel.recv().await {
+            Ok(msg) if msg.msg_type == MessageType::Request => return Ok(Some(msg)),
+            Ok(msg) => {
+                tracing::debug!(
+                    channel = channel_name,
+                    method = %msg.method,
+                    msg_type = ?msg.msg_type,
+                    "ignored non-request message"
+                );
+            }
+            Err(e) if e.is_normal_close() => return Ok(None),
+            Err(e) => return Err(e),
+        }
+    }
+}

@@ -228,27 +228,16 @@ impl WebTransportServer {
         self.certificate_hash_hex.as_deref()
     }
 
-    /// 接続の待ち受けを開始する (= 終了までブロック)。
+    /// 接続の待ち受けを開始する (= endpoint が閉じるまでブロック)。
+    ///
+    /// 停止したい場合は [`start_with_shutdown`](Self::start_with_shutdown)。
     pub async fn start(&self) -> Result<()> {
-        let endpoint = self
-            .endpoint
-            .as_ref()
-            .context("WebTransport server not bound")?;
-
-        info!("WebTransport server listening for sessions");
-
-        loop {
-            let incoming = endpoint.accept().await;
-            let server = Arc::clone(&self.server);
-            tokio::spawn(async move {
-                if let Err(e) = accept_session(incoming, server).await {
-                    error!("WebTransport session error: {}", e);
-                }
-            });
-        }
+        // sender をこの関数のスコープに保持したまま await するので、 shutdown は発火しない。
+        let (_never, rx) = tokio::sync::oneshot::channel();
+        self.start_with_shutdown(rx).await
     }
 
-    /// shutdown シグナル対応版の [`Self::start`]。
+    /// shutdown シグナルを受け付けながら待ち受ける。
     pub async fn start_with_shutdown(
         &self,
         mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
@@ -258,7 +247,7 @@ impl WebTransportServer {
             .as_ref()
             .context("WebTransport server not bound")?;
 
-        info!("WebTransport server listening for sessions (with shutdown support)");
+        info!("WebTransport server listening for sessions");
 
         loop {
             tokio::select! {

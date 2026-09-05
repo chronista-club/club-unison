@@ -7,8 +7,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use clap::Args;
-use unison::ProtocolClient;
-use unison::network::quic::QuicClient;
 
 use crate::TrustMode;
 
@@ -80,11 +78,7 @@ pub async fn run(args: PingArgs) -> Result<()> {
 
 /// 1 回 connect して RTT と server identity を返す。
 async fn probe_once(args: &PingArgs) -> Result<(Duration, Option<String>)> {
-    let quic = QuicClient::builder()
-        .trust_anchors(args.trust.to_anchors())
-        .build()
-        .context("QUIC client init failed")?;
-    let client = ProtocolClient::new(quic);
+    let client = crate::build_client(args.trust)?;
 
     let start = Instant::now();
     client.connect(&args.url).await.context("connect failed")?;

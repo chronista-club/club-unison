@@ -12,6 +12,8 @@
 //! - `schema-lint F`     — KDL schema を parse + invariant 検証
 
 use clap::{Parser, Subcommand};
+use unison::network::ProtocolClient;
+use unison::network::quic::QuicClient;
 
 mod call;
 mod mock;
@@ -79,4 +81,24 @@ impl TrustMode {
             Self::System => unison::network::TrustAnchors::System,
         }
     }
+}
+
+/// `--trust` から未接続の client を組み立てる (= ping / call / sniff 共通)。
+///
+/// ping は connect の所要時間を測るため、 接続は呼び出し側で行う。
+pub fn build_client(trust: TrustMode) -> anyhow::Result<ProtocolClient> {
+    use anyhow::Context;
+    let quic = QuicClient::builder()
+        .trust_anchors(trust.to_anchors())
+        .build()
+        .context("QUIC client init failed")?;
+    Ok(ProtocolClient::new(quic))
+}
+
+/// `--url` / `--trust` から接続済みの client を作る (= call / sniff 共通)。
+pub async fn connect(url: &str, trust: TrustMode) -> anyhow::Result<ProtocolClient> {
+    use anyhow::Context;
+    let client = build_client(trust)?;
+    client.connect(url).await.context("connect failed")?;
+    Ok(client)
 }
