@@ -38,6 +38,16 @@
 
 ### Changed
 
+- **`quic.rs` からアドレス解釈を `addr.rs` に切り出した (俯瞰 MEDIUM #19)。**
+  接続先文字列の解決 (`[::1]:8080` / `localhost` / `https://host:port` など) と
+  SNI 名の導出は QUIC そのものとは独立した文字列の責務。 テストごと移して
+  `quic.rs` は 1066 行から 758 行に。 公開 API に変化はない (どちらも crate 内部)。
+- **`handle_connection` を責務ごとに分割した (俯瞰 MEDIUM #20)。**
+  224 行の 1 関数が「datagram handler 起動 / identity 送信 / Connected 発火 /
+  accept ループ / 後始末」の 5 つを抱えていた。 `start_datagram_handlers` /
+  `send_identity` / `accept_stream_loop` / `handle_incoming_stream` に分け、
+  `handle_connection` 自身は 41 行の筋書きだけになった。 挙動は不変。
+
 - **テストファイル名を層に揃えた (俯瞰 MEDIUM #30)。**
   `test_<layer>_<topic>.rs` に統一し、 `small` (実 I/O なし・常時実行) と
   `medium` (実 QUIC・`#[ignore]`) を名前で見分けられるようにした。 4 つの命名

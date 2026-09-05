@@ -16,6 +16,8 @@ use crate::proto;
 /// 固定 (`wtransport` 依存が内部で設定) であり、 本 const は適用されない。
 pub const UNISON_ALPN: &[u8] = b"unison";
 
+/// アドレス文字列の解釈 (= 接続先の解決と SNI 名の導出)。
+pub(crate) mod addr;
 pub mod auth;
 pub mod cert;
 pub mod channel;
