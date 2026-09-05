@@ -138,24 +138,22 @@ pub(crate) async fn client_accept_bi_loop(
 ///
 /// raw QUIC と WebTransport の両 ingress がこの関数へ収束する。 `connection` は
 /// [`UnisonConn`] の trait object であり、 この関数は transport の種類を知らない。
-pub(crate) async fn handle_connection(
-    connection: Arc<dyn UnisonConn>,
-    server: Arc<ProtocolServer>,
-    ctx: Arc<ConnectionContext>,
-) -> Result<()> {
-    let remote_addr = connection.remote_address();
-    let connection_id = ctx.connection_id;
-
-    // server-initiated stream (= ServerToClient) を handler が開けるよう、ctx に conn を渡す。
-    // server 側のみ・1 行（ctx/conn はここで同居しているので call-site ripple ゼロ）。
-    ctx.set_conn(Arc::clone(&connection)).await;
-
-    // v0.10.0: active connection に登録 (= server.broadcast の配信先)
-    let connection_arc = Arc::clone(&connection);
-    server
-        .add_active_connection(connection_id, Arc::clone(&connection_arc))
-        .await;
-
+/// この接続に紐づく datagram channel handler を起動する。
+///
+/// 登録済みの datagram handler ごとに `channel_id` を dispatcher へ register し、
+/// [`DatagramChannel`](super::datagram_channel::DatagramChannel) を作って handler を
+/// 別 task で回す。 handler が 1 つも無ければ dispatcher を spawn しない (= overhead 回避)。
+///
+/// 返す `JoinHandle` は caller が接続終了時に abort する。 dispatcher の drop で
+/// 止まるのは recv task だけで、 `recv_event` を待たない handler (= 送信専用 /
+/// timer loop) は abort しない限り接続終了後も回り続けるため。
+async fn start_datagram_handlers(
+    connection: &Arc<dyn UnisonConn>,
+    server: &Arc<ProtocolServer>,
+) -> (
+    Option<Arc<super::datagram_dispatcher::DatagramDispatcher>>,
+    Vec<tokio::task::JoinHandle<()>>,
+) {
     // v0.10.0: datagram dispatcher を 1 connection に 1 個 spawn
     // 登録された datagram channel handler 全てに対し、 channel_id を register して
     // DatagramChannel を構築、 handler を別 task で起動
@@ -164,19 +162,19 @@ pub(crate) async fn handle_connection(
     // 止まるのは recv task だけで、 `recv_event` を待たない handler (= 送信専用 /
     // timer loop) は abort しない限り接続終了後も回り続ける。
     let mut datagram_tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
-    let _datagram_dispatcher = if datagram_handlers.is_empty() {
+    let dispatcher = if datagram_handlers.is_empty() {
         // datagram handler が無ければ dispatcher を spawn しない (= overhead 回避)
         None
     } else {
         let dispatcher = Arc::new(super::datagram_dispatcher::DatagramDispatcher::spawn(
-            Arc::clone(&connection_arc),
+            Arc::clone(connection),
         ));
         for (name, channel_id, handler) in datagram_handlers {
             let rx = dispatcher.register(channel_id, 256).await;
             let datagram_channel = super::datagram_channel::DatagramChannel::<
                 crate::codec::JsonCodec,
             >::new(
-                Arc::clone(&connection_arc), channel_id, name.clone(), rx
+                Arc::clone(connection), channel_id, name.clone(), rx
             );
             datagram_tasks.push(tokio::spawn(async move {
                 handler(datagram_channel).await;
@@ -184,7 +182,20 @@ pub(crate) async fn handle_connection(
         }
         Some(dispatcher)
     };
+    (dispatcher, datagram_tasks)
+}
 
+/// 接続直後に [`ServerIdentity`](super::identity::ServerIdentity) を 1 本の
+/// stream で送る (= Identity Handshake)。
+///
+/// 送信に失敗しても接続は続行する。 identity はクライアントが server の素性と
+/// channel 一覧を知るための情報であって、 通信の前提条件ではない。
+/// WebTransport セッションにも同一フローが適用される。
+async fn send_identity(
+    connection: &Arc<dyn UnisonConn>,
+    server: &Arc<ProtocolServer>,
+    ctx: &Arc<ConnectionContext>,
+) {
     // Identity Handshake: 接続直後にServerIdentityを送信
     let identity = server.build_identity().await;
     ctx.set_identity(identity.clone()).await;
@@ -214,132 +225,131 @@ pub(crate) async fn handle_connection(
             warn!("Failed to serialize identity frame: {}", e);
         }
     }
+}
 
-    // 接続イベントを送信
-    server.emit_connection_event(super::server::ConnectionEvent::Connected {
-        connection_id,
-        remote_addr,
-        context: Arc::clone(&ctx),
-    });
+/// client からの stream を受け続け、 1 本ずつ channel handler へ流す。
+///
+/// 各 stream は個別の task で処理するので、 1 本の handler が長時間 stream を
+/// 保持しても (= persistent channel) 次の stream の受け付けは止まらない。
+/// `accept_bi` の Err で接続終了とみなし、 Disconnected を発火して抜ける。
+/// 受け付けた 1 本の stream を処理する。
+///
+/// 先頭 frame を読み、 `__channel:<name>` なら登録済み handler へ繋ぎ、
+/// 未登録なら nack を返して畳む。 handler は stream を持ったまま長く生き続けることが
+/// あるので、 この関数は caller 側で 1 stream = 1 task として spawn される。
+///
+/// エラーはすべてこの stream 内で完結させる (= 接続そのものは落とさない)。
+async fn handle_incoming_stream(
+    server: Arc<ProtocolServer>,
+    ctx: Arc<ConnectionContext>,
+    send_stream: super::conn::BoxUnisonSend,
+    mut recv_stream: super::conn::BoxUnisonRecv,
+) {
+    // typed frame で読み取り（type tag 付き）
+    let request_result = match read_typed_frame(&mut recv_stream).await {
+        Ok((FRAME_TYPE_PROTOCOL, frame_bytes)) => UnisonPacket::from_bytes(&frame_bytes)
+            .and_then(|frame| ProtocolMessage::from_frame(&frame)),
+        Ok((frame_type, _)) => {
+            warn!("Unexpected frame type in handshake: 0x{:02x}", frame_type);
+            return;
+        }
+        Err(e) => {
+            error!("Failed to read handshake frame: {}", e);
+            return;
+        }
+    };
 
-    loop {
-        match connection.accept_bi().await {
-            Ok((send_stream, mut recv_stream)) => {
-                let server = Arc::clone(&server);
-                let ctx = Arc::clone(&ctx);
+    match request_result {
+        Ok(request) => {
+            // チャネルルーティング: __channel: プレフィックスをチェック
+            if let Some(channel_name) = request.method.strip_prefix("__channel:") {
+                let channel_name = channel_name.to_string();
+                let mut send_stream = send_stream;
+                if let Some(handler) = server.get_channel_handler(&channel_name).await {
+                    // channel lifecycle の "open" 側ログ。
+                    // close 側 (= 下記の debug!) と対になり、 1 接続中の
+                    // channel 開閉 trace が debug level で揃う。
+                    // info level にしない理由: 1 接続で channel が頻繁に
+                    // open/close される設計 (= 1 request/response = 1 channel)
+                    // なので info noise になりがち。
+                    debug!("Channel '{}' opened", channel_name);
 
-                tokio::spawn(async move {
-                    // typed frame で読み取り（type tag 付き）
-                    let request_result = match read_typed_frame(&mut recv_stream).await {
-                        Ok((FRAME_TYPE_PROTOCOL, frame_bytes)) => {
-                            UnisonPacket::from_bytes(&frame_bytes)
-                                .and_then(|frame| ProtocolMessage::from_frame(&frame))
-                        }
-                        Ok((frame_type, _)) => {
-                            warn!("Unexpected frame type in handshake: 0x{:02x}", frame_type);
-                            return;
-                        }
-                        Err(e) => {
-                            error!("Failed to read handshake frame: {}", e);
-                            return;
-                        }
-                    };
+                    // Phase 6c: open frame と同 stream へ open_ack
+                    // (= Response) を 1 本返す。 id は open request の
+                    // id を引き継ぎ、 クライアントが相関できるようにする。
+                    if let Err(e) =
+                        write_channel_ack(&mut send_stream, request.id, true, &channel_name).await
+                    {
+                        warn!("Failed to send open_ack for '{}': {}", channel_name, e);
+                        return;
+                    }
 
-                    match request_result {
-                        Ok(request) => {
-                            // チャネルルーティング: __channel: プレフィックスをチェック
-                            if let Some(channel_name) = request.method.strip_prefix("__channel:") {
-                                let channel_name = channel_name.to_string();
-                                let mut send_stream = send_stream;
-                                if let Some(handler) =
-                                    server.get_channel_handler(&channel_name).await
-                                {
-                                    // channel lifecycle の "open" 側ログ。
-                                    // close 側 (= 下記の debug!) と対になり、 1 接続中の
-                                    // channel 開閉 trace が debug level で揃う。
-                                    // info level にしない理由: 1 接続で channel が頻繁に
-                                    // open/close される設計 (= 1 request/response = 1 channel)
-                                    // なので info noise になりがち。
-                                    debug!("Channel '{}' opened", channel_name);
-
-                                    // Phase 6c: open frame と同 stream へ open_ack
-                                    // (= Response) を 1 本返す。 id は open request の
-                                    // id を引き継ぎ、 クライアントが相関できるようにする。
-                                    if let Err(e) = write_channel_ack(
-                                        &mut send_stream,
-                                        request.id,
-                                        true,
-                                        &channel_name,
-                                    )
-                                    .await
-                                    {
-                                        warn!(
-                                            "Failed to send open_ack for '{}': {}",
-                                            channel_name, e
-                                        );
-                                        return;
-                                    }
-
-                                    // チャネル用のUnisonStreamを作成（ストリームは生きたまま）
-                                    let stream = UnisonStream::from_streams(
-                                        request.id,
-                                        request.method.clone(),
-                                        send_stream,
-                                        recv_stream,
-                                    );
-                                    if let Err(e) = handler(ctx, stream).await {
-                                        // sender 側が request/response 完了後に正常 close した
-                                        // end-of-stream は real error ではないので debug level に
-                                        // degrade。 これにより毎 channel session の終端で発生する
-                                        // ERROR log noise (= journal で大半を占める) を抑制。
-                                        if e.is_normal_close() {
-                                            debug!(
-                                                "Channel '{}' closed normally (end of stream)",
-                                                channel_name
-                                            );
-                                        } else {
-                                            error!(
-                                                "Channel handler error for '{}': {}",
-                                                channel_name, e
-                                            );
-                                        }
-                                    }
-                                } else {
-                                    // Phase 6c: 未登録 channel への open は nack
-                                    // (= Error frame) を返してから stream を畳む。
-                                    // これによりクライアントの open は silent に
-                                    // hang せず channel-not-found で即 reject する。
-                                    warn!("No channel handler for: {}", channel_name);
-                                    if let Err(e) = write_channel_ack(
-                                        &mut send_stream,
-                                        request.id,
-                                        false,
-                                        &channel_name,
-                                    )
-                                    .await
-                                    {
-                                        warn!(
-                                            "Failed to send open nack for '{}': {}",
-                                            channel_name, e
-                                        );
-                                    } else {
-                                        let _ = send_stream.finish().await;
-                                    }
-                                }
-                                return;
-                            }
-
-                            // 非チャネルメッセージはサポート外
-                            warn!(
-                                "Non-channel message received (method: {}). Use channels instead.",
-                                request.method
-                            );
-                        }
-                        Err(e) => {
-                            warn!("Failed to parse message: {}", e);
+                    // チャネル用のUnisonStreamを作成（ストリームは生きたまま）
+                    let stream = UnisonStream::from_streams(
+                        request.id,
+                        request.method.clone(),
+                        send_stream,
+                        recv_stream,
+                    );
+                    if let Err(e) = handler(ctx, stream).await {
+                        // sender 側が request/response 完了後に正常 close した
+                        // end-of-stream は real error ではないので debug level に
+                        // degrade。 これにより毎 channel session の終端で発生する
+                        // ERROR log noise (= journal で大半を占める) を抑制。
+                        if e.is_normal_close() {
+                            debug!("Channel '{}' closed normally (end of stream)", channel_name);
+                        } else {
+                            error!("Channel handler error for '{}': {}", channel_name, e);
                         }
                     }
-                });
+                } else {
+                    // Phase 6c: 未登録 channel への open は nack
+                    // (= Error frame) を返してから stream を畳む。
+                    // これによりクライアントの open は silent に
+                    // hang せず channel-not-found で即 reject する。
+                    warn!("No channel handler for: {}", channel_name);
+                    if let Err(e) =
+                        write_channel_ack(&mut send_stream, request.id, false, &channel_name).await
+                    {
+                        warn!("Failed to send open nack for '{}': {}", channel_name, e);
+                    } else {
+                        let _ = send_stream.finish().await;
+                    }
+                }
+                return;
+            }
+
+            // 非チャネルメッセージはサポート外
+            warn!(
+                "Non-channel message received (method: {}). Use channels instead.",
+                request.method
+            );
+        }
+        Err(e) => {
+            warn!("Failed to parse message: {}", e);
+        }
+    }
+}
+
+async fn accept_stream_loop(
+    connection: &Arc<dyn UnisonConn>,
+    server: &Arc<ProtocolServer>,
+    ctx: &Arc<ConnectionContext>,
+    connection_id: uuid::Uuid,
+    remote_addr: std::net::SocketAddr,
+) {
+    loop {
+        match connection.accept_bi().await {
+            Ok((send_stream, recv_stream)) => {
+                let server = Arc::clone(server);
+                let ctx = Arc::clone(ctx);
+
+                tokio::spawn(handle_incoming_stream(
+                    server,
+                    ctx,
+                    send_stream,
+                    recv_stream,
+                ));
             }
             Err(e) => {
                 // accept_bi の Err = 接続終了 (= 正常な切断もエラー扱いで来る)。
@@ -353,6 +363,38 @@ pub(crate) async fn handle_connection(
             }
         }
     }
+}
+
+pub(crate) async fn handle_connection(
+    connection: Arc<dyn UnisonConn>,
+    server: Arc<ProtocolServer>,
+    ctx: Arc<ConnectionContext>,
+) -> Result<()> {
+    let remote_addr = connection.remote_address();
+    let connection_id = ctx.connection_id;
+
+    // server-initiated stream (= ServerToClient) を handler が開けるよう、ctx に conn を渡す。
+    // server 側のみ・1 行（ctx/conn はここで同居しているので call-site ripple ゼロ）。
+    ctx.set_conn(Arc::clone(&connection)).await;
+
+    // v0.10.0: active connection に登録 (= server.broadcast の配信先)
+    server
+        .add_active_connection(connection_id, Arc::clone(&connection))
+        .await;
+
+    // dispatcher は接続が終わるまで生かす必要がある (= drop で recv task が止まる)。
+    let (_datagram_dispatcher, datagram_tasks) =
+        start_datagram_handlers(&connection, &server).await;
+
+    send_identity(&connection, &server, &ctx).await;
+
+    server.emit_connection_event(super::server::ConnectionEvent::Connected {
+        connection_id,
+        remote_addr,
+        context: Arc::clone(&ctx),
+    });
+
+    accept_stream_loop(&connection, &server, &ctx, connection_id, remote_addr).await;
 
     // 接続終了時の後始末。 台帳から外して broadcast 配信先から除外し、 この接続に
     // 紐づく datagram handler task を明示的に abort する (dispatcher 自身の recv task は
