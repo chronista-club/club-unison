@@ -30,11 +30,6 @@ impl MockConn {
             datagrams_sent: Arc::new(AtomicUsize::new(0)),
         }
     }
-
-    /// 送信された datagram 数のカウンタを共有する。
-    pub(crate) fn datagram_counter(&self) -> Arc<AtomicUsize> {
-        Arc::clone(&self.datagrams_sent)
-    }
 }
 
 impl UnisonConn for MockConn {

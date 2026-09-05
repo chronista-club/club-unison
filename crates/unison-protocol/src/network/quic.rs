@@ -174,9 +174,9 @@ pub struct QuicClient {
     response_tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
     /// Trust anchors used when verifying the server's certificate during connect.
     ///
-    /// v0.8.0: explicit per-instance trust selection. Defaults to
-    /// `TrustAnchors::SkipVerification` for backward compatibility with
-    /// `QuicClient::new()` callers (will be tightened in v0.9.0).
+    /// 接続時にサーバー証明書を検証する方法。 [`builder`](Self::builder) で明示
+    /// 指定する。 [`insecure_localhost`](Self::insecure_localhost) 経由の場合は
+    /// `SkipVerification` (= 検証なし、 loopback 限定)。
     trust_anchors: super::trust::TrustAnchors,
     /// server-initiated channel (= `from="server"`) の handler registry。
     ///
@@ -226,22 +226,19 @@ impl QuicClient {
         }
     }
 
-    /// 証明書検証を行わない insecure な client を構築する。
+    /// **サーバー証明書を検証しない** client を構築する (= dev / test 用)。
     ///
-    /// **注意**: この constructor は [`TrustAnchors::SkipVerification`] を
-    /// 暗黙に選択するため、サーバー証明書を一切検証しない。 production では
-    /// [`QuicClient::builder`] で明示的に [`TrustAnchors`] を指定すること。
-    /// なお [`QuicClient::connect`] は SkipVerification 時の接続先を loopback に
-    /// 制限する。
+    /// [`TrustAnchors::SkipVerification`] を選ぶため、 接続先の証明書を一切検証
+    /// しない。 その代わり [`connect`](Self::connect) は接続先を **loopback に制限**
+    /// する (非 loopback は `Err`)。 loopback 以外へ繋ぐ、 あるいは検証したい場合は
+    /// [`builder`](Self::builder) で [`TrustAnchors`] を明示すること。
+    ///
+    /// 名前が `insecure` なのは意図的で、 呼び出し側のコードを読んだだけで
+    /// 「ここは検証していない」 と分かるようにしている。
     ///
     /// [`TrustAnchors`]: crate::network::trust::TrustAnchors
     /// [`TrustAnchors::SkipVerification`]: crate::network::trust::TrustAnchors::SkipVerification
-    pub fn new() -> Result<Self> {
-        warn!(
-            "QuicClient::new() constructs an INSECURE client (no server certificate \
-             verification). Use QuicClient::builder() with an explicit TrustAnchors for \
-             the secure path."
-        );
+    pub fn insecure_localhost() -> Result<Self> {
         Ok(Self {
             endpoint: Mutex::new(None),
             connection: Arc::new(RwLock::new(None)),
@@ -588,9 +585,8 @@ pub struct QuicServer {
     endpoint: Option<Endpoint>,
     /// Cert source used by `bind` to configure the TLS server.
     ///
-    /// v0.8.0+: explicit per-instance cert selection via [`QuicServer::builder`].
-    /// Defaults to [`super::cert::CertSource::dev_localhost`] for backward
-    /// compatibility with `QuicServer::new()`.
+    /// [`QuicServer::builder`] で指定する。 未指定なら
+    /// [`CertSource::dev_localhost`](super::cert::CertSource::dev_localhost) (= DEV ONLY)。
     cert_source: super::cert::CertSource,
 }
 
@@ -623,19 +619,11 @@ impl QuicServerBuilder {
 }
 
 impl QuicServer {
-    /// Builder entry point (v0.8.0+) — preferred over [`Self::new`].
+    /// [`QuicServer`] を組み立てる唯一の入口。
     pub fn builder(server: Arc<ProtocolServer>) -> QuicServerBuilder {
         QuicServerBuilder {
             server,
             cert_source: None,
-        }
-    }
-
-    pub fn new(server: Arc<ProtocolServer>) -> Self {
-        Self {
-            server,
-            endpoint: None,
-            cert_source: super::cert::CertSource::dev_localhost(),
         }
     }
 
@@ -871,7 +859,8 @@ mod tests {
     /// receive_identity() が指定時間内に応答がない場合タイムアウトエラーを返すことを検証する。
     #[tokio::test]
     async fn test_receive_identity_timeout() {
-        let client = QuicClient::new().expect("QuicClient::new() は成功するべき");
+        let client = QuicClient::insecure_localhost()
+            .expect("QuicClient::insecure_localhost() は成功するべき");
 
         // oneshot の rx をセット（sender は保持するが送信しない）
         let (id_tx, id_rx) = oneshot::channel::<ProtocolMessage>();
@@ -896,7 +885,8 @@ mod tests {
     /// receive_identity() を2回呼んだとき、2回目は "already consumed" エラーを返すことを検証する。
     #[tokio::test]
     async fn test_receive_identity_already_consumed() {
-        let client = QuicClient::new().expect("QuicClient::new() は成功するべき");
+        let client = QuicClient::insecure_localhost()
+            .expect("QuicClient::insecure_localhost() は成功するべき");
 
         // oneshot チャネルを作成し、即座にメッセージを送信
         let (id_tx, id_rx) = oneshot::channel::<ProtocolMessage>();

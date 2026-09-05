@@ -7,6 +7,53 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **breaking**: **listen 系 5 メソッドを [`ServerListener`] builder に統合。**
+  `listen` / `spawn_listen` / `spawn_listen_shared` / `spawn_listen_with_cert` /
+  `spawn_listen_shared_with_cert` は 3 つの直交軸 (`self` か `Arc<Self>` か、 block か
+  background か、 cert 明示か既定か) を名前の suffix に畳んでいた。 `listener()` が
+  `Arc<Self>` を受けることで `_shared` 軸が消え、 起動方法は terminal method、 cert は
+  option になる。
+
+  ```rust
+  // 1.x
+  server.spawn_listen(addr).await?;
+  Arc::clone(&server).spawn_listen_shared(addr).await?;
+  server.spawn_listen_with_cert(addr, cert).await?;
+  server.listen(addr).await?;
+
+  // 2.0
+  Arc::new(server).listener(addr).spawn().await?;   // by-value から
+  server.listener(addr).spawn().await?;             // Arc<ProtocolServer> から
+  server.listener(addr).cert(cert).spawn().await?;
+  Arc::new(server).listener(addr).run().await?;     // block
+  ```
+
+- **breaking**: **証明書を検証しない経路を名前で正直にした。** 呼び出し側のコードを
+  読んだだけで「ここは検証していない」 と分かるようにする。 挙動は変えていない
+  (元から `connect` は SkipVerification 時に loopback 以外を拒否する)。
+
+  | 1.x | 2.0 |
+  |---|---|
+  | `QuicClient::new()` | `QuicClient::insecure_localhost()` |
+  | `ProtocolClient::new_default()` | `ProtocolClient::insecure_localhost()` |
+  | `QuicServer::new(server)` | `QuicServer::builder(server).build()` |
+
+- **breaking**: **channel の正常終端を `NetworkError::ChannelEof(ChannelEof)` にした。**
+  従来は `Protocol(String)` の中身を `"Channel closed"` 等の文字列と照合して判定して
+  おり、 生成側 3 箇所と判定側が定数を共有していなかった (= typo で end-of-stream が
+  ERROR ログに化ける)。 判定メソッド [`NetworkError::is_normal_close`] はそのまま残る
+  ので、 それを使っている caller は **無改修**。 `Protocol(String)` を直接 match して
+  いた場合のみ影響する。
+
+- **breaking**: **`SchemaParser::parse` が `ParseError` を返すようになった** (従来は
+  `anyhow::Result`)。 併せて構築箇所の無かった `ParseError::{Type, Generic, Anyhow}` を
+  削除し、 残る 2 variant (`Kdl` / `Validation`) を実際に使い分ける。 従来は全ての
+  error が `Anyhow` に潰れ、 メッセージが `"Anyhow error: KDL parsing error: ..."` と
+  二重 prefix になっていた。
+
+
 ### Fixed
 
 - **`ProtocolClient::open_channel` が接続の read guard を握ったまま server の ack を

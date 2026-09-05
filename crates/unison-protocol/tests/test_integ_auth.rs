@@ -75,7 +75,7 @@ async fn start_auth_server() -> Result<(ServerHandle, String)> {
         })
         .await;
     server.register_channel(SECRET_CHANNEL, handle_secret).await;
-    let handle = server.spawn_listen("[::1]:0").await?;
+    let handle = Arc::new(server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
     Ok((handle, format!("[{}]:{}", addr.ip(), addr.port())))
 }
@@ -89,7 +89,7 @@ async fn test_e2e_auth_valid_credential_passes_gate() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_auth_server().await?;
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect_with_credential(&addr, GOOD_TOKEN).await?;
 
     let channel = client.open_channel(SECRET_CHANNEL).await?;
@@ -121,7 +121,7 @@ async fn test_e2e_auth_invalid_credential_rejected() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_auth_server().await?;
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     let result = client.connect_with_credential(&addr, b"wrong-token").await;
 
     assert!(
@@ -144,7 +144,7 @@ async fn test_e2e_auth_unauthenticated_is_gated() -> Result<()> {
     let (handle, addr) = start_auth_server().await?;
 
     // credential を出さず素の connect → principal は立たない
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr).await?;
 
     let channel = client.open_channel(SECRET_CHANNEL).await?;
@@ -192,12 +192,12 @@ async fn test_e2e_no_enable_auth_is_nonbreaking() -> Result<()> {
             }
         })
         .await;
-    let handle = server.spawn_listen("[::1]:0").await?;
+    let handle = Arc::new(server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
     let addr = format!("[{}]:{}", addr.ip(), addr.port());
 
     // 素の connect で従来通り動作する
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr).await?;
     let channel = client.open_channel("echo").await?;
     let resp: Value = timeout(

@@ -94,7 +94,7 @@ async fn start_dynamic_server() -> Result<(ServerHandle, String)> {
         })
         .await;
 
-    let handle = server.spawn_listen("[::1]:0").await?;
+    let handle = Arc::new(server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
     Ok((handle, format!("[{}]:{}", addr.ip(), addr.port())))
 }
@@ -110,7 +110,7 @@ async fn test_e2e_dynamic_fetch_builds_registry() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_dynamic_server().await?;
 
-    let client = Arc::new(ProtocolClient::new_default()?);
+    let client = Arc::new(ProtocolClient::insecure_localhost()?);
     client.connect(&addr).await?;
 
     let proto = timeout(
@@ -155,7 +155,7 @@ async fn test_e2e_dynamic_valid_request_round_trip() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_dynamic_server().await?;
 
-    let client = Arc::new(ProtocolClient::new_default()?);
+    let client = Arc::new(ProtocolClient::insecure_localhost()?);
     client.connect(&addr).await?;
     let proto = DynamicProtocol::fetch(client.clone()).await?;
 
@@ -189,7 +189,7 @@ async fn test_e2e_dynamic_missing_required_is_fail_fast() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_dynamic_server().await?;
 
-    let client = Arc::new(ProtocolClient::new_default()?);
+    let client = Arc::new(ProtocolClient::insecure_localhost()?);
     client.connect(&addr).await?;
     let proto = DynamicProtocol::fetch(client.clone()).await?;
 
@@ -216,7 +216,7 @@ async fn test_e2e_dynamic_type_mismatch_is_fail_fast() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_dynamic_server().await?;
 
-    let client = Arc::new(ProtocolClient::new_default()?);
+    let client = Arc::new(ProtocolClient::insecure_localhost()?);
     client.connect(&addr).await?;
     let proto = DynamicProtocol::fetch(client.clone()).await?;
 
@@ -253,7 +253,7 @@ async fn test_e2e_dynamic_unknown_method_is_fail_fast() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_dynamic_server().await?;
 
-    let client = Arc::new(ProtocolClient::new_default()?);
+    let client = Arc::new(ProtocolClient::insecure_localhost()?);
     client.connect(&addr).await?;
     let proto = DynamicProtocol::fetch(client.clone()).await?;
 
@@ -279,7 +279,7 @@ async fn test_e2e_dynamic_unknown_channel_is_fail_fast() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_dynamic_server().await?;
 
-    let client = Arc::new(ProtocolClient::new_default()?);
+    let client = Arc::new(ProtocolClient::insecure_localhost()?);
     client.connect(&addr).await?;
     let proto = DynamicProtocol::fetch(client.clone()).await?;
 

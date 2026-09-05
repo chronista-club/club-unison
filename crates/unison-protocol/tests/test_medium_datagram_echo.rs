@@ -57,12 +57,12 @@ async fn test_medium_datagram_echo_round_trip() -> Result<()> {
     // ─── Server setup ──────────────────────────────────
     let server = Arc::new(ProtocolServer::new());
     register_echo_handler(&server).await;
-    let handle = Arc::clone(&server).spawn_listen_shared("[::1]:0").await?;
+    let handle = Arc::clone(&server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
     info!("Server bound to {}", addr);
 
     // ─── Client connect ────────────────────────────────
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client
         .connect(&format!("[{}]:{}", addr.ip(), addr.port()))
         .await?;
@@ -142,10 +142,10 @@ async fn test_medium_datagram_multiple_channels() -> Result<()> {
         })
         .await;
 
-    let handle = Arc::clone(&server).spawn_listen_shared("[::1]:0").await?;
+    let handle = Arc::clone(&server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client
         .connect(&format!("[{}]:{}", addr.ip(), addr.port()))
         .await?;
@@ -223,12 +223,12 @@ async fn test_medium_datagram_broadcast_to_all_clients() -> Result<()> {
         })
         .await;
 
-    let handle = Arc::clone(&server).spawn_listen_shared("[::1]:0").await?;
+    let handle = Arc::clone(&server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
 
     // 2 client を connect
-    let client_a = ProtocolClient::new_default()?;
-    let client_b = ProtocolClient::new_default()?;
+    let client_a = ProtocolClient::insecure_localhost()?;
+    let client_b = ProtocolClient::insecure_localhost()?;
     client_a
         .connect(&format!("[{}]:{}", addr.ip(), addr.port()))
         .await?;

@@ -8,6 +8,7 @@
 
 use anyhow::Result;
 use serde_json::{Value, json};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::timeout;
 use tracing::{Level, info};
@@ -99,7 +100,7 @@ async fn start_e2e_server() -> Result<(ServerHandle, String)> {
         })
         .await;
 
-    let handle = server.spawn_listen("[::1]:0").await?;
+    let handle = Arc::new(server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
     let addr_str = format!("[{}]:{}", addr.ip(), addr.port());
     info!("E2E server started on {}", addr_str);
@@ -120,7 +121,7 @@ async fn test_e2e_full_protocol_flow() -> Result<()> {
     let (handle, addr) = start_e2e_server().await?;
 
     // クライアント接続（Identity Handshake 含む）
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr).await?;
     assert!(client.is_connected().await);
 
@@ -170,7 +171,7 @@ async fn test_e2e_echo_transformations() -> Result<()> {
     init_tracing();
 
     let (handle, addr) = start_e2e_server().await?;
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr).await?;
     let channel = client.open_channel("ping-pong").await?;
 
@@ -229,7 +230,7 @@ async fn test_e2e_health_check() -> Result<()> {
     init_tracing();
 
     let (handle, addr) = start_e2e_server().await?;
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr).await?;
     let channel = client.open_channel("ping-pong").await?;
 
@@ -262,7 +263,7 @@ async fn test_e2e_complex_json_roundtrip() -> Result<()> {
     init_tracing();
 
     let (handle, addr) = start_e2e_server().await?;
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr).await?;
     let channel = client.open_channel("ping-pong").await?;
 
@@ -307,7 +308,7 @@ async fn test_e2e_sequential_throughput() -> Result<()> {
     init_tracing();
 
     let (handle, addr) = start_e2e_server().await?;
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr).await?;
     let channel = client.open_channel("ping-pong").await?;
 
@@ -347,7 +348,7 @@ async fn test_e2e_graceful_shutdown() -> Result<()> {
     init_tracing();
 
     let (handle, addr) = start_e2e_server().await?;
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr).await?;
     assert!(client.is_connected().await);
 

@@ -35,7 +35,7 @@
 //!     .await;
 //!
 //! // background で listen し、 handle で shutdown できる
-//! let handle = server.spawn_listen("[::1]:8080").await?;
+//! let handle = std::sync::Arc::new(server).listener("[::1]:8080").spawn().await?;
 //! handle.shutdown().await?;
 //! # Ok(())
 //! # }
@@ -103,7 +103,7 @@ impl UnisonProtocol {
 
     /// 新しいUnisonクライアントを作成
     pub fn create_client(&self) -> Result<ProtocolClient, anyhow::Error> {
-        ProtocolClient::new_default()
+        ProtocolClient::insecure_localhost()
     }
 
     /// 新しいUnisonサーバーを作成

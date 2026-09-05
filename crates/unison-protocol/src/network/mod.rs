@@ -45,6 +45,7 @@ pub mod webtransport;
 pub use auth::{AUTH_CHANNEL_NAME, AUTHENTICATE_METHOD, AuthResult, AuthenticateRequest, Verifier};
 pub use cert::CertSource;
 pub use channel::UnisonChannel;
+// ChannelEof は本 module 定義 (NetworkError と同居)
 pub use client::{ClientConnectionEvent, ClientConnectionEventReceiver, ProtocolClient};
 pub use conn::UnisonConn;
 pub use context::Principal;
@@ -59,7 +60,9 @@ pub use mesh::{InternalMeshKeypair, MeshCa};
 pub use protocol_cache::ProtocolCache;
 pub use quic::{QuicClient, QuicServer};
 pub use schema_registry::{RegistryError, SchemaRegistry, ValidationError};
-pub use server::{ConnectionEvent, ConnectionEventReceiver, ProtocolServer, ServerHandle};
+pub use server::{
+    ConnectionEvent, ConnectionEventReceiver, ProtocolServer, ServerHandle, ServerListener,
+};
 pub use stream::{TypedFrame, UnisonStream};
 pub use trust::TrustAnchors;
 pub use webtransport::WebTransportServer;
@@ -107,9 +110,40 @@ impl std::fmt::Display for ErrorCategory {
     }
 }
 
+/// channel が **正常に終端した** ときの内訳。
+///
+/// [`NetworkError::ChannelEof`] が保持する。 いずれも sender 側が
+/// request/response 完了後に正常 close したことを表し、 真の error ではない。
+/// caller は log level を ERROR から debug / info に落とせる。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelEof {
+    /// [`UnisonChannel::recv`](channel::UnisonChannel::recv) で mpsc receiver が
+    /// `None` を返した。
+    Recv,
+    /// [`UnisonChannel::recv_raw`](channel::UnisonChannel::recv_raw) で raw mpsc
+    /// receiver が `None` を返した。
+    RecvRaw,
+    /// [`UnisonChannel::request`](channel::UnisonChannel::request) 中に応答用の
+    /// oneshot sender が drop した。
+    Request,
+}
+
+impl std::fmt::Display for ChannelEof {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            ChannelEof::Recv => "channel closed",
+            ChannelEof::RecvRaw => "raw channel closed",
+            ChannelEof::Request => "request cancelled: channel closed",
+        })
+    }
+}
+
 /// Unison Protocolのネットワークエラー
 #[derive(Error, Debug)]
 pub enum NetworkError {
+    /// channel の正常終端 (= 真の error ではない、 [`ChannelEof`] 参照)
+    #[error("Channel ended: {0}")]
+    ChannelEof(ChannelEof),
     #[error("Connection error: {0}")]
     Connection(String),
     #[error("Protocol error: {0}")]
@@ -133,29 +167,13 @@ pub enum NetworkError {
 }
 
 impl NetworkError {
-    /// この error が **正常な channel 終端** (= sender side 完了で drop) を表すか判定する。
+    /// この error が **正常な channel 終端** (= sender 側が完了して drop) を表すか判定する。
     ///
-    /// `UnisonChannel::recv()` / `recv_raw()` / `request()` は内部の sender / oneshot が
-    /// drop された時に 3 種類の Protocol error を生成する:
-    ///
-    /// - `"Channel closed"` — `recv()` で mpsc receiver が None を返した
-    /// - `"Raw channel closed"` — `recv_raw()` で raw mpsc receiver が None を返した
-    /// - `"Request cancelled: channel closed"` — `request()` 中に oneshot sender が drop した
-    ///
-    /// これらは sender 側が request/response 完了後に正常 close した end-of-stream であり、
-    /// 真の error ではない。 caller (= e.g. QUIC server の channel handler dispatcher) は
-    /// log level を ERROR ではなく debug / info に degrade することで noise を抑えられる。
-    ///
-    /// 文字列マッチで判定しているため、将来追加されるパターンも忘れずにここを更新すること。
-    /// (長期的には `NetworkError::ChannelEof` のような enum variant 化で型安全にすべき)
+    /// [`ChannelEof`] の各ケースがこれに当たる。 真の error ではないので、 caller
+    /// (= e.g. channel handler の dispatcher) は log level を ERROR ではなく
+    /// debug / info に degrade して noise を抑えられる。
     pub fn is_normal_close(&self) -> bool {
-        matches!(
-            self,
-            NetworkError::Protocol(msg)
-                if msg == "Channel closed"
-                || msg == "Raw channel closed"
-                || msg == "Request cancelled: channel closed"
-        )
+        matches!(self, NetworkError::ChannelEof(_))
     }
 
     /// この error の分類を返す (Phase 5 / UNS-15)。
@@ -170,7 +188,8 @@ impl NetworkError {
             | NetworkError::NotConnected
             | NetworkError::UnsupportedTransport(_) => ErrorCategory::Transport,
             // プロトコル層: 不正パケット / スキーマ不整合 / チャネル状態 / シリアライズ
-            NetworkError::Protocol(_)
+            NetworkError::ChannelEof(_)
+            | NetworkError::Protocol(_)
             | NetworkError::Serialization(_)
             | NetworkError::Codec(_)
             | NetworkError::FrameSerialization(_) => ErrorCategory::Protocol,
@@ -320,15 +339,10 @@ mod tests {
     /// それ以外の Protocol error / 他 variant は real error 扱いするか確認。
     #[test]
     fn is_normal_close_recognizes_channel_eof() {
-        // recv() の end-of-stream
-        assert!(NetworkError::Protocol("Channel closed".to_string()).is_normal_close());
-        // recv_raw() の end-of-stream
-        assert!(NetworkError::Protocol("Raw channel closed".to_string()).is_normal_close());
-        // request() 中の oneshot sender drop
-        assert!(
-            NetworkError::Protocol("Request cancelled: channel closed".to_string())
-                .is_normal_close()
-        );
+        // recv() / recv_raw() の end-of-stream、 request() 中の oneshot sender drop
+        for eof in [ChannelEof::Recv, ChannelEof::RecvRaw, ChannelEof::Request] {
+            assert!(NetworkError::ChannelEof(eof).is_normal_close(), "{eof}");
+        }
     }
 
     #[test]
@@ -386,6 +400,7 @@ mod tests {
             (NetworkError::NotConnected, Transport),
             (NetworkError::UnsupportedTransport("x".into()), Transport),
             (NetworkError::Protocol("x".into()), Protocol),
+            (NetworkError::ChannelEof(ChannelEof::Recv), Protocol),
             (
                 NetworkError::FrameSerialization(SerializationError::InvalidHeader),
                 Protocol,

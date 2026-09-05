@@ -100,16 +100,15 @@ impl ProtocolClient {
         }
     }
 
-    /// Create a new client with QUIC transport.
+    /// **サーバー証明書を検証しない** client を構築する (= dev / test 用)。
     ///
-    /// **注意**: この constructor は [`QuicClient::new`] を経由し、証明書検証を
-    /// 行わない insecure な client を構築する (構築時に `tracing::warn!` が出る)。
-    /// production では [`QuicClient::builder`] + [`ProtocolClient::new`] で
-    /// 明示的に [`TrustAnchors`] を指定すること。
+    /// [`QuicClient::insecure_localhost`] を transport に使う。 接続先は loopback に
+    /// 制限される。 それ以外へ繋ぐ、 あるいは検証したい場合は
+    /// [`QuicClient::builder`] で [`TrustAnchors`] を明示し、 [`new`](Self::new) に渡す。
     ///
     /// [`TrustAnchors`]: crate::network::trust::TrustAnchors
-    pub fn new_default() -> Result<Self> {
-        let transport = QuicClient::new()?;
+    pub fn insecure_localhost() -> Result<Self> {
+        let transport = QuicClient::insecure_localhost()?;
         let (event_tx, _) = broadcast::channel(16);
         Ok(Self {
             transport: Arc::new(transport),
@@ -540,7 +539,7 @@ mod tests {
     /// event が無ければ recv が pending (= 別 task で連動して event を待つ pattern を担保)
     #[tokio::test]
     async fn subscribe_before_connect_receives_subsequent_events() {
-        let client = ProtocolClient::new_default().unwrap();
+        let client = ProtocolClient::insecure_localhost().unwrap();
         let mut rx = client.subscribe_connection_events();
 
         // 手動で event を publish (= 実 connect なしで broadcast 動作を確認)
@@ -565,7 +564,7 @@ mod tests {
     /// 複数 subscriber が同 event を独立に受信できる (= broadcast 性質)
     #[tokio::test]
     async fn multiple_subscribers_receive_same_event() {
-        let client = ProtocolClient::new_default().unwrap();
+        let client = ProtocolClient::insecure_localhost().unwrap();
         let mut rx_a = client.subscribe_connection_events();
         let mut rx_b = client.subscribe_connection_events();
 
@@ -588,7 +587,7 @@ mod tests {
     #[tokio::test]
     async fn recv_skip_lagged_skips_lag_returns_latest() {
         // capacity 16 を超えて publish → Lagged を生成
-        let client = ProtocolClient::new_default().unwrap();
+        let client = ProtocolClient::insecure_localhost().unwrap();
         let mut rx = client.subscribe_connection_events();
 
         for i in 0..20 {
@@ -609,7 +608,7 @@ mod tests {
     /// Receiver の inner() は &mut broadcast::Receiver を返す (= server 側 parallel API)
     #[tokio::test]
     async fn receiver_inner_exposes_broadcast_receiver() {
-        let client = ProtocolClient::new_default().unwrap();
+        let client = ProtocolClient::insecure_localhost().unwrap();
         let mut rx = client.subscribe_connection_events();
         // inner() の型が broadcast::Receiver であることを compile-check
         let _inner: &mut broadcast::Receiver<ClientConnectionEvent> = rx.inner();

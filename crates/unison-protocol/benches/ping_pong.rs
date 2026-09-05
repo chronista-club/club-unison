@@ -11,6 +11,7 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use serde_json::json;
 use std::hint::black_box;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 use tokio::runtime::Runtime;
@@ -45,7 +46,10 @@ async fn setup_ping_server(port: u16) {
                 Ok(())
             })
             .await;
-        let _ = server.listen(&format!("[::1]:{}", port)).await;
+        let _ = Arc::new(server)
+            .listener(&format!("[::1]:{}", port))
+            .run()
+            .await;
         tokio::time::sleep(Duration::from_secs(3600)).await;
     });
     // server bind 完了を待つ
@@ -63,7 +67,7 @@ fn bench_ping_pong(c: &mut Criterion) {
                 let port = 25000 + PORT_COUNTER.fetch_add(1, Ordering::Relaxed);
                 setup_ping_server(port).await;
 
-                let quic_client = QuicClient::new().unwrap();
+                let quic_client = QuicClient::insecure_localhost().unwrap();
                 let client = ProtocolClient::new(quic_client);
                 client.connect(&format!("[::1]:{}", port)).await.unwrap();
 

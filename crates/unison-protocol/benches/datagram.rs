@@ -114,7 +114,8 @@ fn bench_datagram_burst(c: &mut Criterion) {
                     b.to_async(&runtime).iter_custom(|iters| async move {
                         // ─── Setup (= 1 connection を作って iter 全部で再利用) ───
                         let (_server, server_addr) = make_server_endpoint();
-                        let quic_client = QuicClient::new().expect("QuicClient::new");
+                        let quic_client =
+                            QuicClient::insecure_localhost().expect("QuicClient::new");
                         quic_client
                             .connect(&format!("[{}]:{}", server_addr.ip(), server_addr.port()))
                             .await

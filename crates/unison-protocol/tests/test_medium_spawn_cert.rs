@@ -1,7 +1,7 @@
 //! Medium x Integration: `spawn_listen_*_with_cert` の cert 適用 E2E
 //!
 //! chronista-hub handoff の回帰テスト。 `ProtocolServer::spawn_listen` /
-//! `spawn_listen_shared` は内部で `QuicServer::new()` (= `dev_localhost` 固定) を
+//! `spawn_listen_shared` は内部で `QuicServer::builder().build()` (= `dev_localhost` 固定) を
 //! ハードコードしており、 `QuicServer::builder().cert_source()` をバイパスしていた。
 //! 結果 spawn 経路で立てたサーバーは dev_localhost cert しか出せず、 非 loopback
 //! 公開 (tailnet / public federation) ができなかった。
@@ -76,9 +76,7 @@ async fn spawn_with_cert(
         })
         .await;
 
-    let handle = Arc::new(server)
-        .spawn_listen_shared_with_cert(bind, cert)
-        .await?;
+    let handle = Arc::new(server).listener(bind).cert(cert).spawn().await?;
     let local = handle.local_addr();
     let connect_str = format!("[{}]:{}", local.ip(), local.port());
     Ok((handle, connect_str))

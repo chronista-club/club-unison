@@ -1,23 +1,19 @@
-use anyhow::Result;
 use thiserror::Error;
 
 pub mod schema;
 
 pub use schema::*;
 
-/// Parser errors for Unison Protocol
+/// KDL スキーマの parse / 検証エラー。
 #[derive(Error, Debug)]
 pub enum ParseError {
+    /// KDL 文法として読めない、 あるいは [`ParsedSchema`] の形に合わない。
     #[error("KDL parsing error: {0}")]
-    Kdl(#[from] kdl::KdlError),
+    Kdl(String),
+    /// 文法は通ったが、 スキーマの意味的制約に反する
+    /// (= datagram channel の `channel_id` 欠落、 `readonly` と `destructive` の同時宣言 等)。
     #[error("Schema validation error: {0}")]
     Validation(String),
-    #[error("Type error: {0}")]
-    Type(String),
-    #[error("Generic parsing error: {0}")]
-    Generic(String),
-    #[error("Anyhow error: {0}")]
-    Anyhow(#[from] anyhow::Error),
 }
 
 /// Main schema parser for KDL protocol definitions
@@ -32,17 +28,14 @@ impl SchemaParser {
     ///
     /// パース後に [`Channel::validate`] を全 channel に対して呼び、 datagram channel の
     /// `channel_id` 必須性等の semantic constraint を検証する。
-    pub fn parse(&self, input: &str) -> Result<ParsedSchema> {
-        // club-kdlを使ってパース
+    pub fn parse(&self, input: &str) -> Result<ParsedSchema, ParseError> {
         let schema: ParsedSchema =
-            club_kdl::from_str(input).map_err(|e| anyhow::anyhow!("KDL parsing error: {}", e))?;
+            club_kdl::from_str(input).map_err(|e| ParseError::Kdl(e.to_string()))?;
 
         // Channel semantic validation (v0.10.0 で導入: datagram channel の channel_id 必須性等)
         if let Some(ref protocol) = schema.protocol {
             for channel in &protocol.channels {
-                channel
-                    .validate()
-                    .map_err(|msg| anyhow::anyhow!("Schema validation: {}", msg))?;
+                channel.validate().map_err(ParseError::Validation)?;
             }
         }
 

@@ -99,8 +99,9 @@ pub async fn run(args: MockArgs) -> Result<()> {
     println!("  channels: {registered} stubbed");
     println!("  listening on {} — Ctrl-C to stop", args.addr);
 
-    server
-        .listen(&args.addr)
+    std::sync::Arc::new(server)
+        .listener(&args.addr)
+        .run()
         .await
         .context("server listen failed")?;
     Ok(())
