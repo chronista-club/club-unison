@@ -181,9 +181,7 @@ impl<C: Codec> UnisonChannel<C> {
             Ok(Ok(msg)) => msg,
             Ok(Err(_)) => {
                 self.pending.lock().await.remove(&id);
-                return Err(NetworkError::Protocol(
-                    "Request cancelled: channel closed".to_string(),
-                ));
+                return Err(NetworkError::ChannelEof(super::ChannelEof::Request));
             }
             Err(_) => {
                 self.pending.lock().await.remove(&id);
@@ -249,7 +247,7 @@ impl<C: Codec> UnisonChannel<C> {
         let mut rx = self.raw_rx.lock().await;
         rx.recv()
             .await
-            .ok_or_else(|| NetworkError::Protocol("Raw channel closed".to_string()))
+            .ok_or(NetworkError::ChannelEof(super::ChannelEof::RecvRaw))
     }
 
     /// Event 受信（サーバーからのプッシュ、または非 Response メッセージ）
@@ -257,7 +255,7 @@ impl<C: Codec> UnisonChannel<C> {
         let mut rx = self.event_rx.lock().await;
         rx.recv()
             .await
-            .ok_or_else(|| NetworkError::Protocol("Channel closed".to_string()))
+            .ok_or(NetworkError::ChannelEof(super::ChannelEof::Recv))
     }
 
     /// チャネルを閉じる
