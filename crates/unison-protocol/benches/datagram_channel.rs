@@ -81,13 +81,8 @@ fn bench_datagram_channel_burst(c: &mut Criterion) {
                         let server = Arc::new(ProtocolServer::new());
                         server
                             .register_channel_datagram("position", 1, |chan| async move {
-                                loop {
-                                    match chan.recv_event::<Payload>().await {
-                                        Ok(p) => {
-                                            let _ = chan.send_event(&p).await;
-                                        }
-                                        Err(_) => break,
-                                    }
+                                while let Ok(p) = chan.recv_event::<Payload>().await {
+                                    let _ = chan.send_event(&p).await;
                                 }
                             })
                             .await;

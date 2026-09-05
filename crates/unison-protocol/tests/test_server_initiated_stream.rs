@@ -60,16 +60,13 @@ async fn test_server_initiated_reliable_ordered_delivery() -> Result<()> {
         .register_server_channel("relay", move |stream| {
             let tx = tx.clone();
             async move {
-                // raw UnisonStream を直読（= QUIC backpressure、取りこぼし無し）
-                loop {
-                    match stream.recv_frame().await {
-                        Ok(msg) => {
-                            let v = msg.payload_as_value()?;
-                            let seq = v.get("seq").and_then(|s| s.as_i64()).unwrap_or(-1);
-                            let _ = tx.send(seq);
-                        }
-                        Err(_) => break, // end of stream（server が close）
-                    }
+                // raw UnisonStream を直読（= QUIC backpressure、取りこぼし無し）。
+                // recv_frame の Err = end of stream（server が close）なので
+                // while let がそのまま終端条件になる。
+                while let Ok(msg) = stream.recv_frame().await {
+                    let v = msg.payload_as_value()?;
+                    let seq = v.get("seq").and_then(|s| s.as_i64()).unwrap_or(-1);
+                    let _ = tx.send(seq);
                 }
                 Ok(())
             }

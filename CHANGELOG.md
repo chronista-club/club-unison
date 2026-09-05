@@ -7,6 +7,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **wire golden test が回帰を検知していなかった (俯瞰 MEDIUM #31)。**
+  `test_wire_byte_compat.rs` は 5 つの fixture を毎回 `fs::write` で上書きするだけで、
+  一度も assert していなかった。 wire format が変われば golden も黙って追従するため、
+  同じ golden を読む TypeScript 側の byte 一致テストも回帰を検知できない状態だった。
+  golden との**比較**に変更し、 再生成は `UPDATE_WIRE_FIXTURES=1` を明示したときだけに。
+  副次的に `cargo test` が source tree へ書き込まなくなった。
+
 ### Changed
 
 - **重複の整理 (俯瞰 MEDIUM #17 / #24 / #27)。** 公開 API の形は変わらない。
@@ -19,6 +28,15 @@
     未知メッセージへの寛容さ (= forward-compat) が 1 箇所に集まる。
   - `unison-cli` の `ping` / `call` / `sniff` が同じ 7 行の接続 prologue を
     複製していたのを `build_client` / `connect` helper に。
+
+- **CI の clippy を全 target に拡げた (俯瞰 MEDIUM #34)。**
+  `--lib` だけが `-D warnings` で `--tests` は `continue-on-error` だったため、
+  警告が無期限に溜まっていた (実測 8 件)。 加えて `--bins` / `--benches` は
+  一度も lint されていなかった。 `--all-targets -- -D warnings` の 1 ステップに統合し、
+  既存の 8 件を解消。 `CLAUDE.md` のコマンドも同じものに更新。
+- **Ruby クライアントの CI job を追加 (俯瞰 MEDIUM #34)。**
+  TypeScript / Swift には job があり Ruby だけ無かった。 `rake compile` +
+  `rake test` を ubuntu で実行する。
 
 
 ### Changed

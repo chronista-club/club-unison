@@ -86,10 +86,10 @@ fn lint_invariants(schema: &ParsedSchema) -> Vec<String> {
     // datagram channel_id 衝突
     let mut seen_ids: std::collections::HashMap<u64, Vec<&str>> = Default::default();
     for ch in &protocol.channels {
-        if ch.backend() == ChannelBackend::Datagram {
-            if let Some(id) = ch.channel_id {
-                seen_ids.entry(id).or_default().push(ch.name.as_str());
-            }
+        if ch.backend() == ChannelBackend::Datagram
+            && let Some(id) = ch.channel_id
+        {
+            seen_ids.entry(id).or_default().push(ch.name.as_str());
         }
     }
     for (id, owners) in &seen_ids {

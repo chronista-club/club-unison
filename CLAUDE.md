@@ -42,8 +42,8 @@ channel "name" from="client" lifetime="persistent" {
 # 標準テスト実行 (lib unit + integration tests を全部走らせる)
 RUSTFLAGS="-C symbol-mangling-version=v0" cargo test --workspace
 
-# clippy
-cargo clippy --lib --workspace -- -D warnings
+# clippy (lib / bins / tests / benches / examples を同じ厳しさで)
+cargo clippy --all-targets --workspace -- -D warnings
 ```
 
 ## ドキュメント構造
