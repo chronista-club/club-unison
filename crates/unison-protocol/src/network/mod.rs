@@ -59,7 +59,9 @@ pub use mesh::{InternalMeshKeypair, MeshCa};
 pub use protocol_cache::ProtocolCache;
 pub use quic::{QuicClient, QuicServer};
 pub use schema_registry::{RegistryError, SchemaRegistry, ValidationError};
-pub use server::{ConnectionEvent, ConnectionEventReceiver, ProtocolServer, ServerHandle};
+pub use server::{
+    ConnectionEvent, ConnectionEventReceiver, ProtocolServer, ServerHandle, ServerListener,
+};
 pub use stream::{TypedFrame, UnisonStream};
 pub use trust::TrustAnchors;
 pub use webtransport::WebTransportServer;

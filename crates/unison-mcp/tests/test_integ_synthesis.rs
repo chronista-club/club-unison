@@ -9,6 +9,7 @@
 use anyhow::Result;
 use rmcp::ErrorData as McpError;
 use serde_json::{Value, json};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
 use tracing::{Level, info};
@@ -90,7 +91,7 @@ async fn start_test_server() -> Result<(ServerHandle, String)> {
             Ok(())
         })
         .await;
-    let handle = server.spawn_listen("[::1]:0").await?;
+    let handle = Arc::new(server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
     Ok((handle, format!("[{}]:{}", addr.ip(), addr.port())))
 }
@@ -159,7 +160,7 @@ async fn start_test_server_v2(addr: &str) -> Result<(ServerHandle, String)> {
                 Ok(())
             })
             .await;
-        match server.spawn_listen(addr).await {
+        match Arc::new(server).listener(addr).spawn().await {
             Ok(h) => {
                 let bound = h.local_addr();
                 let bound = format!("[{}]:{}", bound.ip(), bound.port());

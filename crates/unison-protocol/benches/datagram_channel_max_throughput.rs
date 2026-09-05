@@ -82,12 +82,12 @@ fn bench_max_throughput(c: &mut Criterion) {
                 .await;
 
             let handle = Arc::clone(&server)
-                .spawn_listen_shared("[::1]:0")
+                .listener("[::1]:0").spawn()
                 .await
                 .expect("spawn_listen_shared");
             let server_addr = handle.local_addr();
 
-            let client = ProtocolClient::new_default().expect("client::new_default");
+            let client = ProtocolClient::insecure_localhost().expect("client::new_default");
             client
                 .connect(&format!("[{}]:{}", server_addr.ip(), server_addr.port()))
                 .await

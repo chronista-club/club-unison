@@ -50,12 +50,12 @@ async fn test_server_initiated_reliable_ordered_delivery() -> Result<()> {
     // ─── Server setup ──────────────────────────────────
     let server = Arc::new(ProtocolServer::new());
     let mut events = server.subscribe_connection_events();
-    let handle = Arc::clone(&server).spawn_listen_shared("[::1]:0").await?;
+    let handle = Arc::clone(&server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
 
     // ─── Client: handler を connect 前に登録 ────────────
     let (tx, mut rx) = mpsc::unbounded_channel::<i64>();
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client
         .register_server_channel("relay", move |stream| {
             let tx = tx.clone();
@@ -129,10 +129,10 @@ async fn test_server_initiated_unregistered_channel_no_regression() -> Result<()
 
     let server = Arc::new(ProtocolServer::new());
     let mut events = server.subscribe_connection_events();
-    let handle = Arc::clone(&server).spawn_listen_shared("[::1]:0").await?;
+    let handle = Arc::clone(&server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     // handler は登録しない
     client
         .connect(&format!("[{}]:{}", addr.ip(), addr.port()))

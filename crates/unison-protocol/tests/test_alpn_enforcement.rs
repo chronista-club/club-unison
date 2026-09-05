@@ -27,7 +27,7 @@ use unison::network::{ProtocolServer, QuicServer};
 /// 接続用アドレスを返す。
 async fn spawn_server() -> String {
     let server = Arc::new(ProtocolServer::with_identity("alpn-test", "1.0.0", "test"));
-    let mut quic = QuicServer::new(Arc::clone(&server));
+    let mut quic = QuicServer::builder(Arc::clone(&server)).build();
     quic.bind("[::1]:0").await.expect("bind");
     let local = quic.local_addr().expect("local_addr");
     let addr = format!("[{}]:{}", local.ip(), local.port());

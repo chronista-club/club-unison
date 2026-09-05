@@ -7,6 +7,7 @@
 //! `#[ignore]` 付き — `cargo test -- --ignored` で実行。
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -59,7 +60,7 @@ async fn start_echo_server() -> Result<(ServerHandle, SocketAddr)> {
         })
         .await;
 
-    let handle = server.spawn_listen("[::1]:0").await?;
+    let handle = Arc::new(server).listener("[::1]:0").spawn().await?;
     let local = handle.local_addr();
     info!("connect-race echo server listening on {local}");
     Ok((handle, local))
@@ -103,7 +104,7 @@ async fn connect_race_prefers_live_over_dead_decoy() -> Result<()> {
     // decoy = loopback port 1（誰も listen していない）を先頭候補に。
     let dead: SocketAddr = "[::1]:1".parse().unwrap();
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client
         .connect_race(vec![dead, live], "::1", fast_cfg())
         .await?;
@@ -131,7 +132,7 @@ async fn connect_race_single_live_candidate() -> Result<()> {
 
     let (handle, live) = start_echo_server().await?;
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect_race(vec![live], "::1", fast_cfg()).await?;
     assert!(client.is_connected().await);
 

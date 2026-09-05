@@ -6,6 +6,7 @@
 //! すべて `#[ignore]` 付き — `cargo test -- --ignored` で実行。
 
 use anyhow::Result;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
 use tracing::{Level, info};
@@ -60,7 +61,7 @@ async fn test_medium_quic_server_bind_and_shutdown() -> Result<()> {
     init_tracing();
 
     let server = ProtocolServer::new();
-    let handle = server.spawn_listen("[::1]:0").await?;
+    let handle = Arc::new(server).listener("[::1]:0").spawn().await?;
 
     let addr = handle.local_addr();
     info!("Server bound to {}", addr);
@@ -88,12 +89,12 @@ async fn test_medium_quic_connection_lifecycle() -> Result<()> {
 
     // サーバー起動
     let server = ProtocolServer::new();
-    let handle = server.spawn_listen("[::1]:0").await?;
+    let handle = Arc::new(server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
     info!("Server listening on {}", addr);
 
     // クライアント接続
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client
         .connect(&format!("[{}]:{}", addr.ip(), addr.port()))
         .await?;
@@ -125,11 +126,11 @@ async fn test_medium_quic_identity_handshake() -> Result<()> {
     let server = ProtocolServer::with_identity("test-server", "0.1.0", "test-ns");
     register_echo_handler(&server).await;
 
-    let handle = server.spawn_listen("[::1]:0").await?;
+    let handle = Arc::new(server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
 
     // クライアント接続（Identity Handshake は connect() 内で自動実行）
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client
         .connect(&format!("[{}]:{}", addr.ip(), addr.port()))
         .await?;
@@ -172,11 +173,11 @@ async fn test_medium_quic_channel_request_response() -> Result<()> {
     let server = ProtocolServer::new();
     register_echo_handler(&server).await;
 
-    let handle = server.spawn_listen("[::1]:0").await?;
+    let handle = Arc::new(server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
 
     // クライアント接続
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client
         .connect(&format!("[{}]:{}", addr.ip(), addr.port()))
         .await?;
@@ -215,10 +216,10 @@ async fn test_medium_quic_sequential_requests() -> Result<()> {
     let server = ProtocolServer::new();
     register_echo_handler(&server).await;
 
-    let handle = server.spawn_listen("[::1]:0").await?;
+    let handle = Arc::new(server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client
         .connect(&format!("[{}]:{}", addr.ip(), addr.port()))
         .await?;
@@ -260,10 +261,10 @@ async fn test_medium_quic_server_shutdown_disconnects_client() -> Result<()> {
     init_tracing();
 
     let server = ProtocolServer::new();
-    let handle = server.spawn_listen("[::1]:0").await?;
+    let handle = Arc::new(server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client
         .connect(&format!("[{}]:{}", addr.ip(), addr.port()))
         .await?;

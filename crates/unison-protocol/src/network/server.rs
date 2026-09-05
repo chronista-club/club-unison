@@ -490,94 +490,60 @@ impl ProtocolServer {
         handlers.get(name).cloned()
     }
 
-    /// 接続の待ち受け開始（self を消費してブロック）
+    /// 待ち受けの設定を組み立てる ([`ServerListener`])。
     ///
-    /// サーバーを起動し、接続を受け付ける。終了するまでブロックする。
-    /// 非ブロッキングで起動する場合は `spawn_listen()` を使用する。
+    /// 起動方法 (block / background) と TLS 証明書の指定を 1 本の builder に集約する。
+    /// `Arc<Self>` を受けるのは、 起動後も `broadcast` 等で server を参照できるように
+    /// するため。 by-value で持っている場合は `Arc::new(server).listener(addr)`。
     ///
-    /// **注意**: self を消費するため、`subscribe_connection_events()` は
-    /// このメソッドの呼び出し前に行う必要がある。
-    pub async fn listen(self, addr: &str) -> Result<(), NetworkError> {
-        use super::quic::QuicServer;
+    /// ```rust,no_run
+    /// # use std::sync::Arc;
+    /// # use unison::ProtocolServer;
+    /// # async fn f(server: Arc<ProtocolServer>) -> Result<(), Box<dyn std::error::Error>> {
+    /// // background で起動して handle を得る
+    /// let handle = server.clone().listener("[::1]:8080").spawn().await?;
+    /// handle.shutdown().await?;
+    /// # Ok(()) }
+    /// ```
+    pub fn listener(self: Arc<Self>, addr: &str) -> ServerListener {
+        ServerListener {
+            server: self,
+            addr: addr.to_string(),
+            cert: None,
+        }
+    }
+}
 
-        let protocol_server = Arc::new(self);
+impl Default for ProtocolServer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
-        let mut quic_server = QuicServer::new(Arc::clone(&protocol_server));
-        quic_server
-            .bind(addr)
-            .await
-            .map_err(|e| NetworkError::Quic(e.to_string()))?;
+/// 待ち受けの設定を組み立てる builder ([`ProtocolServer::listener`] が返す)。
+///
+/// 起動は [`spawn`](Self::spawn) (= background、 [`ServerHandle`] を返す) か
+/// [`run`](Self::run) (= 終了までブロック) のどちらかで終える。
+pub struct ServerListener {
+    server: Arc<ProtocolServer>,
+    addr: String,
+    cert: Option<super::cert::CertSource>,
+}
 
-        tracing::info!("Unison Protocol server listening on {} via QUIC", addr);
-
-        quic_server
-            .start()
-            .await
-            .map_err(|e| NetworkError::Quic(e.to_string()))
+impl ServerListener {
+    /// TLS 証明書の出所を指定する。
+    ///
+    /// 未指定なら [`CertSource::dev_localhost`](super::cert::CertSource::dev_localhost)
+    /// (= **DEV ONLY**、 loopback 向けの自己署名)。 非 loopback で公開する場合は
+    /// mesh CA や実証明書を明示すること。
+    pub fn cert(mut self, cert: super::cert::CertSource) -> Self {
+        self.cert = Some(cert);
+        self
     }
 
-    /// バックグラウンドでサーバーを起動し、ServerHandle を返す
-    ///
-    /// `ServerHandle::shutdown()` でグレースフルに停止できる。
-    ///
-    /// **注意**: self を消費するため、`subscribe_connection_events()` は
-    /// このメソッドの呼び出し前に行う必要がある。
-    pub async fn spawn_listen(self, addr: &str) -> Result<ServerHandle, NetworkError> {
-        Arc::new(self).spawn_listen_shared(addr).await
-    }
-
-    /// `spawn_listen` の `Arc<Self>` 版 (v0.10.0 で追加、 broadcast 用 path)
-    ///
-    /// `spawn_listen` が `self` を consume するため、 broadcast 等で server へ
-    /// outside reference を保ちたい caller は本 method を使う。 caller が `Arc::clone`
-    /// を保持してそれを通して `server.broadcast(...)` を呼べる。
-    ///
-    /// cert は `dev_localhost` 既定 (= DEV ONLY、 loopback のみ)。 非 loopback で
-    /// 公開する場合は [`spawn_listen_shared_with_cert`](Self::spawn_listen_shared_with_cert)。
-    pub async fn spawn_listen_shared(
-        self: Arc<Self>,
-        addr: &str,
-    ) -> Result<ServerHandle, NetworkError> {
-        self.spawn_listen_shared_with_cert(addr, super::cert::CertSource::dev_localhost())
-            .await
-    }
-
-    /// [`spawn_listen`](Self::spawn_listen) の cert 指定版 (v1.2.0 で追加)。
-    ///
-    /// `self` を consume する。 cert を明示することで非 loopback アドレスでの
-    /// 公開 (tailnet / public federation) が可能になる。 cert を渡さない既定
-    /// 経路は [`spawn_listen`](Self::spawn_listen) (= `dev_localhost`)。
-    pub async fn spawn_listen_with_cert(
-        self,
-        addr: &str,
-        cert: super::cert::CertSource,
-    ) -> Result<ServerHandle, NetworkError> {
-        Arc::new(self)
-            .spawn_listen_shared_with_cert(addr, cert)
-            .await
-    }
-
-    /// [`spawn_listen_shared`](Self::spawn_listen_shared) の cert 指定版 (v1.2.0 で追加)。
-    ///
-    /// `spawn_listen_shared` / `spawn_listen` / `spawn_listen_with_cert` の
-    /// 共通実装。 `QuicServer::builder().cert_source(cert)` 経由で TLS を構成する
-    /// 点だけが `QuicServer::new` 固定だった旧実装と異なる。
-    pub async fn spawn_listen_shared_with_cert(
-        self: Arc<Self>,
-        addr: &str,
-        cert: super::cert::CertSource,
-    ) -> Result<ServerHandle, NetworkError> {
-        use super::quic::QuicServer;
-
-        let protocol_server = self;
-
-        let mut quic_server = QuicServer::builder(Arc::clone(&protocol_server))
-            .cert_source(cert)
-            .build();
-        quic_server
-            .bind(addr)
-            .await
-            .map_err(|e| NetworkError::Quic(e.to_string()))?;
+    /// background で待ち受けを開始し、 [`ServerHandle`] を返す。
+    pub async fn spawn(self) -> Result<ServerHandle, NetworkError> {
+        let quic_server = self.build_quic().await?;
 
         let local_addr = quic_server
             .local_addr()
@@ -600,11 +566,33 @@ impl ProtocolServer {
             local_addr,
         })
     }
-}
 
-impl Default for ProtocolServer {
-    fn default() -> Self {
-        Self::new()
+    /// 現在の task で待ち受ける (= 接続受付が終わるまでブロック)。
+    pub async fn run(self) -> Result<(), NetworkError> {
+        let addr = self.addr.clone();
+        let quic_server = self.build_quic().await?;
+
+        tracing::info!("Unison Protocol server listening on {} via QUIC", addr);
+
+        quic_server
+            .start()
+            .await
+            .map_err(|e| NetworkError::Quic(e.to_string()))
+    }
+
+    /// bind 済みの [`QuicServer`](super::quic::QuicServer) を組み立てる。
+    async fn build_quic(self) -> Result<super::quic::QuicServer, NetworkError> {
+        let cert = self
+            .cert
+            .unwrap_or_else(super::cert::CertSource::dev_localhost);
+        let mut quic_server = super::quic::QuicServer::builder(self.server)
+            .cert_source(cert)
+            .build();
+        quic_server
+            .bind(&self.addr)
+            .await
+            .map_err(|e| NetworkError::Quic(e.to_string()))?;
+        Ok(quic_server)
     }
 }
 

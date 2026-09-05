@@ -12,6 +12,7 @@
 
 use anyhow::Result;
 use serde_json::{Value, json};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
 use tracing::{Level, info};
@@ -59,7 +60,7 @@ fn init_tracing() {
 async fn start_discovery_server() -> Result<(ServerHandle, String)> {
     let server = ProtocolServer::with_identity("test-discovery-srv", "0.42.0", "test");
     server.enable_discovery(TEST_KDL).await?;
-    let handle = server.spawn_listen("[::1]:0").await?;
+    let handle = Arc::new(server).listener("[::1]:0").spawn().await?;
     let addr = handle.local_addr();
     Ok((handle, format!("[{}]:{}", addr.ip(), addr.port())))
 }
@@ -81,7 +82,7 @@ async fn test_e2e_discovery_get_protocol_round_trip() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_discovery_server().await?;
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr).await?;
     assert!(client.is_connected().await);
 
@@ -148,7 +149,7 @@ async fn test_e2e_discovery_hash_is_deterministic() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_discovery_server().await?;
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr).await?;
     let channel = client.open_channel(DISCOVERY_CHANNEL_NAME).await?;
 
@@ -188,7 +189,7 @@ async fn test_e2e_discovery_appears_in_server_identity() -> Result<()> {
     init_tracing();
     let (handle, addr) = start_discovery_server().await?;
 
-    let client = ProtocolClient::new_default()?;
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect(&addr).await?;
 
     let identity = client.server_identity().await.expect("identity exists");

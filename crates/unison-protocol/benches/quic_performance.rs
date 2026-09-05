@@ -98,7 +98,7 @@ async fn setup_server() -> Arc<Barrier> {
             })
             .await;
 
-        let _ = server.listen("[::1]:0").await;
+        let _ = Arc::new(server).listener("[::1]:0").run().await;
 
         barrier_clone.wait().await;
 
@@ -123,7 +123,7 @@ fn bench_latency(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
             b.to_async(&runtime).iter(|| async move {
                 let barrier = setup_server().await;
-                let quic_client = QuicClient::new().unwrap();
+                let quic_client = QuicClient::insecure_localhost().unwrap();
                 let client = ProtocolClient::new(quic_client);
                 client.connect("[::1]:8080").await.unwrap();
 
@@ -152,7 +152,7 @@ fn bench_throughput(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
             b.to_async(&runtime).iter(|| async move {
                 let barrier = setup_server().await;
-                let quic_client = QuicClient::new().unwrap();
+                let quic_client = QuicClient::insecure_localhost().unwrap();
                 let client = ProtocolClient::new(quic_client);
                 client.connect("[::1]:8080").await.unwrap();
 
@@ -178,7 +178,7 @@ fn bench_connection_establishment(c: &mut Criterion) {
             let barrier = setup_server().await;
 
             let start = std::time::Instant::now();
-            let quic_client = QuicClient::new().unwrap();
+            let quic_client = QuicClient::insecure_localhost().unwrap();
             let client = ProtocolClient::new(quic_client);
             client.connect("[::1]:8080").await.unwrap();
             let elapsed = start.elapsed();
@@ -210,7 +210,7 @@ fn bench_concurrent_connections(c: &mut Criterion) {
                     for _ in 0..num_clients {
                         let client_barrier_clone = client_barrier.clone();
                         let handle = tokio::spawn(async move {
-                            let quic_client = QuicClient::new().unwrap();
+                            let quic_client = QuicClient::insecure_localhost().unwrap();
                             let client = ProtocolClient::new(quic_client);
                             client.connect("[::1]:8080").await.unwrap();
 
