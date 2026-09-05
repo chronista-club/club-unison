@@ -7,6 +7,39 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ProtocolClient::open_channel` が接続の read guard を握ったまま server の ack を
+  待っていた問題を修正。** `open_bi` → open frame 送信 → `__channel_ack` 受信の 3 つの
+  await を guard 越しに行っていたため、 その間 `disconnect()` が write lock を取れず
+  待たされていた。 `Connection` を clone して guard を即座に手放す形に変更 (= 同 file の
+  `open_datagram_channel_with` と同形)。
+- **同一 `remote_addr` の 2 接続が互いを追い出していた問題を修正。** `ProtocolServer` の
+  active connection 台帳が `SocketAddr` を key にしていたため、 NAT 越しの再 dial や同一
+  host からの raw QUIC + WebTransport 併用で 2 本目の登録が 1 本目を silent に上書きし、
+  1 本目の切断が 2 本目を broadcast 配信先から消していた。 key を接続ごとに一意な
+  `ConnectionContext::connection_id` (UUID) に変更。 回帰テスト
+  `active_connections_are_keyed_per_connection_not_per_addr`。
+- **datagram channel handler の task が接続終了後も残っていた問題を修正。**
+  `handle_connection` が handler を `tokio::spawn` しっぱなしで `JoinHandle` を捨てていた
+  ため、 `recv_event` を待たない handler (= 送信専用 / timer loop) は接続が切れても回り
+  続けていた (task leak)。 JoinHandle を保持し、 接続終了時に abort する。 回帰テスト
+  `datagram_handler_tasks_stop_when_connection_ends` (修正前は tick が増え続けて FAIL)。
+
+### Changed
+
+- **breaking**: `ConnectionEvent::{Connected, Disconnected}` に `connection_id: Uuid` を
+  追加した。 接続の同定は `remote_addr` ではなくこちらを使う (`remote_addr` は衝突しうる)。
+  分割代入で全 field を書いている caller は `..` を足すか `connection_id` を受けること:
+
+  ```rust
+  // 1.x
+  ConnectionEvent::Disconnected { remote_addr } => { ... }
+  // 2.0
+  ConnectionEvent::Disconnected { remote_addr, .. } => { ... }
+  ```
+
+
 > **breaking (次は 2.0.0)**: 呼び出し元の無い public API を削除する第 1 弾。 削除対象は
 > workspace 内に加えて ~/repos 配下の利用 repo (chronista-hub / fleetstage / fleetflow /
 > vantage-point / creo-memories / cplp-sound-system 等 83 file) を grep して利用ゼロを

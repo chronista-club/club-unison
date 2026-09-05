@@ -37,6 +37,8 @@ pub mod quic;
 pub mod schema_registry;
 pub mod server;
 pub mod stream;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod trust;
 pub mod webtransport;
 
