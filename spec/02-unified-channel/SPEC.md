@@ -160,8 +160,9 @@ packet header には相関用 field を持たない (= v2.0 で `response_to` �
 
 ### 4.1 基本型
 
-parser (`parser::FieldType`) が認識する型。 runtime 検証 (`SchemaRegistry`) と
-MCP tool schema (`unison-mcp`、 [design/kdl-to-json-schema.md](../../design/kdl-to-json-schema.md)) が
+parser (`parser::FieldType`) が認識する型。 runtime 検証 (`SchemaRegistry`)、
+MCP tool schema (`unison-mcp`、 [design/kdl-to-json-schema.md](../../design/kdl-to-json-schema.md))、
+応答の判定 (`parser::TypeIndex` / `unison schema-check`、 [design/schema-check.md](../../design/schema-check.md)) が
 この表に従う。
 
 | 型 | 説明 | JSON Schema | 備考 |
