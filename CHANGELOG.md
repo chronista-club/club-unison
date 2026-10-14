@@ -6,6 +6,29 @@
 このプロジェクトは [セマンティックバージョニング](https://semver.org/lang/ja/) に準拠しています。
 ## [Unreleased]
 
+### Added
+
+- **`unison schema-diff <old.kdl> <new.kdl>` — 旧版と比べて、配った client の約束を壊す変更を見つける。**
+  壊れる変更があれば exit 1 (CI 向け)。 判定は向きで逆になる: 要求 (client → server) は
+  「新しく required になった field」、 応答 (server → client) は「required の field が消えた /
+  required でなくなった」を壊れる変更とする。 型の変化、 channel / request / event / message /
+  enum / typedef の消失は両方向で壊れる。 enum は要求では値の削除、 応答では値の追加が壊れる
+  (`--lenient-enum-additions` で警告に緩める)。 向きは `request` / `returns` / `event` と、
+  方言に無い node (例: Creo の `route`) の `request=` / `response=` 属性を種にして、
+  field の型が指す message / enum へ伝播させる。 向きが決まらない名前は既定で両方向の規則で
+  見る (`--unknown-direction skip` で検査しない)。 設計は `design/schema-diff.md`。
+- **`unison schema-check <contract.kdl>` — JSON が約束の型を応答として満たすかを判定する。**
+  `--message M <file|->` で 1 件、 `--cases <file>` でまとめて、 `--json` で機械が読む形。
+  client の decode が失敗する条件 (required の欠落 / null、 型違い、 要素型違い、 入れ子の
+  message の違反、 enum に無い値、 宣言の無い型名) を誤りにし、 場所を `$.memories[1].content`
+  の形で出す。 知らない key と任意 field の欠落 / null は通す。 規則は `parser::TypeIndex`
+  に 1 か所だけ置く (約束を書く側は規則を持たない)。 設計は `design/schema-check.md`。
+- **field の要素型を `items=` / `keys=` / `values=` で書けるようになった。**
+  `field "atlases" type="array" items="Atlas"` / `field "labels" type="map" values="Label"`。
+  parser は `FieldType::Array(T)` / `FieldType::Map(K, V)` に要素型を載せ、 unison-mcp の
+  tool schema にも `items` / `additionalProperties` の型が出る。 runtime 検証
+  (`SchemaRegistry`) は従来どおり配列・map であることまでを見る。 `array<T>` 構文は採らない。
+
 ### Changed
 
 - **club-kdl を 0.12 → 0.14 に上げた (KDL スキーマの読み込みが速くなる)。**

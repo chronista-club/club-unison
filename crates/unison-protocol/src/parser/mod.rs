@@ -1,7 +1,9 @@
 use thiserror::Error;
 
+pub mod check;
 pub mod schema;
 
+pub use check::{TypeIndex, Violation};
 pub use schema::*;
 
 /// KDL スキーマの parse / 検証エラー。

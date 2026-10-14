@@ -3,7 +3,7 @@ name = "unison-cli"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-description = "Developer CLI for the Unison Protocol — ping / sniff / mock / schema-lint."
+description = "Developer CLI for the Unison Protocol — ping / sniff / mock / schema-lint / schema-diff."
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
@@ -27,6 +27,8 @@ tokio.workspace = true
 
 # Serialization
 serde_json.workspace = true
+# schema-diff: 方言に無い top-level node の request= / response= を読む
+kdl.workspace = true
 
 # Error handling
 anyhow.workspace = true
