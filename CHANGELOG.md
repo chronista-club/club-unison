@@ -6,6 +6,19 @@
 このプロジェクトは [セマンティックバージョニング](https://semver.org/lang/ja/) に準拠しています。
 ## [Unreleased]
 
+
+## [2.1.0] - 2026-10-14 — 配った client の約束を守る道具 (schema-diff / schema-check)
+
+> 配布済みの client (例: Creo iOS 1.0.1 build 11) は、利用者が更新するまで同じ前提で
+> server を叩き続ける。 その前提 (= 約束) を KDL で書き、 「server の変更が約束を壊して
+> いないか」 (schema-diff) と 「実際の応答が約束を満たすか」 (schema-check) を CI で
+> 確かめる道具を CLI に入れた。 判定の規則は Unison に 1 か所だけ置く。
+> あわせて club-kdl 0.14 でスキーマの読み込みが速くなった。 wire bytes は変わらない。
+>
+> **注意**: `parser::Field` に公開 field (`items` / `keys` / `values`) が増えた。
+> `Field { .. }` を struct literal で組み立てているコードは 3 つを足す必要がある
+> (~/repos 配下の利用 repo には該当なし)。
+
 ### Added
 
 - **`unison schema-diff <old.kdl> <new.kdl>` — 旧版と比べて、配った client の約束を壊す変更を見つける。**
@@ -41,6 +54,12 @@
   使っていなかった `kdl` crate の依存を外した (club-kdl 0.14 は kdl-rs を既定で引かないので、
   依存ツリーから `kdl` / `miette` / `winnow` / `unicode-width` 0.1 が消える)。
 
+- **Ruby gem の native ext が tokio のワーカーをコア数ぶん立てなくなった (2 本に固定)。**
+  Ruby はプロセスを複数並べて動かすことが多く (Puma 等)、 プロセス数 × コア数のワーカーが
+  CPU を奪い合っていた。 1 本ではなく 2 本なのは、 長い poll で唯一のワーカーが塞がると
+  全体が止まるため。
+- **unison-mcp の rmcp の下限を 3.5 に上げた。** rmcp 3.5 で非推奨になった
+  `ServerInfo` を `ServerConfig` に置き換えた (unison-mcp は crates.io に出していない)。
 - **Ruby gem の native ext が `club-unison = "2.0"` を使うようになった。**
   1.3 を pin していたので 2.0.0 の API 変更 (`new_default` → `insecure_localhost`)
   に追随。 `rake test` 6 件と `rake test:e2e` (実 QUIC + `unison mock`) の通過を確認。
