@@ -71,7 +71,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-stream = "0.3"
 tempfile = "3.27"
 kdl = "6.5.0"
-club-kdl = "0.12"
+club-kdl = "0.14"
 
 # Dev dependencies
 pretty_assertions = "1.4"
