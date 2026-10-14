@@ -31,6 +31,16 @@
 
 ### Changed
 
+- **club-kdl を 0.12 → 0.14 に上げた (KDL スキーマの読み込みが速くなる)。**
+  club-kdl 側の実測で `schemas/*.kdl` の読み込みが約 85〜113 倍速い。 SchemaRegistry /
+  ProtocolCache の構築、 CLI、 MCP ブリッジのツール合成が速くなる (通信の JSON は無関係)。
+  コードの変更は無い (unison が club-kdl を使うのは `SchemaParser::parse` の
+  `club_kdl::from_str` の 1 か所だけ)。 KDL の構文エラーの文言に位置が付く
+  (`parse error: line 2, column 1: unterminated children block, expected '}'`)。
+  エラー文言に依存している利用側は注意。 あわせて unison-protocol が宣言だけして
+  使っていなかった `kdl` crate の依存を外した (club-kdl 0.14 は kdl-rs を既定で引かないので、
+  依存ツリーから `kdl` / `miette` / `winnow` / `unicode-width` 0.1 が消える)。
+
 - **Ruby gem の native ext が `club-unison = "2.0"` を使うようになった。**
   1.3 を pin していたので 2.0.0 の API 変更 (`new_default` → `insecure_localhost`)
   に追随。 `rake test` 6 件と `rake test:e2e` (実 QUIC + `unison mock`) の通過を確認。
