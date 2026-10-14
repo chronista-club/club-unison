@@ -225,10 +225,10 @@ fn check_fields(
 /// よくある間違いに対する直し方の示唆。
 fn unknown_type_hint(name: &str) -> String {
     if name.starts_with("array<") || name.starts_with("map<") {
-        // 下流の実 schema で使われている構文だが parser は未実装。
+        // 下流の実 schema で使われていた構文だが Unison は採らない。
         // Array/Map にすらならないので「配列である」ことすら検証されない。
-        " (typed-element 構文は未実装。 要素型を落として `array` / `map` と書くか、 \
-         `typedef` で名前を付ける)"
+        " (`array<T>` / `map<K, V>` 構文は無い。 要素型は `type=\"array\" items=\"T\"` / \
+         `type=\"map\" values=\"V\"` と書く)"
             .to_string()
     } else {
         match name {
@@ -352,9 +352,10 @@ protocol "t" version="1.0.0" {
         );
     }
 
-    /// `array<T>` は未実装構文。 `Array` にすらならず、 配列であることも検証されない。
+    /// `array<T>` は採らない構文。 `Array` にすらならず、 配列であることも検証されない。
+    /// 要素型は `items=` / `values=` で書くよう案内する。
     #[test]
-    fn typed_element_syntax_warns_as_unimplemented() {
+    fn typed_element_syntax_warns_with_items_hint() {
         let schema = parse(
             r#"
 protocol "t" version="1.0.0" {
@@ -372,7 +373,7 @@ protocol "t" version="1.0.0" {
         let warnings = lint_unknown_field_types(&schema);
         assert_eq!(warnings.len(), 1, "got: {warnings:?}");
         assert!(
-            warnings[0].contains("array") && warnings[0].contains("未実装"),
+            warnings[0].contains("items=") && warnings[0].contains("values="),
             "got: {warnings:?}"
         );
     }

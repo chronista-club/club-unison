@@ -6,6 +6,23 @@
 このプロジェクトは [セマンティックバージョニング](https://semver.org/lang/ja/) に準拠しています。
 ## [Unreleased]
 
+### Added
+
+- **`unison schema-diff <old.kdl> <new.kdl>` — 旧版と比べて、配った client の約束を壊す変更を見つける。**
+  壊れる変更があれば exit 1 (CI 向け)。 判定は向きで逆になる: 要求 (client → server) は
+  「新しく required になった field」、 応答 (server → client) は「required の field が消えた /
+  required でなくなった」を壊れる変更とする。 型の変化、 channel / request / event / message /
+  enum / typedef の消失は両方向で壊れる。 enum は要求では値の削除、 応答では値の追加が壊れる
+  (`--lenient-enum-additions` で警告に緩める)。 向きは `request` / `returns` / `event` と、
+  方言に無い node (例: Creo の `route`) の `request=` / `response=` 属性を種にして、
+  field の型が指す message / enum へ伝播させる。 向きが決まらない名前は既定で両方向の規則で
+  見る (`--unknown-direction skip` で検査しない)。 設計は `design/schema-diff.md`。
+- **field の要素型を `items=` / `keys=` / `values=` で書けるようになった。**
+  `field "atlases" type="array" items="Atlas"` / `field "labels" type="map" values="Label"`。
+  parser は `FieldType::Array(T)` / `FieldType::Map(K, V)` に要素型を載せ、 unison-mcp の
+  tool schema にも `items` / `additionalProperties` の型が出る。 runtime 検証
+  (`SchemaRegistry`) は従来どおり配列・map であることまでを見る。 `array<T>` 構文は採らない。
+
 ### Changed
 
 - **Ruby gem の native ext が `club-unison = "2.0"` を使うようになった。**

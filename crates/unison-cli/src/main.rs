@@ -10,6 +10,7 @@
 //! - `sniff <url>`       — channel traffic を覗く packet inspector
 //! - `mock --schema F`   — KDL schema から stub server を起動
 //! - `schema-lint F`     — KDL schema を parse + invariant 検証
+//! - `schema-diff OLD NEW` — 旧版と比べて壊れる変更を見つける (CI 用、 壊れたら exit 1)
 
 use clap::{Parser, Subcommand};
 use unison::network::ProtocolClient;
@@ -18,6 +19,7 @@ use unison::network::quic::QuicClient;
 mod call;
 mod mock;
 mod ping;
+mod schema_diff;
 mod schema_lint;
 mod sniff;
 
@@ -41,6 +43,8 @@ enum Command {
     Mock(mock::MockArgs),
     /// KDL schema を parse + invariant 検証する
     SchemaLint(schema_lint::SchemaLintArgs),
+    /// 旧版 KDL と比べて、配った client の約束を壊す変更を見つける
+    SchemaDiff(schema_diff::SchemaDiffArgs),
 }
 
 #[tokio::main]
@@ -61,6 +65,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Sniff(args) => sniff::run(args).await,
         Command::Mock(args) => mock::run(args).await,
         Command::SchemaLint(args) => schema_lint::run(args),
+        Command::SchemaDiff(args) => schema_diff::run(args),
     }
 }
 

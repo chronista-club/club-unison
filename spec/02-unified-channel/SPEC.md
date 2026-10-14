@@ -172,8 +172,19 @@ MCP tool schema (`unison-mcp`、 [design/kdl-to-json-schema.md](../../design/kdl
 | `bool` | 真偽値 | `boolean` | |
 | `json` | 任意の JSON 値 | `{}` (any) | |
 | `object` | JSON object | `object` | key / value は untyped |
-| `array` | JSON array | `array` (items any) | `array<T>` の typed 要素は未対応 |
-| `map` | string key → any value | `object` (additionalProperties) | `map<K, V>` は未対応 |
+| `array` | JSON array | `array` (`items` = 要素型) | 要素型は `items="T"`、 省略時は any |
+| `map` | string key → value | `object` (`additionalProperties` = 値型) | 値型は `values="V"`、 キー型は `keys="K"` (省略時 `string`)。 値型省略時は any |
+
+要素型の書き方:
+
+```kdl
+field "atlases" type="array" items="Atlas" required=#true
+field "labels" type="map" values="Label"
+```
+
+`array<T>` / `map<K, V>` という型名の構文は採らない (= custom 型名として扱われ、
+`schema-lint` が `items=` / `values=` を案内する)。 runtime 検証 (`SchemaRegistry`) は
+現状、 配列・map であることまでを見て要素型までは見ない。
 
 上記以外の型名 (例: `timestamp`) は **custom 型** として受理され、 検証も schema も
 「何でも通る」 (= any) になる。 意味付けは application 側の責務。 旧 docs にあった
