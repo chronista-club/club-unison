@@ -12,7 +12,7 @@ end-to-end に疎通させるまでの手順。**ここに載るコード・コ�
 Unison は **KDL スキーマ駆動の QUIC プロトコルフレームワーク**。
 
 - **サーバ・プロトコルコア**: Rust crate `club-unison`（lib 名 `unison`）
-- **開発者 CLI**: `unison`（crate `unison-cli`）— ping / sniff / mock / schema-lint / schema-diff
+- **開発者 CLI**: `unison`（crate `unison-cli`）— ping / sniff / mock / schema-lint / schema-diff / schema-check
 - **TypeScript クライアント SDK**: `@chronista-club/unison-client`
   — ブラウザ / Node.js から WebTransport 経由でサーバに直結
 
@@ -84,6 +84,14 @@ channel 名重複 / request・event 名の重複などの不変条件もチェ�
 ```
 
 判定の規則（要求と応答で逆になる）は [design/schema-diff.md](../design/schema-diff.md)。
+
+実際の応答 JSON が約束の型を満たすかは `schema-check` で確かめられる（満たさなければ exit 1）:
+
+```bash
+!cargo run -p unison-cli -- schema-check schemas/quickstart.kdl --message EchoResp response.json
+```
+
+複数の組は `--cases`、機械が読む形は `--json`。規則は [design/schema-check.md](../design/schema-check.md)。
 
 ---
 
