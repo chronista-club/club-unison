@@ -11,7 +11,7 @@ A type-safe QUIC communication framework, defined by KDL schema.
 ```toml
 [dependencies]
 # crates.io package = `club-unison`, Rust crate identifier = `unison`
-club-unison = "2.0.0"
+club-unison = "2.1.0"
 tokio = { version = "1.52", features = ["full"] }
 ```
 
