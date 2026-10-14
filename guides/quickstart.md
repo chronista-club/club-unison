@@ -12,7 +12,7 @@ end-to-end に疎通させるまでの手順。**ここに載るコード・コ�
 Unison は **KDL スキーマ駆動の QUIC プロトコルフレームワーク**。
 
 - **サーバ・プロトコルコア**: Rust crate `club-unison`（lib 名 `unison`）
-- **開発者 CLI**: `unison`（crate `unison-cli`）— ping / sniff / mock / schema-lint
+- **開発者 CLI**: `unison`（crate `unison-cli`）— ping / sniff / mock / schema-lint / schema-diff
 - **TypeScript クライアント SDK**: `@chronista-club/unison-client`
   — ブラウザ / Node.js から WebTransport 経由でサーバに直結
 
@@ -75,6 +75,15 @@ protocol "quickstart" version="1.0.0" {
 
 `schema-lint` は KDL syntax error に加え、datagram の `channel_id` 衝突 /
 channel 名重複 / request・event 名の重複などの不変条件もチェックする。
+
+スキーマを変えるときは、配布済みの client が前提にしている旧版と比べて、壊れる変更が
+無いかを確かめられる（壊れる変更があれば exit 1。CI 向け）:
+
+```bash
+!cargo run -p unison-cli -- schema-diff schemas/old.kdl schemas/quickstart.kdl
+```
+
+判定の規則（要求と応答で逆になる）は [design/schema-diff.md](../design/schema-diff.md)。
 
 ---
 

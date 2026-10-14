@@ -1,4 +1,4 @@
-use unison::parser::{ChannelBackend, ChannelFrom, ChannelLifetime, SchemaParser};
+use unison::parser::{ChannelBackend, ChannelFrom, ChannelLifetime, FieldType, SchemaParser};
 
 #[test]
 fn test_basic_kdl_parsing() {
@@ -412,4 +412,93 @@ fn test_request_readonly_and_destructive_conflict_fails() {
         "error must mention the conflicting hints: {}",
         msg
     );
+}
+
+/// `type="array" items="Atlas"` は要素型を持つ Array として読む。
+///
+/// 要素型が読めないと「配った client の約束を壊していないか」の差分検査
+/// (= `unison schema-diff`) で要素型の入れ替わりを見逃す。
+#[test]
+fn test_array_items_element_type_parsed() {
+    let schema_str = r#"
+protocol "t" version="1.0.0" {
+    channel "c" from="client" lifetime="persistent" {
+        request "R" {
+            field "ids" type="array" items="string"
+            returns "Res" {
+                field "atlases" type="array" items="Atlas" required=#true
+            }
+        }
+    }
+}
+"#;
+    let schema = SchemaParser::new().parse(schema_str).expect("parse");
+    let protocol = schema.protocol.unwrap();
+    let req = &protocol.channels[0].requests[0];
+
+    let FieldType::Array(elem) = req.fields[0].field_type() else {
+        panic!("ids should be Array, got {:?}", req.fields[0].field_type());
+    };
+    assert!(matches!(*elem, FieldType::String), "got {elem:?}");
+
+    let returns = req.returns.as_ref().unwrap();
+    let FieldType::Array(elem) = returns.fields[0].field_type() else {
+        panic!("atlases should be Array");
+    };
+    assert!(
+        matches!(*elem, FieldType::Custom(ref n) if n == "Atlas"),
+        "got {elem:?}"
+    );
+}
+
+/// `type="map" keys="string" values="Label"` は K/V 型を持つ Map として読む。
+/// `keys` 省略時は `string` (= JSON object のキーは常に文字列)。
+#[test]
+fn test_map_key_value_types_parsed() {
+    let schema_str = r#"
+protocol "t" version="1.0.0" {
+    channel "c" from="client" lifetime="persistent" {
+        request "R" {
+            field "labels" type="map" values="Label"
+            returns "Res" {
+                field "ok" type="bool"
+            }
+        }
+    }
+}
+"#;
+    let schema = SchemaParser::new().parse(schema_str).expect("parse");
+    let protocol = schema.protocol.unwrap();
+    let FieldType::Map(key, value) = protocol.channels[0].requests[0].fields[0].field_type() else {
+        panic!("labels should be Map");
+    };
+    assert!(matches!(*key, FieldType::String), "got {key:?}");
+    assert!(
+        matches!(*value, FieldType::Custom(ref n) if n == "Label"),
+        "got {value:?}"
+    );
+}
+
+/// 要素型を書かない従来の `type="array"` / `type="map"` は従来どおり任意要素。
+#[test]
+fn test_array_and_map_without_element_types_stay_untyped() {
+    let schema_str = r#"
+protocol "t" version="1.0.0" {
+    channel "c" from="client" lifetime="persistent" {
+        request "R" {
+            field "xs" type="array"
+            field "m" type="map"
+            returns "Res" {
+                field "ok" type="bool"
+            }
+        }
+    }
+}
+"#;
+    let schema = SchemaParser::new().parse(schema_str).expect("parse");
+    let protocol = schema.protocol.unwrap();
+    let fields = &protocol.channels[0].requests[0].fields;
+    assert!(matches!(fields[0].field_type(), FieldType::Array(e) if matches!(*e, FieldType::Json)),);
+    assert!(matches!(fields[1].field_type(), FieldType::Map(k, v)
+            if matches!(*k, FieldType::String) && matches!(*v, FieldType::Json)),);
 }
