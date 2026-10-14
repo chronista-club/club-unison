@@ -1,0 +1,54 @@
+// creo-memories `apps/creo-app-server/contracts/ios/1.0.1-b11.kdl` (Creo iOS 1.0.1 build 11 の
+// REST の約束) から、schema-check の受け入れテストに使う部分だけを抜いたもの。
+// 一覧の応答 → 要素 (message) → 入れ子 (items) / 任意 field / 要求側の enum を含む。
+// `route` は Creo 独自の node で、Unison の parser は読み飛ばす。
+
+protocol "creo-ios-rest" version="1.0.1-b11" {
+    description "Creo iOS 1.0.1 (11) が使う REST の口 (抜粋)"
+}
+
+message "FileRef" {
+    field "id" type="string" required=#true
+    field "added_at" type="string" description="ISO 8601"
+}
+
+message "MemoryListItem" {
+    field "id" type="string" required=#true
+    field "content" type="string" required=#true
+    field "updated_at" type="string"
+    field "contentType" type="string"
+    field "content_type" type="string"
+    field "fileRefs" type="array" items="FileRef"
+}
+
+message "MemoriesResponse" {
+    field "memories" type="array" items="MemoryListItem" required=#true
+    field "total" type="int"
+}
+
+route "GET" "/api/memories" response="MemoriesResponse" {
+    query "page" type="int" required=#true default="1"
+}
+
+message "Plan" {
+    field "plan" type="string" required=#true
+    field "maxMemories" type="int" required=#true
+    field "maxAtlas" type="int" required=#true
+}
+
+message "PlansResponse" {
+    field "plans" type="array" items="Plan" required=#true
+}
+
+route "GET" "/api/billing/plans" response="PlansResponse"
+
+enum "ReportReason" {
+    values "spam" "harassment" "inappropriate" "other"
+}
+
+message "ReportRequest" {
+    field "memoryId" type="string" required=#true
+    field "reason" type="ReportReason" required=#true
+}
+
+route "POST" "/api/reports" request="ReportRequest" response="SuccessResponse"

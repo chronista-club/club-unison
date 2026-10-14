@@ -30,9 +30,21 @@ use unison::{NetworkError, ProtocolClient, UnisonChannel};
 /// One long-lived runtime: the QUIC reactor should outlive individual calls,
 /// and building a runtime per call would be wasteful. Created lazily on first
 /// use.
+///
+/// Worker threads are capped instead of defaulting to one per core. Ruby apps
+/// usually run several processes side by side (Puma workers etc.), so a
+/// per-core pool multiplies into processes × cores threads fighting for CPU,
+/// while a client's QUIC traffic needs far less. Two rather than one, so a
+/// single long poll (e.g. zstd on a large payload) cannot stall everything.
 fn runtime() -> &'static Runtime {
     static RT: OnceLock<Runtime> = OnceLock::new();
-    RT.get_or_init(|| Runtime::new().expect("failed to build the Unison tokio runtime"))
+    RT.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("failed to build the Unison tokio runtime")
+    })
 }
 
 /// Runs `f` with Ruby's GVL released, letting other Ruby threads proceed.
@@ -175,12 +187,12 @@ impl Client {
     ///
     /// Does not open a connection; call `#connect` for that.
     ///
-    /// **Warning**: backed by `ProtocolClient::new_default()`, which builds an
-    /// **insecure** client — TLS certificate verification is skipped (intended
-    /// for loopback / development). A secure constructor taking explicit trust
-    /// anchors is future work.
+    /// **Warning**: backed by `ProtocolClient::insecure_localhost()`, which
+    /// builds an **insecure** client — TLS certificate verification is skipped
+    /// (intended for loopback / development). A secure constructor taking
+    /// explicit trust anchors is future work.
     fn new() -> Result<Self, Error> {
-        let inner = ProtocolClient::new_default()
+        let inner = ProtocolClient::insecure_localhost()
             .map_err(|e| unison_error(format!("Unison::Client.new failed: {e}")))?;
         Ok(Self { inner })
     }

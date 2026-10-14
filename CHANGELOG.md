@@ -6,6 +6,65 @@
 このプロジェクトは [セマンティックバージョニング](https://semver.org/lang/ja/) に準拠しています。
 ## [Unreleased]
 
+
+## [2.1.0] - 2026-10-14 — 配った client の約束を守る道具 (schema-diff / schema-check)
+
+> 配布済みの client (例: Creo iOS 1.0.1 build 11) は、利用者が更新するまで同じ前提で
+> server を叩き続ける。 その前提 (= 約束) を KDL で書き、 「server の変更が約束を壊して
+> いないか」 (schema-diff) と 「実際の応答が約束を満たすか」 (schema-check) を CI で
+> 確かめる道具を CLI に入れた。 判定の規則は Unison に 1 か所だけ置く。
+> あわせて club-kdl 0.14 でスキーマの読み込みが速くなった。 wire bytes は変わらない。
+>
+> **注意**: `parser::Field` に公開 field (`items` / `keys` / `values`) が増えた。
+> `Field { .. }` を struct literal で組み立てているコードは 3 つを足す必要がある
+> (~/repos 配下の利用 repo には該当なし)。
+
+### Added
+
+- **`unison schema-diff <old.kdl> <new.kdl>` — 旧版と比べて、配った client の約束を壊す変更を見つける。**
+  壊れる変更があれば exit 1 (CI 向け)。 判定は向きで逆になる: 要求 (client → server) は
+  「新しく required になった field」、 応答 (server → client) は「required の field が消えた /
+  required でなくなった」を壊れる変更とする。 型の変化、 channel / request / event / message /
+  enum / typedef の消失は両方向で壊れる。 enum は要求では値の削除、 応答では値の追加が壊れる
+  (`--lenient-enum-additions` で警告に緩める)。 向きは `request` / `returns` / `event` と、
+  方言に無い node (例: Creo の `route`) の `request=` / `response=` 属性を種にして、
+  field の型が指す message / enum へ伝播させる。 向きが決まらない名前は既定で両方向の規則で
+  見る (`--unknown-direction skip` で検査しない)。 設計は `design/schema-diff.md`。
+- **`unison schema-check <contract.kdl>` — JSON が約束の型を応答として満たすかを判定する。**
+  `--message M <file|->` で 1 件、 `--cases <file>` でまとめて、 `--json` で機械が読む形。
+  client の decode が失敗する条件 (required の欠落 / null、 型違い、 要素型違い、 入れ子の
+  message の違反、 enum に無い値、 宣言の無い型名) を誤りにし、 場所を `$.memories[1].content`
+  の形で出す。 知らない key と任意 field の欠落 / null は通す。 規則は `parser::TypeIndex`
+  に 1 か所だけ置く (約束を書く側は規則を持たない)。 設計は `design/schema-check.md`。
+- **field の要素型を `items=` / `keys=` / `values=` で書けるようになった。**
+  `field "atlases" type="array" items="Atlas"` / `field "labels" type="map" values="Label"`。
+  parser は `FieldType::Array(T)` / `FieldType::Map(K, V)` に要素型を載せ、 unison-mcp の
+  tool schema にも `items` / `additionalProperties` の型が出る。 runtime 検証
+  (`SchemaRegistry`) は従来どおり配列・map であることまでを見る。 `array<T>` 構文は採らない。
+
+### Changed
+
+- **club-kdl を 0.12 → 0.14 に上げた (KDL スキーマの読み込みが速くなる)。**
+  club-kdl 側の実測で `schemas/*.kdl` の読み込みが約 85〜113 倍速い。 SchemaRegistry /
+  ProtocolCache の構築、 CLI、 MCP ブリッジのツール合成が速くなる (通信の JSON は無関係)。
+  コードの変更は無い (unison が club-kdl を使うのは `SchemaParser::parse` の
+  `club_kdl::from_str` の 1 か所だけ)。 KDL の構文エラーの文言に位置が付く
+  (`parse error: line 2, column 1: unterminated children block, expected '}'`)。
+  エラー文言に依存している利用側は注意。 あわせて unison-protocol が宣言だけして
+  使っていなかった `kdl` crate の依存を外した (club-kdl 0.14 は kdl-rs を既定で引かないので、
+  依存ツリーから `kdl` / `miette` / `winnow` / `unicode-width` 0.1 が消える)。
+
+- **Ruby gem の native ext が tokio のワーカーをコア数ぶん立てなくなった (2 本に固定)。**
+  Ruby はプロセスを複数並べて動かすことが多く (Puma 等)、 プロセス数 × コア数のワーカーが
+  CPU を奪い合っていた。 1 本ではなく 2 本なのは、 長い poll で唯一のワーカーが塞がると
+  全体が止まるため。
+- **unison-mcp の rmcp の下限を 3.5 に上げた。** rmcp 3.5 で非推奨になった
+  `ServerInfo` を `ServerConfig` に置き換えた (unison-mcp は crates.io に出していない)。
+- **Ruby gem の native ext が `club-unison = "2.0"` を使うようになった。**
+  1.3 を pin していたので 2.0.0 の API 変更 (`new_default` → `insecure_localhost`)
+  に追随。 `rake test` 6 件と `rake test:e2e` (実 QUIC + `unison mock`) の通過を確認。
+
+
 ## [2.0.0] - 2026-09-06 — 呼び出し元の無い public API と化石 docs の一掃
 
 > 2026-09-05 に workspace 全体を俯瞰し (Explore agent 3 本 + 手動裏取り、 34 項目)、

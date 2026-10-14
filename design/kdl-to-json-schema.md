@@ -83,10 +83,7 @@ channel "chat" from="client" lifetime="persistent" {
         field "to" type="string" required=#true description="Recipient address"
         field "msg" type="string" required=#true
         field "reply_to" type="string"
-        field "tags" type="array" {
-            // 注: 現状 parser は array の要素型を 「`Array(Box<FieldType>)`」 として
-            //     扱うが、 KDL syntax で要素型を指定する記法は未確立 (= 課題)
-        }
+        field "tags" type="array" items="string"
         returns "Ack" {
             field "ok" type="bool" required=#true
         }
@@ -112,7 +109,9 @@ channel "chat" from="client" lifetime="persistent" {
     },
     "tags": {
       "type": "array",
-      "items": {}
+      "items": {
+        "type": "string"
+      }
     }
   },
   "required": ["to", "msg"],
@@ -138,7 +137,7 @@ client.messages.create(
 
 | 項目 | 想定 phase / Epic |
 |---|---|
-| **Typed element syntax** (= `array<string>`、 `map<string, int>` 等) — 現状は `type="array"` / `type="map"` のみ recognize、 要素型は untyped (= `Json`) | 別 Epic、 KDL syntax convention の確立と連動 |
+| ~~Typed element syntax~~ → **済**: `type="array" items="T"` / `type="map" keys="K" values="V"` (= property で書く。 `array<T>` 構文は採らない)。 省略時は従来どおり untyped (= `Json`) | schema-diff と同時 ([schema-diff.md](schema-diff.md)) |
 | `Custom` / `Enum` の typedef 解決 (= 具体型を schema に展開) | 後続 phase、 KDL parser 側の typedef AST 整備と連動 |
 | `Float` の f32/f64 sub-type 区別 | JSON Schema の `format` 拡張で表現可 (= `float`/`double`) |
 | 制約 (`min`/`max`/`pattern`) の schema 出力 | constraint Epic で SchemaRegistry validation と同時に追加 |

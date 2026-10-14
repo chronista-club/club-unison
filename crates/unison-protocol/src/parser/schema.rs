@@ -284,6 +284,25 @@ pub struct Field {
     #[kdl(property, rename = "default")]
     pub default_str: Option<String>,
 
+    /// `type="array"` の要素型 (= `field "xs" type="array" items="Atlas"`)。
+    ///
+    /// 省略時は任意 JSON 要素。 型名の解釈は [`Field::field_type`] が
+    /// scalar 名 / 宣言済み名 (= `Custom`) として行う。
+    #[kdl(property)]
+    pub items: Option<String>,
+
+    /// `type="map"` のキー型 (= `field "m" type="map" keys="string"`)。
+    ///
+    /// 省略時は `string` (= JSON object のキーは常に文字列)。
+    #[kdl(property)]
+    pub keys: Option<String>,
+
+    /// `type="map"` の値型 (= `field "m" type="map" values="Label"`)。
+    ///
+    /// 省略時は任意 JSON 値。
+    #[kdl(property)]
+    pub values: Option<String>,
+
     #[kdl(property)]
     pub min: Option<i64>,
 
@@ -335,16 +354,27 @@ impl Field {
             "bool" => FieldType::Bool,
             "json" => FieldType::Json,
             "object" => FieldType::Object,
-            // `type="array"` = JSON array of any element (= items は untyped、
-            // typed-element 構文 `array<T>` は別 Epic)。 これにより
-            // `SchemaRegistry::validate_request` の Array arm + `mapping::field_type_to_schema`
-            // の Array branch が live になり、 design/kdl-to-json-schema.md と一致する。
-            "array" => FieldType::Array(Box::new(FieldType::Json)),
-            // `type="map"` = JSON object with string keys → any values (= 慣用)、
-            // typed-K/V 構文 `map<K, V>` は別 Epic。 これも対応する arm が live になる。
-            "map" => FieldType::Map(Box::new(FieldType::String), Box::new(FieldType::Json)),
+            // `type="array"` = JSON array。 要素型は `items="T"` で書ける
+            // (= 省略時は任意 JSON)。 `array<T>` という string 構文は採らない
+            // (KDL の property で書く方が parser に小さく収まる)。
+            "array" => FieldType::Array(Box::new(self.element_type(self.items.as_deref()))),
+            // `type="map"` = JSON object。 キーは常に文字列なので `keys` 省略時は
+            // `string`、 値型は `values="T"` で書ける (= 省略時は任意 JSON)。
+            "map" => FieldType::Map(
+                Box::new(
+                    self.keys
+                        .as_deref()
+                        .map_or(FieldType::String, |k| self.parse_field_type(k)),
+                ),
+                Box::new(self.element_type(self.values.as_deref())),
+            ),
             _ => FieldType::Custom(type_str.to_string()),
         }
+    }
+
+    /// `items` / `values` の型名を解釈する (= 未指定なら任意 JSON)。
+    fn element_type(&self, name: Option<&str>) -> FieldType {
+        name.map_or(FieldType::Json, |n| self.parse_field_type(n))
     }
 
     fn parse_default(&self, s: &str) -> Option<DefaultValue> {

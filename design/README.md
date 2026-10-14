@@ -18,6 +18,8 @@
 | [architecture.md](architecture.md) | 全体アーキテクチャ設計詳細 | [spec/01](../spec/01-core-concept/SPEC.md) |
 | [packet.md](packet.md) | UnisonPacket実装仕様（バイナリパケット層） | [spec/01](../spec/01-core-concept/SPEC.md) |
 | [wire-format.md](wire-format.md) | Wire Format 設計（v0.9.0 buffa pivot） | — |
+| [schema-diff.md](schema-diff.md) | `unison schema-diff` — 旧版と比べて配った client の約束を壊す変更を見つける（向きで逆になる判定） | [spec/02](../spec/02-unified-channel/SPEC.md) §4 |
+| [schema-check.md](schema-check.md) | `unison schema-check` — JSON が約束の型を応答として満たすか（判定の規則を Unison 1 か所に置く） | [spec/02](../spec/02-unified-channel/SPEC.md) §4.1 |
 | [kdl-to-json-schema.md](kdl-to-json-schema.md) | KDL 型 → JSON Schema 対応表（unison-mcp の tool schema） | [spec/02](../spec/02-unified-channel/SPEC.md) §4.1 |
 | [quic-runtime.md](quic-runtime.md) | QUIC Runtime 統合 | — |
 | [connection-auth.md](connection-auth.md) | Connection-level auth primitive（mechanism/policy 分離） | — |
