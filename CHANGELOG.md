@@ -6,6 +6,11 @@
 このプロジェクトは [セマンティックバージョニング](https://semver.org/lang/ja/) に準拠しています。
 ## [Unreleased]
 
+### Added
+
+- Swift SDK の QUIC で `.handover` を有効にし、Wi-Fi / 携帯回線の切り替え時に
+  同じ接続の継続を OS に依頼する。Quinn サーバー向けの検証プローブ、iPhone 用
+  テストホスト、実機での回線切り替え手順と検証記録を追加。
 
 ## [2.1.0] - 2026-10-14 — 配った client の約束を守る道具 (schema-diff / schema-check)
 
