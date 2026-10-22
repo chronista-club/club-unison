@@ -295,9 +295,9 @@ dependencies = [
 
 [[package]]
 name = "club-unison"
-version = "2.1.0"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "787a2008e793a21c4a62c0e3a320efc635e7a95ef5f0b3342a62e67bd698d5f2"
+checksum = "7f466c0434a2ed41cd38f9f9c2921e61b1a400e4b7c46de2783d55a5ceda31dc"
 dependencies = [
  "anyhow",
  "async-stream",
