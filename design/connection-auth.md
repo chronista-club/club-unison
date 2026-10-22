@@ -213,8 +213,9 @@ server.register_channel("worlds", |ctx, stream| async move {
 
 ### 5.6 ctx 共有の保証（実装前 検証済 ✅）
 
-本設計は「`unison.auth` handler が立てた principal を worlds/wire/datagram handler が読める」
-ことに依存する。これは **同一 connection の全 channel handler が同じ `Arc<ConnectionContext>`
+本設計は「`unison.auth` handler が立てた principal を worlds/wire などの stream channel handler
+が読める」ことに依存する（datagram channel handler は ctx を受け取らない。§7「既知の制約」）。
+これは **同一 connection の全 stream channel handler が同じ `Arc<ConnectionContext>`
 を共有する**ことで成立する。`network/dispatch.rs` が connection ごとに ctx を 1 つ作り、
 各 channel handler 起動時に `Arc::clone(&ctx)` を渡している（dispatch.rs の
 `let ctx = Arc::clone(&ctx);` → `handler(ctx, stream).await`）ことを確認済み。
@@ -284,7 +285,7 @@ auth はクライアント側に専用 transport を要求しない。**`unison.
 - verifier は app 注入（club-unison は Creo ID を知らない）。✅
 - `unison.discovery` と同様、`enable_auth` を呼ばない server は従来通り（auth 無効・非破壊）。✅
 
-E2E 検証: `crates/unison-protocol/tests/test_integ_auth.rs`（4 ケース、全 green）。
+E2E 検証: `crates/unison-protocol/tests/test_medium_auth_channel.rs`（4 ケース、全 green）。
 
 ### 既知の制約 / 将来拡張
 - **datagram の principal 継承（transport のみ）**: 認証済み QUIC connection 上を datagram は
