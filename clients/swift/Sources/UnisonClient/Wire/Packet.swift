@@ -29,6 +29,9 @@ enum Packet {
     /// プロトコルバージョン (= Rust `UnisonPacketHeader::CURRENT_VERSION`)。
     static let version: UInt32 = 1
 
+    /// 展開後 payload の最大 size (= Rust `PacketConfig` 既定の `max_payload_size`、 16MB)。
+    static let maxPayloadSize = 16 * 1024 * 1024
+
     /// `payload` (= encode 済み `ProtocolMessage`) を 1 本の UnisonPacket へ encode。
     static func encode(payload: Data, options: Options = Options()) throws -> Data {
         var header = Protocol_PacketHeader()
@@ -111,6 +114,12 @@ enum Packet {
     private static func decompress(_ compressed: Data, expectedSize: Int) throws -> Data {
         guard expectedSize > 0 else {
             throw UnisonError.codec("packet: zstd 展開後サイズの宣言が 0")
+        }
+        // 宣言は peer が自由に書ける u32。 確保する前に上限で弾く
+        guard expectedSize <= maxPayloadSize else {
+            throw UnisonError.codec(
+                "packet: zstd 展開後サイズの宣言 \(expectedSize) bytes が上限 \(maxPayloadSize) bytes を超過"
+            )
         }
         var output = Data(count: expectedSize)
         let written = output.withUnsafeMutableBytes { dst in
