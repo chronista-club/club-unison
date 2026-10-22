@@ -6,11 +6,23 @@
 このプロジェクトは [セマンティックバージョニング](https://semver.org/lang/ja/) に準拠しています。
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-22 — Swift QUIC の回線切り替え対応
+
 ### Added
 
 - Swift SDK の QUIC で `.handover` を有効にし、Wi-Fi / 携帯回線の切り替え時に
   同じ接続の継続を OS に依頼する。Quinn サーバー向けの検証プローブ、iPhone 用
   テストホスト、実機での回線切り替え手順と検証記録を追加。
+
+### Changed
+
+- Ruby native extension の依存ロックを公開済み `club-unison 2.1.0` に更新。
+
+### Validation
+
+- iPhone の Wi-Fi / 携帯回線切り替えを含む実機試験で、接続 ID を保ったまま
+  300 往復の応答を確認。最大応答間隔は 4.63 秒。詳細は
+  [実機検証記録](guides/swift-handover.md) を参照。
 
 ## [2.1.0] - 2026-10-14 — 配った client の約束を守る道具 (schema-diff / schema-check)
 
