@@ -55,10 +55,31 @@ loopback のみ pin 省略時に検証を省略できる。リモートでは必
 
 ## iPhone 実機
 
-1. Xcode で repo root の `Package.swift` を開き、`UnisonClient` scheme を選ぶ。
-2. iPhone は USB 接続にし、Developer Mode / 信頼 / 署名の設定を済ませる。
+Swift Package 単体のテストは物理 iPhone で実行できないため、
+`clients/swift/HandoverHost` のアプリをテストホストに使う。
+このホストは同じ `HandoverLiveTests.swift` を読み込む。
+
+1. XcodeGen を用意し（`brew install xcodegen`）、repo root から次を実行する。
+
+```bash
+export UNISON_DEVELOPMENT_TEAM='YOUR_APPLE_TEAM_ID'
+export UNISON_HANDOVER_HOST='YOUR_SERVER_HOST'
+export UNISON_HANDOVER_CERT_HEX='YOUR_SERVER_CERT_HEX'
+cd clients/swift/HandoverHost
+xcodegen generate --spec project.json
+open UnisonHandover.xcodeproj
+```
+
+生成された project は Git 管理外。サーバーの pin を更新したら再生成する。
+
+2. `Handover` scheme を選ぶ。iPhone は USB 接続にし、Developer Mode / 信頼 / 署名の設定を済ませる。
    Wi-Fi デバッグ接続自体を切ってしまうことを避ける。Simulator は携帯回線検証に使わない。
-3. Scheme → Edit Scheme → Test → Arguments の環境変数に次を設定する。
+   Mac の「一般 → 共有 → コンテンツキャッシュ → インターネット接続」がオンだと、
+   iPhone は USB 経由で Mac の回線を使う場合がある。`PATH` の `wired=true` はこの
+   検証では除外する。共有の一時停止は利用者と調整し、検証後に元の設定へ戻す。
+   端末の 4G / 5G 表示だけで携帯回線への移行を判定しない。
+3. Scheme → Edit Scheme → Test → Arguments の環境変数を確認する。
+   上記の生成時に次の値が設定される。
 
 | 環境変数 | 値 |
 |---|---|
@@ -68,7 +89,7 @@ loopback のみ pin 省略時に検証を省略できる。リモートでは必
 | `UNISON_HANDOVER_CERT_HEX` | サーバーが表示した pin の `=` より後の文字列 |
 | `UNISON_HANDOVER_SAMPLES` | `120`（2〜300、応答後に1秒待つ） |
 
-4. 実機を destination にし、Test navigator から
+4. ロック解除した実機を destination にし、Test navigator の `HandoverDeviceTests` から
    `HandoverLiveTests.sameConnectionAndChannelSurviveManualSwitch` だけ実行する。
 5. Wi-Fi で応答が数回続いたら、コントロールセンターで Wi-Fi 接続を切り、
    携帯回線に移す。すぐテスト画面に戻し、端末をロックしない。
@@ -82,7 +103,10 @@ loopback のみ pin 省略時に検証を省略できる。リモートでは必
 
 SDK の `connectionEvents` は現在、明示的な disconnect 以外の切断検出に制約があるため、
 このプローブの合否には使わない。要求失敗・ID変更・連番リセット・全体期限切れは失敗。
-全体期限は `samples + 90` 秒で、停止中の要求も接続を閉じて解除する。
+要求ループの期限は `samples + 90` 秒で、期限切れをテスト失敗として記録し、
+チャネルを明示的に閉じて停止中の要求を解除する。接続の group cancellation だけでは
+既存 stream の終了を保証しない。接続・チャネルを開く段階はこの期限の対象外なので、
+そこで停止した場合は Xcode の Stop で終了し、その段階を記録する。
 Quinn 側の idle timeout は60秒、相手との交渉で短くなる場合がある。
 圏外、アプリのバックグラウンド停止、サーバー再起動は別の検証項目とする。
 
@@ -109,6 +133,31 @@ Quinn 側の idle timeout は60秒、相手との交渉で短くなる場合が�
   接続ID・チャネルID・受信連番の維持をクライアントとサーバー両方のログで確認。
   公開 IP 宛ての経路は `en0`。この検証でも回線変更は行っていない。
 
-iPhone の Wi-Fi / 携帯回線切り替えが次の段階。検証後は対象の名前・IDを最終確認し、
+## iPhone 実機の結果（2026-10-22）
+
+iPhone 16 Pro / iOS 27.2、USB デバッグ、端末 VPN オフで実施。
+サーバーは Quinn のまま。ホストアプリの署名・インストール・実機実行を確認した。
+Mac の USB 向けインターネット共有を一時停止し、終了後に元のオンへ戻した。
+
+最終試験 `iphone-handover4` は **PASS**。16:55:19〜17:00:30 JST に300要求を実行し、
+Wi-Fi → 携帯回線 → Wi-Fi をまたいで、両側のログで `seq` / `received` の1〜300と
+次の ID が一貫していることを確認した。再接続・チャネル再作成は行っていない。
+
+- connection: `963d07f4-4b52-4135-aa2e-9999139a528d`
+- channel: `69db2d97-e34b-403c-a0ac-338551e12ea0`
+- サーバーの UDP 受信元: Wi-Fi 側 → 16:55:50 JST に携帯側 → 16:56:17 JST に Wi-Fi 側。
+  `PATH` も `en0` → `pdp_ip0` → `en0`、全期間 `wired=false` を確認。
+- 最大 RTT: 3.574 秒。最大応答間隔: 4.629 秒（通常の1秒待機を含む）。
+  接続継続は確認できたが、無停止・一定遅延を保証する結果ではない。
+- 最終試験では期限切れなし。300要求のテスト終了も成功。
+
+初回の120要求は USB 共有経由だったため、handover の証拠から除外した。
+別の長い試験では期限切れをログ出力するだけで成功扱いになる検証コードの不備が判明した。
+期限切れの失敗記録と明示的なチャネル close を追加し、1 ms の期限を意図的に入れた確認で
+要求が解除され、成功扱いにならないことを確認。通常の期限へ戻して Swift テスト25件
+（live の一部は opt-in のため skip）と、署名付き iOS host build-for-testing が通過した。
+この検証コード修正は SDK の通信実装を変更していない。
+
+検証後は対象の名前・IDを最終確認し、
 専用の VM・ディスク・packet filter と Tailscale 登録を削除して、残存がないことを確認する。
 停止状態で検証用 VM を残さない。

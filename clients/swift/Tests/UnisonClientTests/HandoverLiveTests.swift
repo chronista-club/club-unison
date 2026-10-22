@@ -56,25 +56,28 @@ struct HandoverLiveTests {
         monitor.pathUpdateHandler = { path in
             let wifi = path.usesInterfaceType(.wifi)
             let cellular = path.usesInterfaceType(.cellular)
-            print("PATH time=\(Date().ISO8601Format()) status=\(path.status) wifi=\(wifi) cellular=\(cellular)")
+            let wired = path.usesInterfaceType(.wiredEthernet)
+            let other = path.usesInterfaceType(.other)
+            print("PATH time=\(Date().ISO8601Format()) status=\(path.status) wifi=\(wifi) cellular=\(cellular) wired=\(wired) other=\(other) expensive=\(path.isExpensive) interfaces=\(path.availableInterfaces) description=\(path)")
         }
         monitor.start(queue: DispatchQueue(label: "unison.handover-probe.path"))
         defer { monitor.cancel() }
 
         let conn = try await UnisonClient.connect(to: .host(host, port: port), trust: trust)
-        // SDK requests have no built-in timeout. Closing this connection bounds
-        // a stalled open/request too; cancellation alone cannot unblock them.
-        let deadline = Task {
-            do {
-                try await Task.sleep(for: .seconds(samples + 90))
-                print("DEADLINE: closing stalled probe connection")
-                await conn.disconnect()
-            } catch { /* normal cancellation after the probe finishes */ }
-        }
-        defer { deadline.cancel() }
-
         do {
             let channel = try await conn.openChannel(HandoverMeta())
+            // Group cancellation does not necessarily close existing streams.
+            // Fail the test explicitly and close the channel to reject a pending
+            // request; cancelling its Swift Task alone does not unblock it.
+            let deadline = Task {
+                do {
+                    try await Task.sleep(for: .seconds(samples + 90))
+                    Issue.record("DEADLINE: probe exceeded its request-loop time limit")
+                    await channel.close()
+                    await conn.disconnect()
+                } catch { /* normal cancellation after the probe finishes */ }
+            }
+            defer { deadline.cancel() }
             let clock = ContinuousClock()
             var previousReply = clock.now
             var expectedConnection: String?
