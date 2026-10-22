@@ -87,6 +87,11 @@ reserved channel meta / 定数（`AUTH_CHANNEL_NAME` = `"unison.auth"` / `AUTHEN
 - **JSON codec 既定**: `UnisonRequest: Encodable` / `Response, Event: Decodable`。
   wire payload は TS と同じ既定 JSON codec。
 - **reconnect は caller 責務**（library は auto-reconnect しない、TS と同方針）。
+- **connection migration**: `NWParameters.multipathServiceType = .handover` を既定で
+  設定し、OS に回線変更時の接続継続を依頼する。再接続や QUIC Multipath 拡張の
+  導入ではない。圏外や idle timeout を越えた停止からの復旧は引き続き caller 責務。
+  検証は [Swift handover guide](../guides/swift-handover.md) の同一接続・チャネル
+  ID と連番で判定し、実機で未観測の handover をローカル試験から推定しない。
 - **transport 抽象**: `ChannelStream` / `ChannelTransport` を挟み、channel 状態機械
   （open / request-response / event / identity）を NWProtocolQUIC から分離。in-memory
   paired stream で決定論的にテストし、実 stream は薄い adapter で接続（= TS の
