@@ -1,0 +1,66 @@
+{
+  "name": "UnisonHandover",
+  "options": {
+    "deploymentTarget": { "iOS": "16.0" }
+  },
+  "settings": {
+    "base": {
+      "DEVELOPMENT_TEAM": "${UNISON_DEVELOPMENT_TEAM}",
+      "CODE_SIGN_STYLE": "Automatic",
+      "SWIFT_VERSION": "6.0",
+      "TARGETED_DEVICE_FAMILY": "1",
+      "GENERATE_INFOPLIST_FILE": "YES"
+    }
+  },
+  "packages": {
+    "UnisonClient": { "path": "../../.." }
+  },
+  "targets": {
+    "HandoverHost": {
+      "type": "application",
+      "platform": "iOS",
+      "sources": ["HandoverHostApp.swift"],
+      "settings": {
+        "base": {
+          "PRODUCT_BUNDLE_IDENTIFIER": "club.chronista.unison.handover-host",
+          "INFOPLIST_KEY_CFBundleDisplayName": "Unison Handover",
+          "INFOPLIST_KEY_UILaunchScreen_Generation": "YES",
+          "INFOPLIST_KEY_UIApplicationSceneManifest_Generation": "YES"
+        }
+      }
+    },
+    "HandoverDeviceTests": {
+      "type": "bundle.unit-test",
+      "platform": "iOS",
+      "sources": ["../Tests/UnisonClientTests/HandoverLiveTests.swift"],
+      "dependencies": [
+        { "target": "HandoverHost" },
+        { "package": "UnisonClient", "product": "UnisonClient" }
+      ],
+      "settings": {
+        "base": {
+          "PRODUCT_BUNDLE_IDENTIFIER": "club.chronista.unison.handover-host.tests"
+        }
+      }
+    }
+  },
+  "schemes": {
+    "Handover": {
+      "build": {
+        "targets": { "HandoverHost": "all", "HandoverDeviceTests": ["test"] }
+      },
+      "run": { "config": "Debug" },
+      "test": {
+        "config": "Debug",
+        "targets": [{ "name": "HandoverDeviceTests", "parallelizable": false }],
+        "environmentVariables": {
+          "UNISON_HANDOVER": "1",
+          "UNISON_HANDOVER_HOST": "${UNISON_HANDOVER_HOST}",
+          "UNISON_HANDOVER_PORT": "17878",
+          "UNISON_HANDOVER_CERT_HEX": "${UNISON_HANDOVER_CERT_HEX}",
+          "UNISON_HANDOVER_SAMPLES": "120"
+        }
+      }
+    }
+  }
+}

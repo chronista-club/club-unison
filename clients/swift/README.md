@@ -90,6 +90,12 @@ connect(ALPN "unison")→ openChannel → request → response decode が **Appl
 
 ## 開発
 
+### 回線切り替えの実機確認
+
+QUIC の connection migration を `.handover` で opt-in する。Quinn サーバーとの
+同じ接続・同じチャネルが Wi-Fi / 携帯回線をまたいで続くかは実機確認が必要。
+[プローブと手順](../../guides/swift-handover.md) を参照。
+
 ```bash
 # repo root で (Package.swift は root、source は clients/swift/ 配下)
 swift build
