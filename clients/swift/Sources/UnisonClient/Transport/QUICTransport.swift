@@ -31,6 +31,9 @@ actor QUICTransport: ChannelTransport {
         let quic = NWProtocolQUIC.Options(alpn: [alpn])
         applyTrust(trust, to: quic.securityProtocolOptions)
         let params = NWParameters(quic: quic)
+        // Opt in to QUIC connection migration (e.g. Wi-Fi → cellular).
+        // This preserves the session when possible; it does not reconnect it.
+        params.multipathServiceType = .handover
 
         let multiplex = NWMultiplexGroup(to: nwEndpoint)
         let group = NWConnectionGroup(with: multiplex, using: params)
