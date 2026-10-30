@@ -51,7 +51,7 @@ sha2 = "0.11"
 
 # Packet module dependencies
 bytes = "1.11"
-zstd = "0.13"
+zstd = "0.14.3"
 
 # CLI
 clap = { version = "4.6", features = ["derive", "cargo", "color"] }
