@@ -16,7 +16,7 @@
 
 import { fromJson } from "@bufbuild/protobuf";
 import { StructSchema } from "@bufbuild/protobuf/wkt";
-import { bench, describe } from "vitest";
+import { bench, group, run } from "mitata";
 import { JsonCodec } from "../src/codec/json_codec.js";
 import { ProtoCodec } from "../src/codec/proto_codec.js";
 
@@ -66,26 +66,28 @@ const smallProtoBytes = protoCodec.encode(smallStruct);
 const mediumProtoBytes = protoCodec.encode(mediumStruct);
 const largeProtoBytes = protoCodec.encode(largeStruct);
 
-describe("JsonCodec.encode", () => {
+group("JsonCodec.encode", () => {
   bench("small", () => void jsonCodec.encode(small));
   bench("medium", () => void jsonCodec.encode(medium));
   bench("large", () => void jsonCodec.encode(large));
 });
 
-describe("JsonCodec.decode", () => {
+group("JsonCodec.decode", () => {
   bench("small", () => void jsonCodec.decode(smallJsonBytes));
   bench("medium", () => void jsonCodec.decode(mediumJsonBytes));
   bench("large", () => void jsonCodec.decode(largeJsonBytes));
 });
 
-describe("ProtoCodec.encode", () => {
+group("ProtoCodec.encode", () => {
   bench("small", () => void protoCodec.encode(smallStruct));
   bench("medium", () => void protoCodec.encode(mediumStruct));
   bench("large", () => void protoCodec.encode(largeStruct));
 });
 
-describe("ProtoCodec.decode", () => {
+group("ProtoCodec.decode", () => {
   bench("small", () => void protoCodec.decode(smallProtoBytes));
   bench("medium", () => void protoCodec.decode(mediumProtoBytes));
   bench("large", () => void protoCodec.decode(largeProtoBytes));
 });
+
+await run();

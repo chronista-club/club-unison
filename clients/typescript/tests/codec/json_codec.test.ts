@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { CodecError } from "../../src/codec/codec.js";
 import { JsonCodec } from "../../src/codec/json_codec.js";
 

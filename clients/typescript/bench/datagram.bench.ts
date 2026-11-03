@@ -10,7 +10,7 @@
  * varint decode + Map lookup + subarray の純粋な demux コストを測る。
  */
 
-import { bench, describe } from "vitest";
+import { bench, group, run } from "mitata";
 import { type DatagramSink, DispatcherInner } from "../src/channel/dispatcher.js";
 import { decodeVarint, encodeVarint } from "../src/channel/varint.js";
 
@@ -20,12 +20,12 @@ const multiByteValue = 300_000; // → 3 byte
 const oneByteBytes = encodeVarint(oneByteValue);
 const multiByteBytes = encodeVarint(multiByteValue);
 
-describe("varint encode", () => {
+group("varint encode", () => {
   bench("1-byte value (< 128)", () => void encodeVarint(oneByteValue));
   bench("3-byte value", () => void encodeVarint(multiByteValue));
 });
 
-describe("varint decode", () => {
+group("varint decode", () => {
   bench("1-byte value", () => void decodeVarint(oneByteBytes));
   bench("3-byte value", () => void decodeVarint(multiByteBytes));
 });
@@ -63,8 +63,10 @@ for (let i = 0; i < DATAGRAMS; i++) {
 
 const { inner } = buildDispatcher();
 
-describe("dispatcher demux + fan-out", () => {
+group("dispatcher demux + fan-out", () => {
   bench(`${DATAGRAMS} datagrams across ${CHANNELS} channels`, () => {
     for (const dg of datagrams) inner.dispatch(dg);
   });
 });
+
+await run();

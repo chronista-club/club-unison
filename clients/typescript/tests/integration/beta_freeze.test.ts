@@ -7,7 +7,7 @@
  *   accept しなければ reject する
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { connect } from "../../src/client.js";
 import { DatagramChannelImpl } from "../../src/channel/datagram_channel.js";
 import { DatagramDispatcher } from "../../src/channel/dispatcher.js";
@@ -25,6 +25,7 @@ import {
   MockTransport,
   StreamServerStub,
 } from "../../src/testing/index.js";
+import { waitFor } from "../wait_for.js";
 
 // --- 生成 meta の代用 (= codegen 出力相当、 `__types` phantom carrier 込み) ---
 
@@ -164,7 +165,7 @@ describe("Blocker 3: openChannel real accept signal (open_ack)", () => {
     ]);
     expect(channel.name).toBe("control");
     // server stub は `__channel:control` open probe を観測しているはず
-    await vi.waitFor(() => expect(stub.openedChannel).toBe("control"));
+    await waitFor(() => expect(stub.openedChannel).toBe("control"));
 
     await channel.close();
     await stub.close();

@@ -123,21 +123,22 @@ clients/typescript/
 │   ├── error/             ← ErrorCategory framework
 │   └── testing/           ← /testing subpath (MockTransport + StreamServerStub)
 ├── examples/              ← vp-dashboard.ts (Vantage Point proof point demo)
-├── tests/                 ← vitest unit + integration tests (incl. real WebTransport E2E)
+├── tests/                 ← bun test unit + integration tests (incl. real WebTransport E2E)
+├── bench/                 ← mitata benchmarks + run records (KDL)
 ├── package.json
 ├── tsconfig.json
-├── vite.config.ts
-└── vitest.config.ts
+└── vite.config.ts         ← library build only
 ```
 
 ## Building from source
 
 ```bash
 cd clients/typescript
-npm install            # install dev deps (typescript / vite / vitest)
-npm run build          # vite build → dist/index.js + tsc → dist/index.d.ts
-npm test               # vitest run
-npm run typecheck      # tsc --noEmit (= type safety verification)
+bun install            # install dev deps (Bun version: `packageManager` in package.json)
+bun run build          # vite build → dist/index.js + tsc → dist/index.d.ts
+bun test               # unit + integration (incl. WebTransport E2E against the Rust echo server)
+bun run typecheck      # tsc --noEmit (= type safety verification)
+bun run bench          # mitata benchmarks
 ```
 
 ## Versioning policy

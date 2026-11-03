@@ -5,7 +5,7 @@
  * array / 各種 scalar が無損失で往復することを E2E で検証する。
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { UnisonChannelImpl } from "../../src/channel/unison_channel.js";
 import type { ChannelMeta, ChannelPayload } from "../../src/channel/types.js";
 import { JsonCodec } from "../../src/codec/json_codec.js";

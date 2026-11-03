@@ -8,7 +8,7 @@
  * 設計: `design/connection-auth.md` §5.8。
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { UnisonClient } from "../../src/client.js";
 import {
   AUTHENTICATE_METHOD,

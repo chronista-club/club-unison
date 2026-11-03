@@ -10,7 +10,7 @@
  * - PART A: ideal caller code (= dashboard dev が WANT to write するコード)
  * - PART B: mock server harness (= 実 unison server の代役、 demo を self-contained に)
  *
- * 実行: `npm run example`
+ * 実行: `bun run example`
  */
 
 import { connect, type ChannelMeta, type DatagramChannelMeta } from "../src/index.js";

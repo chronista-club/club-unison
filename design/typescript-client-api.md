@@ -335,7 +335,6 @@ Phase 2 では「connection-level codec 一律」 のみ実装、 channel 別 co
 - ESM-first、 modern browser target に natural
 - Dev server が高速 (= esbuild base)
 - production build (= rollup base) で tree-shake 優秀
-- vitest と integration、 test 環境 unified
 
 ### 6.2 Bundle size target
 
@@ -451,7 +450,7 @@ design doc が確定したら Phase 2b/c/d/e の具体的 deliverable:
 - `src/codec/proto_codec.ts` — ProtoCodec (= @bufbuild/protobuf wrapping)
 
 ### Phase 2e: Tests + bundle
-- `tests/unit/` — vitest unit tests
+- `tests/` — `bun test` の unit tests（channel / codec / error / transport / wire）
 - `tests/integration/` — Phase 7 で本格化
 - vite production build
 - bundle size CI check

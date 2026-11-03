@@ -1,6 +1,6 @@
 import { create } from "@bufbuild/protobuf";
 import { StringValueSchema } from "@bufbuild/protobuf/wkt";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { CodecError } from "../../src/codec/codec.js";
 import { ProtoCodec } from "../../src/codec/proto_codec.js";
 

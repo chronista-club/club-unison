@@ -6,7 +6,7 @@
  * buffa との byte 一致の要。
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import {
   decodePacketHeader,
   encodePacketHeader,

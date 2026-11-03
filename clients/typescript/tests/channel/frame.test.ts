@@ -5,7 +5,7 @@
  * `readFrames` の chunk 再結合を検証する。
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import {
   FRAME_TYPE_PROTOCOL,
   FRAME_TYPE_RAW,

@@ -7,7 +7,7 @@
     // tests/ ・ bench/ は src/ 外。 rootDir を project root へ広げて取り込む
     // (= noEmit なので出力レイアウトには影響しない)。
     "rootDir": ".",
-    "types": ["node", "vitest/globals"]
+    "types": ["bun"]
   },
   "include": ["src/**/*", "tests/**/*", "bench/**/*", "examples/**/*"]
 }

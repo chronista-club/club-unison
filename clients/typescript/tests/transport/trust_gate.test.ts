@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { enforceTrustGate } from "../../src/transport/web_transport.js";
 
 const HASH_TRUST = {

@@ -5,7 +5,7 @@
  * channel が連鎖して終端することを検証する。
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { UnisonChannelImpl } from "../../src/channel/unison_channel.js";
 import { DatagramChannelImpl } from "../../src/channel/datagram_channel.js";
 import { DatagramDispatcher } from "../../src/channel/dispatcher.js";

@@ -4,7 +4,7 @@
 
 > **構造化ログ**: 数値データは KDL で `bench/runs/<version>.kdl` に immutable 記録。
 > `bench/index.kdl` が append-only の run インデックス。 `bench/viewer.html` を
-> 静的サーバ経由で開くと run 横断の比較表（`cd clients/typescript/bench && npx serve`）。
+> 静的サーバ経由で開くと run 横断の比較表（`cd clients/typescript/bench && bunx serve`）。
 > 本 md は alpha.2 baseline の詳細分析（= 人間向け companion）。
 
 > **計測履歴**（実 run、 SSOT は `bench/runs/*.kdl`）:
@@ -48,7 +48,11 @@ mock transport 上の 87k hz = 約 11.5μs/op は実 WebTransport では QUIC RT
 | ランナー | vitest 3 `bench`（warmup 有効、cold-start ノイズ除外） |
 | 対象 | `@chronista-club/unison-client` v1.0.0-alpha.2 |
 
-実行: `npm run bench`（= `vitest bench`）。`hz` = ops/sec（高いほど速い）、`rme` = 相対平均誤差。
+実行（この run 当時）: `npm run bench`（= `vitest bench`）。`hz` = ops/sec（高いほど速い）、`rme` = 相対平均誤差。
+
+> 2026-11-04 以降の実行は `bun run bench`（= Bun 上の mitata）。mitata は 1 回あたりの時間
+> （`avg` / `p75` / `p99`）を出すので、上の `hz` とは逆数の関係になる。ランタイムも
+> Node から Bun に変わったため、過去 run と数値を直接比べない。
 
 > **正直な計測方針**: チェリーピックも数字の盛りもしない。下記は実出力そのまま。
 > run-to-run の振れも観測しており（後述）、絶対値は ±数% の幅で読むこと。

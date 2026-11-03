@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { AsyncQueue } from "../../src/channel/async_queue.js";
 
 describe("AsyncQueue", () => {

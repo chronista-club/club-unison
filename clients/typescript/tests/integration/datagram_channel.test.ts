@@ -5,7 +5,7 @@
  * 複数 channel への fan-out を実 transport なしで検証する。
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { DatagramChannelImpl } from "../../src/channel/datagram_channel.js";
 import { DatagramDispatcher } from "../../src/channel/dispatcher.js";
 import type { DatagramChannelMeta } from "../../src/channel/types.js";

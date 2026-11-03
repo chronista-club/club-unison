@@ -5,12 +5,13 @@
  * 実 transport なしで検証する。
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { UnisonChannelImpl } from "../../src/channel/unison_channel.js";
 import type { ChannelMeta } from "../../src/channel/types.js";
 import { JsonCodec } from "../../src/codec/json_codec.js";
 import type { ChannelPayload } from "../../src/channel/types.js";
 import { MockConnection, StreamServerStub } from "../../src/testing/index.js";
+import { waitFor } from "../wait_for.js";
 
 const ControlMeta = {
   name: "control",
@@ -84,7 +85,7 @@ describe("UnisonChannel E2E over mock connection", () => {
     const { channel, stub } = await openChannelPair();
     await channel.sendEvent("Notice", { msg: "hello-server" });
     // server stub の recv loop が処理するまで待つ
-    await vi.waitFor(() => expect(stub.receivedEvents).toHaveLength(1));
+    await waitFor(() => expect(stub.receivedEvents).toHaveLength(1));
     expect(stub.receivedEvents[0]).toEqual({
       method: "Notice",
       payload: { msg: "hello-server" },

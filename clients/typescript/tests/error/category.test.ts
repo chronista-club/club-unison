@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { ERROR_CATEGORIES, type ErrorCategory } from "../../src/error/category.js";
 
 describe("ErrorCategory", () => {
