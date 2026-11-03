@@ -41,8 +41,9 @@ pub struct ConnectionContext {
     /// 認証済み client principal（未認証なら None）。
     ///
     /// `unison.auth` handler が verifier の結果を [`set_principal`](Self::set_principal) で
-    /// 立て、 worlds/wire/datagram 等 **同一 connection の全 channel handler** が
-    /// [`principal`](Self::principal) で読んで authZ gate に使う。
+    /// 立て、 worlds/wire 等 **同一 connection の stream channel handler** が
+    /// [`principal`](Self::principal) で読んで authZ gate に使う (datagram channel
+    /// handler は ctx を受け取らない。 design/connection-auth.md §7)。
     principal: Arc<RwLock<Option<Principal>>>,
     /// server 起点で stream を開くための connection（server 側のみ set される）。
     ///

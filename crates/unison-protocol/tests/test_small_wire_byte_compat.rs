@@ -12,7 +12,7 @@
 //! かった。 意図的に wire を変えたときだけ明示的に再生成する:
 //!
 //! ```sh
-//! UPDATE_WIRE_FIXTURES=1 cargo test -p club-unison --test test_wire_byte_compat
+//! UPDATE_WIRE_FIXTURES=1 cargo test -p club-unison --test test_small_wire_byte_compat
 //! ```
 //!
 //! 再生成した差分は commit に含めること (= wire 変更のレビュー可能な証跡になる)。
@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use unison::network::{MessageType, ProtocolMessage};
 use unison::packet::{PacketType, UnisonPacket, UnisonPacketHeader};
 
-/// FRAME_TYPE_PROTOCOL tag (= quic.rs と同値、 公開されていないのでローカル定義)
+/// FRAME_TYPE_PROTOCOL tag (= network/frame.rs と同値、 公開されていないのでローカル定義)
 const FRAME_TYPE_PROTOCOL: u8 = 0x00;
 
 /// 決定的な header を持つ `UnisonPacket` を組む (= timestamp 0 固定)。

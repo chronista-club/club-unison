@@ -5,7 +5,7 @@
 //! [`SchemaRegistry`] を build し、 以降の `open_channel` / `DynamicChannel::request`
 //! が registry に対して payload validation を実行する。
 //!
-//! 設計: `spec/04-discovery/SPEC.md` §8 (= Client 側 TypeRegistry 構築)、
+//! 設計: `spec/04-discovery/SPEC.md` §8 (= Client 側 SchemaRegistry 構築)、
 //!       Unison Hailing α Epic P2-Rust。
 //!
 //! # 典型使用 (client 側)
@@ -67,7 +67,9 @@ impl DynamicProtocol {
     /// `ProtocolDocument` を fetch し、 `SchemaRegistry` を build して返す。
     ///
     /// # Errors
-    /// - discovery channel が server で有効化されていない → `NetworkError::HandlerNotFound`
+    /// - discovery channel が server で有効化されていない →
+    ///   `DynamicError::Network(NetworkError::Protocol(..))` (= `unison.discovery` の open が
+    ///   nack される)
     /// - KDL が parse できない → `DynamicError::Registry`
     /// - 通信失敗 → `DynamicError::Network`
     pub async fn fetch(client: Arc<ProtocolClient>) -> Result<Self, DynamicError> {
