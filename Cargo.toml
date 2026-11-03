@@ -26,7 +26,6 @@ tokio = { version = "1.52", features = ["full"] }
 # QUIC support
 quinn = "0.11"
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
-rustls-pemfile = "2.2"
 # x509-parser feature: MeshCa::from_pem が CA cert PEM から Issuer を
 # 復元する (Issuer::from_ca_cert_pem) のに必要。
 rcgen = { version = "0.14", features = ["x509-parser"] }
