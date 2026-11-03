@@ -17,7 +17,8 @@
 use buffa::Message;
 use bytes::{BufMut, Bytes, BytesMut};
 use thiserror::Error;
-use zstd::stream::{decode_all, encode_all};
+use zstd::bulk::decompress;
+use zstd::stream::encode_all;
 
 use super::{config::PacketConfig, flags::PacketFlags, header::UnisonPacketHeader};
 use crate::proto;
@@ -170,9 +171,9 @@ impl PacketDeserializer {
     /// パケット全体をパースし、 ヘッダーと (必要なら解凍済みの) payload を返す
     /// （カスタム設定）
     ///
-    /// 圧縮 payload の解凍時には、解凍後サイズを `config.max_payload_size` で
-    /// 上限チェックする。 これにより小さな圧縮フレームが GB 級に膨張する
-    /// zstd decompression bomb を防ぐ。
+    /// 圧縮 payload は、 header が申告する解凍後サイズ (`config.max_payload_size`
+    /// 以下) の出力バッファにだけ解凍し、 超えた時点で打ち切る。 これにより
+    /// 小さな圧縮フレームが GB 級に膨張する zstd decompression bomb を防ぐ。
     pub fn parse_with_config(
         bytes: &[u8],
         config: &PacketConfig,
@@ -212,18 +213,12 @@ impl PacketDeserializer {
                 });
             }
 
-            let decompressed = decode_all(payload_bytes)
+            // zstd decompression bomb 対策: 出力を申告サイズで打ち切る。 全量を
+            // 展開してから測ると、 検査の前に任意量のメモリを確保させられる。
+            let decompressed = decompress(payload_bytes, claimed)
                 .map_err(|e| SerializationError::DecompressionFailed(e.to_string()))?;
 
-            // zstd decompression bomb 対策: 解凍後の実サイズを上限チェック。
-            if decompressed.len() > config.max_payload_size {
-                return Err(SerializationError::PacketTooLarge {
-                    size: decompressed.len(),
-                    max_size: config.max_payload_size,
-                });
-            }
-
-            // header が主張する非圧縮サイズと実サイズの一致を検証。
+            // 申告より短く終わった場合を弾く。
             if decompressed.len() != claimed {
                 return Err(SerializationError::DecompressedSizeMismatch {
                     claimed,
@@ -253,6 +248,7 @@ mod tests {
     use super::*;
     use crate::packet::PacketType;
     use crate::packet::config::{CompressionConfig, PacketConfig};
+    use std::io::Read;
 
     #[test]
     fn deserialize_uncompressed_payload_bounded_by_max() {
@@ -273,6 +269,57 @@ mod tests {
         assert!(
             matches!(err, SerializationError::PacketTooLarge { .. }),
             "非圧縮 payload も max_payload_size で bound されるべき: {err:?}"
+        );
+    }
+
+    /// header を手で組み、 任意の申告サイズと圧縮 payload を持つ packet を作る
+    fn crafted_compressed_packet(claimed: u32, compressed: &[u8]) -> Vec<u8> {
+        let mut header = UnisonPacketHeader::new(PacketType::Data);
+        header.payload_length = claimed;
+        header.compressed_length = compressed.len() as u32;
+        let mut flags = header.flags();
+        flags.set(PacketFlags::COMPRESSED);
+        header.set_flags(flags);
+        let header_bytes = header.to_proto().encode_to_vec();
+
+        let mut packet = Vec::new();
+        packet.extend_from_slice(&(header_bytes.len() as u32).to_be_bytes());
+        packet.extend_from_slice(&header_bytes);
+        packet.extend_from_slice(compressed);
+        packet
+    }
+
+    #[test]
+    fn deserialize_stops_decompressing_at_claimed_size() {
+        // 64MB の 0 は数 KB に縮む。 header は 16 byte と申告する (= decompression bomb)
+        let expanded = 64 * 1024 * 1024;
+        let bomb = encode_all(std::io::repeat(0).take(expanded), 3).unwrap();
+        let packet = crafted_compressed_packet(16, &bomb);
+
+        let err = PacketDeserializer::parse(&packet).unwrap_err();
+        // 申告の 16 byte を超えた時点で解凍を打ち切るべき。 全量を展開してから
+        // 検査すると、 小さなフレームひとつで任意量のメモリを確保させられる
+        assert!(
+            matches!(err, SerializationError::DecompressionFailed(_)),
+            "申告サイズを超えた時点で解凍を止めるべき: {err:?}"
+        );
+    }
+
+    #[test]
+    fn deserialize_rejects_decompressed_shorter_than_claimed() {
+        let compressed = encode_all(&[7u8; 100][..], 3).unwrap();
+        let packet = crafted_compressed_packet(200, &compressed);
+
+        let err = PacketDeserializer::parse(&packet).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SerializationError::DecompressedSizeMismatch {
+                    claimed: 200,
+                    actual: 100
+                }
+            ),
+            "申告より短い解凍結果は弾くべき: {err:?}"
         );
     }
 

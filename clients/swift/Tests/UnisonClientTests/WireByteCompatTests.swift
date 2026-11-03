@@ -194,4 +194,27 @@ struct PacketZstdTests {
 
         #expect(throws: UnisonError.self) { _ = try Packet.decode(packet) }
     }
+
+    /// 展開後サイズの申告が上限 (= Rust `PacketConfig` 既定の 16MB) を超える packet は、
+    /// 申告どおりのバッファを確保する前に落ちる。 申告は peer が自由に書ける u32 なので、
+    /// 検査しないと小さなフレームひとつで最大 4GB を確保させられる
+    @Test func rejectsClaimedSizeOverLimitBeforeAllocating() throws {
+        var header = Protocol_PacketHeader()
+        header.version = 1
+        header.payloadLength = UInt32(16 * 1024 * 1024 + 1)
+        header.compressedLength = 4
+        header.flags = 0x0001
+        let headerBytes = try header.serializedData()
+        var packet = Data()
+        packet.appendBigEndian(UInt32(headerBytes.count))
+        packet.append(headerBytes)
+        packet.append(Data([1, 2, 3, 4]))
+
+        do {
+            _ = try Packet.decode(packet)
+            Issue.record("上限超過の申告が通った")
+        } catch UnisonError.codec(let message) {
+            #expect(message.contains("上限"), "上限検査で落ちるべき: \(message)")
+        }
+    }
 }
