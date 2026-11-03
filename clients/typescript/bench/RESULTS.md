@@ -48,7 +48,7 @@ mock transport 上の 87k hz = 約 11.5μs/op は実 WebTransport では QUIC RT
 | ランナー | vitest 3 `bench`（warmup 有効、cold-start ノイズ除外） |
 | 対象 | `@chronista-club/unison-client` v1.0.0-alpha.2 |
 
-実行: `npm run bench`（= `vitest bench`）。`hz` = ops/sec（高いほど速い）、`rme` = 相対平均誤差。
+実行（この run 当時）: `npm run bench`（= vitest 3 の `vitest bench`）。`hz` = ops/sec（高いほど速い）、`rme` = 相対平均誤差。
 
 > **正直な計測方針**: チェリーピックも数字の盛りもしない。下記は実出力そのまま。
 > run-to-run の振れも観測しており（後述）、絶対値は ±数% の幅で読むこと。
