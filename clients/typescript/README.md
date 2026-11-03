@@ -134,7 +134,7 @@ clients/typescript/
 
 ```bash
 cd clients/typescript
-npm install            # install dev deps (typescript / vite / vitest)
+npm install            # install dev deps (typescript / vite / vitest) — Node 26+
 npm run build          # vite build → dist/index.js + tsc → dist/index.d.ts
 npm test               # vitest run
 npm run typecheck      # tsc --noEmit (= type safety verification)
