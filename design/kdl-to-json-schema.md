@@ -26,8 +26,8 @@ KDL は Unison の SSOT として channel/request/event の型を語る。 こ�
 | `Object` | `{"type": "object"}` | JSON object (= properties 不問) |
 | `Array(inner)` | `{"type": "array", "items": <inner>}` | 要素型を再帰的に展開 |
 | `Map(K, V)` | `{"type": "object", "additionalProperties": <V>}` | JSON Schema の慣用 (= dynamic key の object)。 K は基本的に string で固定 |
-| `Custom(name)` | `{}` (= empty) | **passthrough** in v0.1.0。 typedef 解決は将来 |
-| `Enum(name)` | `{}` (= empty) | **passthrough** in v0.1.0。 enum 値展開は将来 |
+| `Custom(name)` | `{}` (= empty) | **passthrough** in v0.1.0。 typedef 解決は将来。 KDL で enum 名を `type=` に書いた場合もここに来る |
+| `Enum(Vec<String>)` | `{}` (= empty) | **passthrough** in v0.1.0。 enum 値展開は将来。 parser (`parse_field_type`) はこの variant を作らない (= enum 名は `Custom(name)` になる) |
 
 ### Lossy 部分 (= v0.1.0 では fully captured されない)
 
@@ -53,6 +53,8 @@ KDL は Unison の SSOT として channel/request/event の型を語る。 こ�
   "additionalProperties": true
 }
 ```
+
+`required` は required field が 1 つ以上あるときだけ出る (= 0 個なら key ごと省く)。
 
 ### Field-level 修飾
 
@@ -143,7 +145,7 @@ client.messages.create(
 | 制約 (`min`/`max`/`pattern`) の schema 出力 | constraint Epic で SchemaRegistry validation と同時に追加 |
 | `additionalProperties: false` の strict mode | strict-validation opt-in (= 別 channel attribute or call site flag) |
 | KDL `description` の channel/request level 集約 | tool description の自動充実 |
-| KDL に MCP hint 属性 (`readonly` / `destructive` / `idempotent`) → `ToolAnnotations` 合成 | 未着手 (= P3 watch、 spec/ 提案候補) |
+| ~~KDL に MCP hint 属性 (`readonly` / `destructive` / `idempotent`) → `ToolAnnotations` 合成~~ → **済**: request の hint を `mapping.rs::synthesize_tool` が `ToolAnnotations` に写す (未宣言の hint は set しない。 全 synthesized tool に `openWorldHint: true`) | 1.8.0 |
 
 > `returns` → `Tool.output_schema` は **1.7.0 で実装済み** (= 本表から昇格)。
 
@@ -156,7 +158,7 @@ client.messages.create(
 | Returns → output_schema 合成 | `mapping.rs` 内 `synthesize_tool_with_returns_produces_output_schema` ほか | returns 有→schema 宣言 / 無→非宣言 |
 | Untrusted KDL 防御 | `mapping.rs` 内 `fields_to_object_schema_{skips_hostile_field_names,sanitizes_field_description,caps_field_count}` | hostile field 名 skip / desc sanitize / field 数 cap |
 | Anthropic compat | `mapping.rs` 内 `input_schema_is_anthropic_compatible` | top-level type=object + JSON serializable |
-| E2E synthesis | `crates/unison-mcp/tests/test_integ_synthesis.rs` | discovery server → UnisonMcp → list_tools / invoke_tool / live refresh |
+| E2E synthesis | `crates/unison-mcp/tests/test_medium_synthesis.rs` (`#[ignore]`、 `-- --ignored` で実行) | discovery server → UnisonMcp → list_tools / invoke_tool / live refresh |
 
 ## 7. 参照
 

@@ -71,7 +71,8 @@ sequenceDiagram
 ## サーバーを書く
 
 ```rust
-use unison::{ProtocolServer, NetworkError};
+use std::sync::Arc;
+use unison::ProtocolServer;
 use unison::network::UnisonChannel;
 use serde_json::json;
 
@@ -87,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         loop {
             match channel.recv().await {
                 Ok(msg) => {
-                    channel.send_response(msg.id, &msg.method, json!({"id": "1"})).await?;
+                    channel.send_response(msg.id, &msg.method, &json!({"id": "1"})).await?;
                 }
                 Err(_) => break,
             }
@@ -96,10 +97,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }).await;
 
     // バックグラウンドで起動（グレースフルシャットダウン対応）
-    let handle = server.spawn_listen("[::1]:8080").await?;
+    let handle = Arc::new(server).listener("[::1]:8080").spawn().await?;
     println!("サーバー起動: {}", handle.local_addr());
 
-    // handle.shutdown().await? で停止
+    // Ctrl-C まで待ってからグレースフルに停止
+    tokio::signal::ctrl_c().await?;
+    handle.shutdown().await?;
     Ok(())
 }
 ```
@@ -112,22 +115,19 @@ use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = ProtocolClient::new_default()?;
+    // dev 用: サーバー証明書を検証しない（接続先は loopback に限る）
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect("[::1]:8080").await?;
 
     // チャネルを開いて Request/Response
     let users = client.open_channel("users").await?;
-    let response = users.request("CreateUser", json!({
+    let response: serde_json::Value = users.request("CreateUser", &json!({
         "name": "Alice",
         "email": "alice@example.com"
     })).await?;
     println!("作成されたユーザー: {}", response);
 
-    // イベント受信
-    let events = client.open_channel("events").await?;
-    while let Ok(event) = events.recv().await {
-        println!("イベント: {:?}", event);
-    }
+    users.close().await?;
 
     Ok(())
 }
@@ -154,11 +154,11 @@ Client                              Server
 
 ```rust
 // Request/Response
-let res = channel.request("CreateUser", payload).await?;
-channel.send_response(id, method, payload).await?;
+let res: serde_json::Value = channel.request("CreateUser", &payload).await?;
+channel.send_response(id, method, &payload).await?;
 
 // Event push（一方向）
-channel.send_event("UserCreated", payload).await?;
+channel.send_event("UserCreated", &payload).await?;
 
 // Raw bytes（buffa/zstd をバイパス、オーディオ等に）
 channel.send_raw(&pcm_data).await?;
@@ -172,14 +172,16 @@ let data = channel.recv_raw().await?;
 ## 接続イベント
 
 ```rust
+use unison::ConnectionEvent;
+
 let mut events = server.subscribe_connection_events();
 tokio::spawn(async move {
     while let Ok(event) = events.recv().await {
         match event {
-            ConnectionEvent::Connected { remote_addr, context } => {
+            ConnectionEvent::Connected { remote_addr, .. } => {
                 println!("接続: {}", remote_addr);
             }
-            ConnectionEvent::Disconnected { remote_addr } => {
+            ConnectionEvent::Disconnected { remote_addr, .. } => {
                 println!("切断: {}", remote_addr);
             }
         }
@@ -217,7 +219,7 @@ protocol "my-service" version="1.0.0" {
 |---------|------|
 | [`unison-protocol`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-protocol) | コアライブラリ。crates.io では `club-unison` として公開、Rust crate identifier は `unison`。KDL スキーマ、QUIC、チャネル、パケット |
 | [`unison-mcp`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-mcp) | MCP bridge（`unison-mcp` バイナリ）。サーバーの KDL を実行時に discovery し、`request` ごとに MCP tool を合成して AI agent から呼べるようにする |
-| [`unison-cli`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-cli) | 開発者向け CLI（`unison` バイナリ）: `ping` / `call` / `sniff` / `mock`（KDL から stub server）/ `schema lint` |
+| [`unison-cli`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-cli) | 開発者向け CLI（`unison` バイナリ）: `ping` / `call` / `sniff` / `mock`（KDL から stub server）/ `schema-lint` / `schema-diff` / `schema-check` |
 
 ---
 

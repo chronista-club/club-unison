@@ -5,11 +5,11 @@
 本ドキュメントでは、Unison ProtocolにおけるQUIC Runtime統合の設計を記述する。QUICトランスポート層は以下の要素で構成される:
 
 - **ALPN**: raw QUIC は ALPN `"unison"` を negotiate（`network::UNISON_ALPN`）
-- **ConnectionContext**: 接続ごとの状態管理（identity、チャネル追跡）
+- **ConnectionContext**: 接続ごとの状態管理（identity、チャネル追跡、認証済み principal、server 起点 stream 用の connection）
 - **Identity Handshake**: 接続直後のサーバー自己紹介プロトコル
 - **チャネルルーティング**: `__channel:` プレフィックスによるチャネル多重化
-- **Length-Prefixed Framing**: 4バイトBE長プレフィックスによるフレーム境界
-- **UnisonChannel**: 統合チャネル型（request/response + event push）
+- **Typed Framing**: `[u32 BE len][u8 type tag][payload]` によるフレーム境界
+- **UnisonChannel**: 統合チャネル型（request/response + event push + raw bytes）
 
 ### ALPN（v1.3.0+）
 
@@ -31,27 +31,27 @@ QUIC は仕様（RFC 9001 §8.1）で ALPN を必須とする。raw QUIC の ser
 >
 > WebTransport 経路は HTTP/3 上のため ALPN は `"h3"` 固定（`wtransport` 依存が内部
 > 設定）で、本 const は適用されない（別 ingress）。回帰テスト:
-> `crates/unison-protocol/tests/test_alpn_enforcement.rs`。
+> `crates/unison-protocol/tests/test_medium_alpn_enforcement.rs`。
 
 全体のアーキテクチャ層における位置付け:
 
 ```
 Application Layer
     |
-Service Layer   --- UnisonChannel (統合チャネル: request/response + event)
+Service Layer   --- UnisonChannel (統合チャネル: request/response + event + raw)
     |
-Protocol Layer  --- ProtocolMessage / ProtocolFrame
+Protocol Layer  --- ProtocolMessage / UnisonPacket
     |
-Transport Layer --- UnisonStream / read_frame / write_frame
+Transport Layer --- UnisonStream / read_typed_frame / write_typed_frame
     |
-Network Layer   --- quinn::Connection (QUIC/TLS 1.3)
+Network Layer   --- UnisonConn (quinn / wtransport、QUIC/TLS 1.3)
 ```
 
 ## 2. ConnectionContext
 
 **ファイル**: `crates/unison-protocol/src/network/context.rs`
 
-ConnectionContextは、QUIC接続ごとの状態を管理する構造体である。各接続に対して一意のUUID、Identity情報、アクティブチャネルの追跡を提供する。
+ConnectionContextは、QUIC接続ごとの状態を管理する構造体である。各接続に対して一意のUUID、Identity情報、アクティブチャネルの追跡、認証済み principal、server 起点 stream 用の connection を提供する。
 
 ### 構造体定義
 
@@ -63,6 +63,10 @@ pub struct ConnectionContext {
     identity: Arc<RwLock<Option<ServerIdentity>>>,
     /// アクティブなチャネルのマップ（チャネル名 -> ハンドル）
     channels: Arc<RwLock<HashMap<String, ChannelHandle>>>,
+    /// 認証済み client principal（未認証なら None、design/connection-auth.md）
+    principal: Arc<RwLock<Option<Principal>>>,
+    /// server 起点で stream を開くための connection（server 側のみ set、design/server-initiated-stream.md）
+    conn: Arc<RwLock<Option<Arc<dyn UnisonConn>>>>,
 }
 
 pub struct ChannelHandle {
@@ -71,9 +75,10 @@ pub struct ChannelHandle {
     pub direction: ChannelDirection,
 }
 
+// network/identity.rs
 pub enum ChannelDirection {
-    Send,
-    Receive,
+    ServerToClient,
+    ClientToServer,
     Bidirectional,
 }
 ```
@@ -95,6 +100,7 @@ stateDiagram-v2
 
 - **Arc\<RwLock\<\>\> による並行保護**: 1つのQUIC接続に対して複数のストリームハンドラが並行動作するため、identity と channels を個別にロック管理する。これにより、チャネル登録がidentity参照をブロックしない。
 - **UUID による接続識別**: `Uuid::new_v4()` で生成される128ビットの一意識別子。接続ログやデバッグ時のトレーサビリティに使用する。
+- **principal / conn は後から足した field**: principal は `unison.auth` handler が `set_principal` で立てる（1.4.0、[connection-auth.md](./connection-auth.md)）。conn は `handle_connection` が server 側でだけ `set_conn` で立て、`open_server_stream` が使う（1.5.0、[server-initiated-stream.md](./server-initiated-stream.md)）。client 側の ctx では None のまま。
 
 ## 3. Identity Handshake
 
@@ -142,11 +148,14 @@ sequenceDiagram
 
     Note over C: ServerIdentity受信<br/>チャネル一覧を把握
 
-    loop ストリーム受付ループ
-        C->>S: accept_bi() -> リクエスト
-        S->>C: レスポンス
+    loop チャネル開設（client 起点、§4）
+        C->>S: open_bi() + __channel:{name}
+        S->>C: __channel_ack（accept / nack）
     end
 ```
+
+client 側の受け取り（`client_accept_bi_loop` → oneshot → `ProtocolClient::connect`）は
+[architecture.md](./architecture.md) §4.2 を参照。
 
 ### build_identity の動作
 
@@ -172,247 +181,153 @@ pub async fn build_identity(&self) -> ServerIdentity {
 }
 ```
 
-### ChannelUpdate（リアルタイム通知）
+direction は常に `Bidirectional` で、KDL の `from="server"` はまだ反映しない
+（[server-initiated-stream.md](./server-initiated-stream.md) §10 の 4）。
 
-接続中にチャネルの追加・削除・状態変更が発生した場合、`ChannelUpdate` を通じてクライアントに通知する:
+## 4. 接続ディスパッチとチャネルルーティング
 
-```rust
-#[serde(tag = "type", content = "channel")]
-pub enum ChannelUpdate {
-    Added(ChannelInfo),
-    Removed(String),
-    StatusChanged { name: String, status: ChannelStatus },
-}
-```
+**ファイル**: `crates/unison-protocol/src/network/dispatch.rs`
 
-## 4. チャネルルーティング
+raw QUIC（`QuicServer`）と WebTransport（`WebTransportServer`）の両 ingress は、接続を
+`Arc<dyn UnisonConn>` に包んで `handle_connection` に渡す。ここから先は transport の種類を
+知らない。
 
-**ファイル**: `crates/unison-protocol/src/network/quic.rs` (`handle_connection` 関数内)
+### handle_connection の流れ
 
-QUIC接続上では、全通信がチャネルとして処理される。ルーティングは `ProtocolMessage.method` フィールドのプレフィックスで判別する。
+1. `ctx.set_conn` — server 起点 stream 用に connection を ctx に渡す（[server-initiated-stream.md](./server-initiated-stream.md)）
+2. active connection 台帳に登録（= `ProtocolServer::broadcast` の配信先）
+3. `start_datagram_handlers` — 登録済み datagram channel の handler を起動（[datagram-channel.md](./datagram-channel.md)）
+4. `send_identity` — server 発の stream で `__identity` を 1 本送って finish（§3）
+5. `ConnectionEvent::Connected` を発火
+6. `accept_stream_loop` — client が開いた stream を 1 本ずつ `handle_incoming_stream` に渡し、1 stream = 1 task で spawn する。`accept_bi` が Err を返したら接続終了とみなし、`ConnectionEvent::Disconnected` を発火して抜ける
+7. 後始末 — 台帳から外し、datagram handler の task を abort する
 
 ### ルーティング規則
 
-| プレフィックス | 種別 | 処理 |
-|---|---|---|
-| `__channel:{name}` | チャネル | `get_channel_handler` で対応ハンドラに委譲 |
-| `__identity` | Identity | ServerIdentity の送信 |
+先頭 frame の `ProtocolMessage.method` で振り分ける。どちらの側が受けるかで規則が違う。
 
-### フロー図
+| 受ける側 | 先頭 frame の method | 処理 |
+|---|---|---|
+| server（`handle_incoming_stream`） | `__channel:{name}` | 登録済みなら `__channel_ack`（Response）を返して handler へ `UnisonStream` を渡す。未登録なら nack（Error、`channel-not-found`）を返して finish |
+| server（`handle_incoming_stream`） | それ以外 | warn を出して捨てる（channel 以外の message はサポート外） |
+| client（`client_accept_bi_loop`） | `__identity` | identity 専用の oneshot へ（`ProtocolClient::connect` が受け取る） |
+| client（`client_accept_bi_loop`） | それ以外（= `from="server"` の channel 名） | `register_server_channel` の registry を引いて handler へ `UnisonStream` を渡す。未登録なら warn を出して捨てる |
+
+`client_accept_bi_loop` は `QuicClient` が接続ごとに spawn する。`quinn::Connection` を直に
+受けるので、WebTransport client はこの経路を持たない。
+
+### server 側のフロー
 
 ```mermaid
 flowchart TD
-    A[accept_bi] --> B[read_frame / read_to_end]
-    B --> C[ProtocolFrame::from_bytes]
+    A[accept_bi] --> B[read_typed_frame]
+    B -->|"tag 0x00 (PROTOCOL)"| C[UnisonPacket::from_bytes]
+    B -->|それ以外の tag / 読み取り失敗| X[log を出して捨てる]
     C --> D[ProtocolMessage::from_frame]
-    D --> E{method prefix?}
-
-    E -->|"__channel:{name}"| F[チャネルハンドラ]
-    E -->|その他 Request| G["process_message (deprecated)"]
-
-    F --> I[UnisonStream::from_streams]
-    I --> J[handler ctx, stream]
-    J --> K["UnisonChannel で<br/>request/response + event 処理"]
-
-    G --> L[レスポンス送信 + finish]
+    D --> E{method}
+    E -->|"__channel:{name}"| F{get_channel_handler}
+    E -->|その他| W[warn を出して捨てる]
+    F -->|登録あり| G["write_channel_ack (accept)"]
+    G --> I[UnisonStream::from_streams]
+    I --> J["handler(ctx, stream)"]
+    F -->|未登録| N["write_channel_ack (nack) → finish"]
 ```
 
-### 通信モデル
+client から見た open / ack の往復は [architecture.md](./architecture.md) §4.1 のシーケンス図を参照。
+handler は渡された `UnisonStream` を `UnisonChannel::new` で包んで使うか（built-in の
+`unison.auth` / `unison.discovery` はこちら）、直に読む。
 
-Unified Channel 統合により、全通信はチャネル経由で行われる:
+## 5. Typed Framing
 
-- **チャネル内 Request/Response**: `UnisonChannel::request()` でメッセージIDベースの相関。応答は `pending` マップの oneshot で紐付け
-- **チャネル内 Event**: `UnisonChannel::send_event()` で一方向プッシュ。応答不要
+**ファイル**: `crates/unison-protocol/src/network/frame.rs`
 
-## 5. Length-Prefixed Framing
-
-**ファイル**: `crates/unison-protocol/src/network/quic.rs`
-
-QUICストリーム上でのメッセージ境界を明確にするため、Length-Prefixed Framing を採用する。
-
-### read_frame
+QUIC stream 上のメッセージ境界は typed frame で区切る。`read_typed_frame` /
+`write_typed_frame` は `AsyncRead` / `AsyncWrite` に対して generic なので、quinn と
+WebTransport のどちらの stream にも同じ関数を使う。
 
 ```rust
-pub async fn read_frame(recv: &mut RecvStream) -> Result<bytes::Bytes> {
-    // 1. 4バイトのBigEndian長を読む
-    let mut len_buf = [0u8; 4];
-    recv.read_exact(&mut len_buf).await?;
-    let len = u32::from_be_bytes(len_buf) as usize;
-
-    // 2. サイズ上限チェック (MAX_MESSAGE_SIZE = 8MB)
-    if len > MAX_MESSAGE_SIZE {
-        return Err(anyhow!("Frame too large: {} bytes", len));
-    }
-
-    // 3. データ本体を読む
-    let mut data = vec![0u8; len];
-    recv.read_exact(&mut data).await?;
-    Ok(bytes::Bytes::from(data))
-}
-```
-
-### write_frame
-
-```rust
-pub async fn write_frame(send: &mut SendStream, data: &[u8]) -> Result<()> {
-    let len = (data.len() as u32).to_be_bytes();
-    send.write_all(&len).await?;
-    send.write_all(data).await?;
-    Ok(())
-}
+pub async fn read_typed_frame<R: AsyncRead + Unpin + ?Sized>(recv: &mut R) -> anyhow::Result<(u8, Bytes)>;
+pub async fn write_typed_frame<W: AsyncWrite + Unpin + ?Sized>(send: &mut W, frame_type: u8, data: &[u8]) -> anyhow::Result<()>;
 ```
 
 ### フレームフォーマット
 
 ```
-+-------------------+-------------------+
-| Length (4 bytes)   | Data (N bytes)    |
-| Big-Endian u32     | ProtocolFrame     |
-+-------------------+-------------------+
++-------------------+------------------+-------------------+
+| Length (4 bytes)  | Type tag (1 byte)| Payload (N bytes) |
+| Big-Endian u32    |                  |                   |
++-------------------+------------------+-------------------+
+Length = 1 + N (= type tag と payload の合計)
 ```
 
-- **最大サイズ**: `MAX_MESSAGE_SIZE = 8 * 1024 * 1024` (8MB)
-- **Data部**: `ProtocolFrame`（= `UnisonPacket<RkyvPayload<ProtocolMessage>>`）のバイト列
-
-### 後方互換: read_to_end フォールバック
-
-サーバー側の `handle_connection` では、`read_frame` が失敗した場合に `read_to_end` にフォールバックする。これにより、Length-Prefixed Framing に対応していない旧クライアントとの互換性を維持する:
-
-```rust
-let request_result = match read_frame(&mut recv_stream).await {
-    Ok(frame_bytes) => ProtocolFrame::from_bytes(&frame_bytes)
-        .and_then(|frame| ProtocolMessage::from_frame(&frame)),
-    Err(_) => {
-        // read_to_end にフォールバック（旧クライアント互換）
-        match recv_stream.read_to_end(MAX_MESSAGE_SIZE).await {
-            Ok(data) => {
-                let frame_bytes = bytes::Bytes::from(data);
-                ProtocolFrame::from_bytes(&frame_bytes)
-                    .and_then(|frame| ProtocolMessage::from_frame(&frame))
-            }
-            Err(e) => { /* エラー処理 */ }
-        }
-    }
-};
-```
-
-## 6. UnisonChannel（統合チャネル型）
-
-**ファイル**: `crates/unison-protocol/src/network/channel.rs`
-
-`UnisonChannel` は、全チャネルを統一する型。内部に recv ループを持ち、受信メッセージを Response（pending request の oneshot に送信）と Event（event queue に送信）に振り分ける。
-
-### 構造体定義
-
-```rust
-pub struct UnisonChannel {
-    stream: Arc<Mutex<UnisonStream>>,
-    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<ProtocolMessage>>>>,
-    event_rx: mpsc::Receiver<ProtocolMessage>,
-    recv_task: JoinHandle<()>,
-}
-
-impl UnisonChannel {
-    /// Request/Response（メッセージIDで紐付け）
-    pub async fn request(&self, method: &str, payload: Value) -> Result<Value, NetworkError>;
-
-    /// 一方向送信（応答不要）
-    pub async fn send_event(&self, method: &str, payload: Value) -> Result<(), NetworkError>;
-
-    /// イベント受信（サーバーからのプッシュ）
-    pub async fn recv(&mut self) -> Result<ProtocolMessage, NetworkError>;
-
-    /// チャネルを閉じる
-    pub async fn close(&mut self) -> Result<(), NetworkError>;
-}
-```
-
-### チャネルの型ファミリー
-
-```mermaid
-classDiagram
-    class SystemStream {
-        <<trait>>
-        +send(data: Value)
-        +receive() Value
-        +is_active() bool
-        +close()
-        +get_handle() StreamHandle
-    }
-
-    class UnisonStream {
-        -stream_id: u64
-        -method: String
-        -connection: Arc~Connection~
-        -send_stream: Arc~Mutex~Option~SendStream~~~
-        -recv_stream: Arc~Mutex~Option~RecvStream~~~
-        -is_active: Arc~AtomicBool~
-    }
-
-    class UnisonChannel {
-        -stream: Arc~Mutex~UnisonStream~~
-        -pending: Arc~Mutex~HashMap~u64, oneshot::Sender~~
-        -event_rx: mpsc~Receiver~ProtocolMessage~~
-        +request(method, payload) Value
-        +send_event(method, payload)
-        +recv() ProtocolMessage
-        +close()
-    }
-
-    class StreamSender~T~ {
-        -tx: mpsc~Sender~T~~
-        +send(msg: T)
-    }
-
-    class StreamReceiver~T~ {
-        -rx: mpsc~Receiver~T~~
-        +recv() Option~T~
-    }
-
-    SystemStream <|.. UnisonStream
-    UnisonStream --* UnisonChannel : wraps
-    StreamSender --* BidirectionalChannel
-    StreamReceiver --* BidirectionalChannel
-```
-
-### 本番用 vs テスト用
-
-| 型 | 用途 | トランスポート |
+| type tag | 定数 | payload |
 |---|---|---|
-| `UnisonChannel` | **本番通信** | QUIC双方向ストリーム |
-| `StreamSender<T>` / `StreamReceiver<T>` | テスト、プロセス内通信 | mpsc チャネル |
+| `0x00` | `FRAME_TYPE_PROTOCOL` | `UnisonPacket` のバイト列（中身は buffa で encode した `ProtocolMessage`、[packet.md](./packet.md)） |
+| `0x01` | `FRAME_TYPE_RAW` | raw bytes。packet を通らない（`UnisonChannel::send_raw` / `recv_raw`） |
 
-### request / recv の内部動作
+- **最大サイズ**: `MAX_MESSAGE_SIZE = 8 * 1024 * 1024`（8MB、type tag + payload）。読み書きの両側で検査する。read は Length が 0 または上限超なら Err、write は上限超なら何も書かずに Err（= `as u32` の切り詰めで Length と実データがずれるのを防ぐ）
+- 未知の type tag は `UnisonStream::recv_typed_frame` が `NetworkError::Protocol` にする
+- framing を喋らない peer 向けの `read_to_end` フォールバックは持たない。先頭 frame が読めなければその stream は捨てる
 
-```mermaid
-sequenceDiagram
-    participant App as アプリケーション
-    participant UC as UnisonChannel
-    participant US as UnisonStream
-    participant QUIC as QUIC Stream
+### 送信と受信の経路
 
-    App->>UC: request("method", payload)
-    UC->>UC: ProtocolMessage作成 (id=N, type=Request)
-    UC->>UC: pending[N] = oneshot::channel()
-    UC->>US: send(message)
-    US->>QUIC: write_frame(frame_bytes)
+- **送信**: `ProtocolMessage::into_frame` → `UnisonPacket::to_bytes` → `write_typed_frame(FRAME_TYPE_PROTOCOL, …)`（= `UnisonStream::send_frame`）
+- **受信**: `read_typed_frame` → `UnisonPacket::from_bytes` → `ProtocolMessage::from_frame`（= `UnisonStream::recv_typed_frame`）
 
-    Note over UC: recv ループが常時稼働
-    QUIC-->>UC: read_frame() -> ProtocolMessage
-    UC->>UC: msg_type == Response?
-    UC->>UC: pending[N].send(response)
-    UC-->>App: oneshot.recv() -> Result<Value>
+他言語 client との byte 一致は golden fixture で検証している（[packet.md](./packet.md) §6）。
 
-    App->>UC: recv() (イベント受信)
-    Note over UC: recv ループが Event を検出
-    QUIC-->>UC: read_frame() -> ProtocolMessage
-    UC->>UC: msg_type == Event?
-    UC->>UC: event_rx.send(message)
-    UC-->>App: event_rx.recv() -> ProtocolMessage
-```
+## 6. UnisonStream と UnisonChannel
+
+**ファイル**: `crates/unison-protocol/src/network/stream.rs` / `crates/unison-protocol/src/network/channel.rs`
+
+### UnisonStream（handler に渡る面）
+
+`UnisonStream` は transport 非依存の双方向 stream。send / recv を trait object
+（`BoxUnisonSend` / `BoxUnisonRecv`）で持つので、raw QUIC と WebTransport で同じ型になる。
+
+| メソッド | 動作 |
+|---|---|
+| `from_streams(stream_id, method, send, recv)` | 受け付けた / 開いた stream から作る |
+| `send_frame(&msg)` | `ProtocolMessage` を tag 0x00 の frame で送る |
+| `send_raw_frame(data)` | raw bytes を tag 0x01 の frame で送る |
+| `recv_typed_frame()` | 1 frame 読み、`TypedFrame::{Protocol, Raw}` で返す |
+| `recv_frame()` | `ProtocolMessage` だけを受ける（raw frame が来たら Err） |
+| `close_stream()` | send 側を finish、recv 側を stop |
+| `is_active()` | 読み取り失敗や close の後は false |
+
+### UnisonChannel\<C\>（統合チャネル型）
+
+`UnisonChannel::new(stream)` は `UnisonStream` を包み、recv ループを 1 本 spawn する。
+codec `C`（既定 `JsonCodec`）で payload を encode / decode する。
+
+| メソッド | 動作 |
+|---|---|
+| `request::<Req, Resp>(method, &req)` | id を振って pending に登録し、Response か Error を待つ。既定 30 秒で `NetworkError::Timeout`（`with_request_timeout` で変更） |
+| `send_event(method, &payload)` | Event を一方向に送る |
+| `send_response(request_id, method, &payload)` | 受けた Request に Response を返す（server 側） |
+| `recv()` | Event（と Request など Response 以外）を受ける |
+| `send_raw(data)` / `recv_raw()` | raw frame の送受信 |
+| `close()` | recv ループを止め、stream を閉じる |
+
+recv ループの振り分け:
+
+- **Response** → id が一致する pending の oneshot へ
+- **Error** → id が一致する pending があればそこへ、無ければ event 側へ
+- **Event / Request / その他** → event 側の mpsc（buffer 256）へ
+- **Raw frame** → raw 側の mpsc（buffer 256）へ
+- **読み取り失敗**（接続断など） → 全 pending を Error で解決してループを抜ける
+
+event / raw の配送は `try_send` で、buffer が full なら drop して warn を出す。遅い consumer が
+recv ループを止めると、後ろに並んだ Response まで届かなくなるため（= HoL stall の回避）。
+取りこぼせない server→client 配送は、この mpsc を通らない server 起点 stream
+（[server-initiated-stream.md](./server-initiated-stream.md)）を使う。
+
+channel が正常に終わったときは `recv` / `recv_raw` / `request` が `NetworkError::ChannelEof`
+を返す（`is_normal_close()` が true、[architecture.md](./architecture.md) §5）。
 
 ## 関連ドキュメント
 
 - [アーキテクチャ](./architecture.md) -- システム全体のレイヤー構成
-- [パケット設計](./packet.md) -- UnisonPacket / ProtocolFrame のバイナリフォーマット
+- [パケット設計](./packet.md) -- UnisonPacket のバイナリフォーマット
+- [サーバー起点 stream](./server-initiated-stream.md) -- `open_server_stream` / `register_server_channel`
 - [spec/02: Unified Channel](../spec/02-unified-channel/SPEC.md) -- KDLスキーマとメッセージ種別
