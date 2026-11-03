@@ -125,6 +125,11 @@ jobs:
       - name: Check dependencies
         run: cargo deny check
 
+      # Ruby native extension は別 workspace で、その Cargo.lock は gem に同梱されて
+      # 利用者のビルドに使われる。root の deny.toml で同じ基準を当てる。
+      - name: Check dependencies (Ruby native extension)
+        run: cargo deny --manifest-path clients/ruby/Cargo.toml check
+
   # ===========================================
   # MSRV確認
   # ===========================================
