@@ -31,9 +31,10 @@ club-kdl-codegen schemas/protocol.kdl --target typescript > generated/protocol.t
 - 型を運ぶ `<Channel>ChannelEventTypes` / `<Channel>ChannelRequestTypes`
 - `as const` の `ChannelMeta`（後述の `__types` phantom carrier 込み）
 
-> v1.0 時点の codegen は **stream channel まで**。datagram channel の TS
-> codegen と proto descriptor の自動生成は v1.x deferred。datagram の
-> `ChannelMeta` は当面手書きする（[example](../clients/typescript/examples/vp-dashboard.ts) 参照）。
+> codegen（0.17.0 で確認）は stream channel / datagram channel の両方の `ChannelMeta` を
+> 生成する（datagram は `backend: "datagram"` と `channelId` 込み）。proto descriptor の
+> 自動生成は未対応。手書きの範は [example](../clients/typescript/examples/vp-dashboard.ts) に
+> 教材として残っている。
 
 ### ChannelMeta を手書きする
 
@@ -103,6 +104,7 @@ const client = await connect({
 | `codec` | `Codec` | `JsonCodec` | 全 channel 共有 payload codec |
 | `awaitIdentity` | `boolean` | `true` | identity handshake を待つか |
 | `identityTimeoutMs` | `number` | `5000` | identity handshake の timeout |
+| `credential` | `Uint8Array` | — | 接続直後に `unison.auth` で提示する credential。拒否されたら `connect()` が throw する |
 
 ### `TrustMode`
 
@@ -127,6 +129,7 @@ interface UnisonClient {
   events(): AsyncIterable<ConnectionEvent>;
   openChannel<M>(meta: M, openTimeoutMs?: number): Promise<UnisonChannel<M>>;
   openDatagramChannel<M>(meta: M): DatagramChannel<M>;
+  authenticate(credential: Uint8Array): Promise<void>;
   disconnect(reason?: string): Promise<void>;
 }
 ```
@@ -158,9 +161,21 @@ for await (const ev of client.events()) {
 
 `openChannel()` は bidi stream を 1 本開き、**open handshake**（`open` frame →
 server `open_ack`）でサーバが accept したことを確認してから resolve する。
-`openTimeoutMs` 内に accept されなければ reject + stream tear down。
+サーバにその channel が無ければ即座に reject（nack）、`openTimeoutMs`（既定 5000ms）
+内に応答が無ければ reject + stream tear down。
 
 `openDatagramChannel()` は同期。共有 datagram path 上の virtual channel を返す。
+
+### `authenticate()` — connection-level auth
+
+`unison.auth` channel を開いて credential を 1 回提示し、サーバの verifier の結果を待つ。
+拒否されたら throw する。**他の channel を開く前に呼ぶ**。`connect({ credential })` を
+指定すると内部でこれを呼ぶ。サーバが `enable_auth` していなければ `unison.auth` が無いので
+open が reject される。
+
+```typescript
+await client.authenticate(new TextEncoder().encode("my-token"));
+```
 
 ---
 
@@ -188,7 +203,7 @@ const reply = await echo.request("Echo", { text: "hi" });
 ```typescript
 for await (const ev of echo.events()) {
   // ev は EchoMeta の event payload union 型
-  // break で iterator が閉じ、channel close へ cascade
+  // break しても channel は開いたまま。使い終わったら await echo.close() を呼ぶ
 }
 ```
 
@@ -223,9 +238,13 @@ for await (const update of metricChan.events()) {
 ```
 
 datagram の wire レイアウトは `[varint channel_id][codec-encoded payload]`。
-1 datagram = 1 event、chunking 不可。**MTU を超えると drop される**点に注意
-（JSON codec の `Vec<u8>` encode は wire size が膨らみやすく、effective
-payload limit は概ね 200-300 B）。
+1 datagram = 1 event、chunking 不可。大きさの上限に注意:
+
+- client からの `sendEvent` は、WebTransport の `maxDatagramSize` を超えると例外を投げる
+- server からの broadcast で上限を超えたものは client に届かない（server 側で送信失敗になり、log だけ残る）
+
+JSON codec の `Vec<u8>` encode は wire size が膨らみやすく、effective
+payload limit は概ね 200-300 B。
 
 ---
 
@@ -248,12 +267,15 @@ codec は connection-level で一律指定する（`connect({ codec })`）。
 per-channel override は v1.x deferred。
 
 ```typescript
-import { connect, JsonCodec } from "@chronista-club/unison-client";
-const client = await connect({ url: "...", codec: JsonCodec.shared });
+import { connect, JsonCodec, type ChannelPayload } from "@chronista-club/unison-client";
+const client = await connect({ url: "...", codec: new JsonCodec<ChannelPayload>() });
 ```
 
+`codec` を省略すれば既定の `JsonCodec` が使われる。`JsonCodec.shared` は
+`JsonCodec<unknown>` なので、そのまま `codec` に渡すと型エラー（TS2322）になる。
+
 > `ProtoCodec` は利用可能だが、KDL → proto descriptor の自動 codegen は
-> v1.0 では未対応。proto を使うには descriptor を別途用意する必要がある。
+> 現時点では未対応。proto を使うには descriptor を別途用意する必要がある。
 
 ---
 
@@ -321,4 +343,4 @@ TS は `ChannelMeta` の `as const` literal narrowing で、Rust の turbofish
 
 ---
 
-**最終更新**: 2026-05-17（v1.0）
+**最終更新**: 2026-11-04（SDK 1.2.0）

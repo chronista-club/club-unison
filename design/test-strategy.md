@@ -1,5 +1,11 @@
 # テスト戦略
 
+**最終更新**: 2026-11-04
+
+テストの層（Small / Medium / Large）の定義、ファイル命名（`test_<layer>_<topic>.rs`）、
+`#[ignore]` の理由文字列と例外 2 本、実行コマンドは repo root の [CLAUDE.md](../CLAUDE.md)
+「テスト」節が正。本書はここで繰り返さず、その背景と「どこに何があるか」を書く。
+
 ## 1. テスト哲学
 
 ### t-wada 3x3 マトリクス
@@ -12,91 +18,123 @@
 | **Medium** | — | ネットワーク・ファイルI/O を含む結合テスト | 複数プロセス間の結合 |
 | **Large** | — | — | 実環境に近い構成での検証 |
 
+Unison のファイル名が表すのは **サイズ** の軸（`small` = 実 I/O なし、`medium` = 実 QUIC を
+localhost で張る）。スコープはファイル名に出さない。
+
 ### 核心原則: 「サイズを上げずにスコープを広げる」
 
-- Small x Unit で個々の部品を固める（現状の packet テスト群）
-- **Small x Integration** で複数モジュールの結合を Mock/Fake で検証する（最優先で拡充）
-- Medium 以上はコストが高いため、投資対効果を吟味して最小限に留める
+- 部品は lib unit test（`src/**` の `#[cfg(test)] mod tests`）で固める
+- 複数モジュールの結合も、できるだけ実 I/O なし（= Small）で確かめる。wire は bytes の往復、
+  handler 登録と identity 構築は in-memory、接続ディスパッチは `MockConn`（§2.1）で回す
+- 実 QUIC を張る Medium は、transport を通さないと見えない振る舞い（handshake / ALPN /
+  証明書 / datagram / 接続 lifecycle / dial race など）に絞る
 
 ### Rust の型システム = 静的解析層
 
 Testing Trophy の最下層（Static Analysis）は Rust コンパイラが自然にカバーする:
 
 - 型チェック・借用チェック → Null 参照・データ競合の排除
-- `clippy` → コードスメル・パターン違反の検出
+- `clippy` → コードスメル・パターン違反の検出（lib / bins / tests / benches / examples を同じ厳しさで見る）
 - 型による不正状態の排除（`enum` + exhaustive match）
 
 この強固な静的解析層があるからこそ、テストは **ロジックの正しさ** と **モジュール間の結合** に集中できる。
 
-## 2. 現状分析
+## 2. どこに何があるか
 
-### モジュール別テスト分布
+### 2.1 crate 内（lib unit test）
 
-| モジュール | ユニットテスト数 | Small統合テスト数 | Medium統合テスト数 | 合計 |
-|-----------|:---:|:---:|:---:|:---:|
-| `packet/` (mod, header, serialization, config, flags, payload) | 36 | 0 | 0 | 36 |
-| `core/` | 4 | 0 | 0 | 4 |
-| `lib.rs` | 4 | 0 | 0 | 4 |
-| `network/` (server, context) | 5 | 6 | 0 | 11 |
-| `parser/` + `codegen/` | 0 | 10 | 0 | 10 |
-| `context/` (CGP) | 0 | 6 | 0 | 6 |
-| Identity | 0 | 6 | 0 | 6 |
-| QUIC transport | 0 | 7 | 6 | 13 |
-| Error paths | 0 | 6 | 0 | 6 |
-| **合計** | **49** | **41** | **6** | **96** |
+- `crates/unison-protocol/src/` は `codec/` / `network/` / `packet/` / `parser/` の 4 つ
+  （構成は [architecture.md](./architecture.md) §3）。各 module の `#[cfg(test)] mod tests` に置く
+- `network::test_support::MockConn`（`#[cfg(test)]`、crate 内専用）は実 QUIC なしで
+  `UnisonConn` を差し込む fake。`dispatch::handle_connection` などを Small のまま回せる
+- `network::dial` の engine は `#[tokio::test(start_paused = true)]` の仮想時間で決定論的に
+  検証する（[happy-eyeballs-dial.md](./happy-eyeballs-dial.md) §7）
+- `unison-cli` / `unison-mcp` も各 `src/` に unit test を持つ
 
-### 3x3 マトリクスでの配置図
+### 2.2 `crates/unison-protocol/tests/`
 
-```mermaid
-quadrantChart
-    title テスト配置の現状（3x3 マトリクス）
-    x-axis Unit --> E2E
-    y-axis Small --> Large
-    quadrant-1 Medium-Large × E2E（未開拓）
-    quadrant-2 Small × Unit（充実）
-    quadrant-3 Small × Integration（★ 不足）
-    quadrant-4 Medium × Integration（一部）
-    packet unit tests: [0.15, 0.25]
-    core unit tests: [0.15, 0.20]
-    network unit tests: [0.15, 0.30]
-    parser-codegen integration: [0.50, 0.25]
-    identity integration: [0.50, 0.25]
-    cgp integration: [0.50, 0.30]
-    simple_quic_test: [0.50, 0.60]
-    quic_integration_test: [0.70, 0.85]
-```
+**Small**（常時実行）:
 
-**テキスト配置図:**
+| ファイル | 対象 |
+|---|---|
+| `test_small_cert_trust_config.rs` | `CertSource` / `TrustAnchors` から rustls の config を組めるか |
+| `test_small_contract_check.rs` | `parser::check`（[schema-check.md](./schema-check.md)） |
+| `test_small_creo_sync_schema.rs` | fixture `creo_sync.kdl` の channel 型 |
+| `test_small_error_paths.rs` | packet / `ProtocolMessage` の異常入力 |
+| `test_small_identity_flow.rs` | `ServerIdentity` ↔ `ProtocolMessage`、`ConnectionContext` の identity |
+| `test_small_kdl_schema.rs` | KDL の parse（channel / message / enum / backend） |
+| `test_small_protocol_message.rs` | `ProtocolMessage` の `into_frame` → bytes → `from_frame` 往復 |
+| `test_small_server_handlers.rs` | `ProtocolServer` の channel 登録、`build_identity`、connection event の購読 |
+| `test_small_wire_byte_compat.rs` | wire の golden（`fixtures/wire/*.hex`）との byte 比較（[packet.md](./packet.md) §6） |
 
-```
-              Unit          Integration       E2E
-         ┌──────────────┬───────────────┬──────────┐
- Large   │              │               │ quic_    │
-         │              │               │ integra- │
-         │              │               │ tion*    │
-         ├──────────────┼───────────────┼──────────┤
- Medium  │              │ simple_quic   │          │
-         │              │               │          │
-         ├──────────────┼───────────────┼──────────┤
- Small   │ packet (36)  │ ★ ここが不足  │          │
-         │ core (4)     │ parser/cg (5) │          │
-         │ network (5)  │ identity (2)  │          │
-         │ lib (4)      │ cgp (1)       │          │
-         └──────────────┴───────────────┴──────────┘
+**Medium**（`#[ignore]`、`-- --ignored` で実行）:
 
- * #[ignore] で CI スキップ中
-```
+| ファイル | 対象 |
+|---|---|
+| `test_medium_accept_resilience.rs` | accept loop の回帰。**`#[ignore]` なしで常時実行** |
+| `test_medium_alpn_enforcement.rs` | ALPN の回帰（[quic-runtime.md](./quic-runtime.md) §1）。**`#[ignore]` なしで常時実行** |
+| `test_medium_auth_channel.rs` | `unison.auth`（[connection-auth.md](./connection-auth.md)） |
+| `test_medium_client_events.rs` | `ProtocolClient` の Connected / Disconnected event |
+| `test_medium_connect_race.rs` | `connect_race`（[happy-eyeballs-dial.md](./happy-eyeballs-dial.md)） |
+| `test_medium_datagram_echo.rs` | datagram channel の echo / demux / broadcast（[datagram-channel.md](./datagram-channel.md)） |
+| `test_medium_discovery_channel.rs` | `unison.discovery` |
+| `test_medium_dynamic_schema.rs` | `DynamicProtocol` + `SchemaRegistry` |
+| `test_medium_ip_dualstack.rs` | IPv4 / IPv6 の疎通 |
+| `test_medium_mesh_trust.rs` | mesh CA trust の SAN 名前検証 |
+| `test_medium_quic_lifecycle.rs` | bind / connect / identity / request / shutdown |
+| `test_medium_quic_protocol_flow.rs` | schema → server → client → channel の一気通貫 |
+| `test_medium_server_initiated_stream.rs` | `open_server_stream` / `register_server_channel`（[server-initiated-stream.md](./server-initiated-stream.md)） |
+| `test_medium_spawn_cert.rs` | 高レベルの spawn 経路が cert を honor するか |
 
-### ギャップ分析
+`test_medium_server_initiated_stream.rs` のうち `test_open_server_stream_on_client_ctx_is_misuse_error`
+は ctx 単体の検査で QUIC を張らないため、`#[ignore]` が付いていない。
 
-**最大のギャップ: Small x Integration**
+### 2.3 `crates/unison-mcp/tests/`
 
-- `network/` モジュール（`server.rs`, `channel.rs`, `client.rs`）の結合テストが存在しない
-- `context/handlers.rs` のハンドラーディスパッチテストが不足
-- `codegen/` の Rust/TypeScript 生成の正常系は検証されているが、エラーパスが未テスト
-- `ProtocolMessage` の構築・パース・ルーティングの結合テストがない
+| ファイル | 対象 |
+|---|---|
+| `test_medium_synthesis.rs` | discovery server → unison-mcp の tool 合成 / invoke / live refresh（[kdl-to-json-schema.md](./kdl-to-json-schema.md) §6） |
 
-## 3. 目標
+### 2.4 共通ヘルパーと fixture
+
+- `tests/common/mod.rs`（`crates/unison-protocol/tests/`）:
+  - `make_message` / `make_request` / `make_event` — JSON payload で `ProtocolMessage` を組む
+  - `make_identity` — channel 名の一覧から `ServerIdentity` を組む
+  - Small の一部（`test_small_error_paths.rs` / `test_small_identity_flow.rs` /
+    `test_small_protocol_message.rs` / `test_small_server_handlers.rs`）が `mod common;` で使う
+- `tests/fixtures/`: `wire/*.hex`（wire の golden）、`creo_sync.kdl`、`contracts/`（schema-check 用の約束の抜粋）
+
+### 2.5 Medium test の書き方
+
+- server は `Arc::new(server).listener("[::1]:0").spawn().await?` で起動し、`handle.local_addr()`
+  で実ポートを得る。port 0 なので並列に走らせても衝突しない
+- client は多くのテストで `ProtocolClient::insecure_localhost()` を使う（検証なし、loopback 限定）
+- 片付けは `ServerHandle::shutdown()`
+- 各テストに `#[ignore = "Medium: 実 QUIC runtime が要る"]` を付ける（例外は CLAUDE.md）
+
+### 2.6 Large
+
+Rust の `tests/` には置かない。
+
+- CI の `Cross-Language E2E` job が `webtransport_echo_server` example を build し、TS の
+  `npm test`（`clients/typescript/tests/integration/webtransport_e2e.test.ts` ほか）が実
+  WebTransport で Rust server と往復する
+- `clients/*` 側のテスト: TS（`clients/typescript/tests/`）、Swift（`swift test`。live e2e は
+  `UNISON_LIVE` で gate）、Ruby（`rake test`。`test/e2e/` は `unison` バイナリが要るので既定では走らない）
+
+## 3. CI での走り方
+
+`.github/workflows/ci.yml` の job 一覧は [architecture.md](./architecture.md) §2。テストに関わる
+ところだけ書く:
+
+| job | 実行するもの |
+|---|---|
+| Test（ubuntu + macos） | `cargo test --workspace --verbose`（lib unit + Small + 例外 2 本）→ `cargo test --workspace --verbose -- --ignored`（Medium）。macOS は `RUSTFLAGS=-C symbol-mangling-version=v0` |
+| Clippy | `cargo clippy --all-targets --workspace -- -D warnings` |
+| Cross-Language E2E | §2.6 |
+| Ruby Client / Swift Client / TS Typecheck | 各 client の build と test / 型検査 |
+
+## 4. 目標
 
 | 指標 | 目標値 | 根拠 |
 |------|--------|------|
@@ -105,188 +143,18 @@ quadrantChart
 | CI 全体 | < 10 分 | PR マージまでの待ち時間 |
 | Flaky 率 | 0%（1% 超でエンジニアの信頼が崩壊） | t-wada「テストの信頼性」原則 |
 
-## 4. モジュール別テスト方針
-
-### packet/ → Small x Unit（現状維持）
-
-- 36 テストで十分にカバー済み
-- ヘッダー・ペイロード・シリアライゼーション・フラグ・設定の各層を個別検証
-- 追加は必要に応じて（新フィールド追加時など）
-
-### parser/ + codegen/ → Small x Integration（拡充）
-
-- 現状: KDL パース → コード生成の正常系パスのみ
-- 拡充: 不正スキーマのエラーハンドリング、エッジケース
-- channel 構文（`request`/`returns`/`event`）の結合テスト
-
-### network/ → Small x Integration（最優先新規）
-
-- `ProtocolMessage` の構築・シリアライズ・デシリアライズ
-- `ProtocolServer` のチャネル登録・ハンドラーディスパッチ
-- `ConnectionContext` のライフサイクル管理
-- Mock Transport を使い、QUIC に依存しない Small テスト
-
-### context/handlers/ → Small x Integration（拡充）
-
-- CGP コンテキストのハンドラー登録・メッセージルーティング
-- `HandlerRegistry` の検索・実行フロー
-- エラーハンドリング（未登録ハンドラーへのディスパッチ等）
-
-### QUIC transport → Medium x Integration
-
-- `simple_quic_test.rs` の拡充
-- 証明書生成・TLS 設定の検証
-- 接続・切断のライフサイクル
-- `#[ignore]` で通常の `cargo test` からは除外
-
-### E2E → Large x E2E（最後）
-
-- `quic_integration_test.rs` を整備
-- 実際の QUIC サーバー/クライアント間通信
-- CI では専用ジョブで実行
-
-## 5. テストインフラ
-
-### テストヘルパー関数
-
-`tests/common/mod.rs` に共通ヘルパーを集約:
-
-```rust
-// ProtocolMessage 生成ヘルパー
-pub fn make_request(channel: &str, method: &str, payload: Value) -> ProtocolMessage { ... }
-pub fn make_response(request_id: &str, payload: Value) -> ProtocolMessage { ... }
-pub fn make_event(channel: &str, event: &str, data: Value) -> ProtocolMessage { ... }
-
-// MockTransport
-pub struct MockTransport { ... }
-
-// テスト用 ServerIdentity
-pub fn test_identity() -> ServerIdentity { ... }
-```
-
-### 命名規則
-
-```
-test_{scope}_{module}_{scenario}
-
-例:
-test_unit_packet_header_roundtrip
-test_integration_server_channel_registration
-test_integration_codegen_error_invalid_schema
-test_e2e_quic_ping_pong
-```
-
-### ファイル構成
-
-```
-tests/
-├── common/
-│   └── mod.rs                    # 共通ヘルパー
-├── test_protocol_message.rs      # ProtocolMessage 結合テスト
-├── test_server_handlers.rs       # サーバーハンドラー結合テスト
-├── test_identity_flow.rs         # Identity フロー結合テスト（既存統合）
-├── test_handler_dispatch.rs      # ハンドラーディスパッチ結合テスト
-├── test_codegen_channel.rs       # codegen 結合テスト（既存）
-├── test_e2e_channel.rs           # E2E codegen テスト（既存）
-├── test_creo_sync.rs             # creo_sync スキーマテスト（既存）
-├── test_kdl.rs                   # KDL パーステスト（既存）
-├── test_identity.rs              # Identity シリアライゼーション（既存）
-├── test_identity_quic.rs         # Identity QUIC フロー（既存）
-├── cgp_integration_test.rs       # CGP 統合テスト（既存）
-├── simple_quic_test.rs           # QUIC 簡易テスト（既存）
-└── quic_integration_test.rs      # QUIC 統合テスト（既存、#[ignore]）
-```
-
-## 6. 偽陽性・偽陰性対策
+## 5. 偽陽性・偽陰性対策
 
 ### 偽陽性（False Positive）: テストが壊れたが実装は正しい
 
 - **内部実装に依存しないテスト設計**: private フィールドの値ではなく、公開 API の振る舞いを検証する
-- **文字列マッチングの回避**: コード生成テストで `contains("exact string")` に頼りすぎない → 構造的な検証を併用
+- **文字列マッチングの回避**: error message などの `contains("exact string")` に頼りすぎない → 構造的な検証を併用
 - **テスト同士の独立性**: 共有状態を持たない。各テストは独立して実行可能
 
 ### 偽陰性（False Negative）: テストが通るが実装にバグがある
 
 - **エラーパステスト**: 正常系だけでなく、異常入力・境界値を必ずテスト
+- **期待値をテスト自身が書き換えない**: golden は commit 済みのものと比較するだけで、再生成は
+  明示したとき（`UPDATE_WIRE_FIXTURES=1`）に限る。毎回上書きすると回帰を見逃す
 - **proptest 検討**: パケットのシリアライゼーション等、入力空間が広い箇所にはプロパティベーステストが有効
 - **カバレッジ計測**: `cargo-tarpaulin` で定期的に未カバー行を可視化
-
-## 7. CI 統合
-
-### テスト実行の分離
-
-```yaml
-# Small テスト（常時実行、PR ブロッキング）
-- name: Small Tests
-  run: RUSTFLAGS="-C symbol-mangling-version=v0" cargo test --tests --workspace -- --skip packet
-
-# Clippy（常時実行、PR ブロッキング）
-- name: Clippy
-  run: cargo clippy --lib --workspace -- -D warnings
-
-# Medium テスト（CI のみ、#[ignore] を含む）
-- name: Medium Tests
-  run: cargo test --tests --workspace -- --ignored
-
-# Large テスト（ナイトリー or リリース前）
-- name: E2E Tests
-  run: cargo test --tests --workspace -- --ignored e2e
-```
-
-### テスト分類のアノテーション
-
-```rust
-// Small テスト: アノテーション不要（デフォルト）
-#[test]
-fn test_unit_packet_roundtrip() { ... }
-
-// Medium テスト: #[ignore] + コメント
-#[test]
-#[ignore = "Medium: requires QUIC runtime"]
-fn test_quic_connection_lifecycle() { ... }
-
-// Large テスト: #[ignore] + "e2e" プレフィックス
-#[test]
-#[ignore = "Large: E2E test"]
-fn test_e2e_full_protocol_flow() { ... }
-```
-
-## 8. 優先ロードマップ
-
-### Phase 1: テスト基盤 + Small x Integration テスト（本 PR）
-
-1. `tests/common/mod.rs` — 共通ヘルパー（`ProtocolMessage` 生成、`MockTransport`）
-2. `tests/test_protocol_message.rs` — ProtocolMessage 構築・ルーティングの結合テスト
-3. `tests/test_server_handlers.rs` — サーバーハンドラー登録・ディスパッチの結合テスト
-4. `tests/test_handler_dispatch.rs` — CGP ハンドラーディスパッチの結合テスト
-5. 本設計文書 `design/test-strategy.md`
-
-### Phase 2: Medium x Integration（QUIC transport）✅
-
-`test_medium_quic_lifecycle.rs` に 6 テスト追加:
-
-- サーバー bind + shutdown ライフサイクル
-- クライアント connect → is_connected → disconnect
-- Identity ハンドシェイク（チャネル情報含む）
-- チャネル経由 Request/Response
-- 連続リクエスト（10 件）
-- サーバーシャットダウン時のクライアント切断検知
-
-すべて `#[ignore = "Medium: requires QUIC runtime"]` 付き。
-`cargo test -- --ignored` で実行。
-
-### Phase 3: Large x E2E ✅
-
-`quic_integration_test.rs` を全面改修し 6 テスト:
-
-- 完全なプロトコルフロー（Identity + チャネル + ping/pong）
-- Echo 変換（uppercase / reverse / identity）
-- Health チェック + uptime 検証
-- 複雑 JSON 往復（ネスト・Unicode・emoji・null）
-- 連続リクエストスループット（50 件、レイテンシをログ計測）
-- グレースフルシャットダウン中の通信と切断検知
-
-旧テスト（port 8080 固定 / abort / sleep 待機）を
-`spawn_listen("[::1]:0")` + `ServerHandle::shutdown()` に刷新。
-重複していた cert/config テストは `simple_quic_test.rs` に集約済みのため削除。
-すべて `#[ignore = "Large: E2E test"]` 付き。

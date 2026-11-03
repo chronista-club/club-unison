@@ -1,6 +1,6 @@
 # Unison Protocol アーキテクチャ設計
 
-**最終更新**: 2026-09-05
+**最終更新**: 2026-11-04
 **ステータス**: Stable (living doc、 workspace の実態に追従させる)
 
 ---
@@ -35,17 +35,20 @@ club-unison/
   crates/
     unison-protocol/        -- club-unison: parser / packet / codec / network
     unison-mcp/             -- MCP bridge (bin `unison-mcp`)、 rmcp 3
-    unison-cli/             -- 開発者 CLI (bin `unison`): ping / call / sniff / mock / schema lint
+    unison-cli/             -- 開発者 CLI (bin `unison`): ping / call / sniff / mock /
+                               schema-lint / schema-diff / schema-check
   clients/
     typescript/             -- @chronista-club/unison-client (WebTransport、 npm)
     swift/                  -- UnisonClient (SwiftPM、 manifest は repo root の Package.swift)
     ruby/                   -- unison-client gem (Magnus で club-unison を wrap)
-  schemas/                  -- KDL: auth / discovery / ping_pong / hierophant
+  schemas/                  -- KDL: auth / discovery / ping_pong
   spec/ design/ guides/     -- What&Why / How / Usage
 ```
 
-CI (`.github/workflows/ci.yml`) は fmt / clippy (`--lib -D warnings`) / test (ubuntu + macos) /
-cargo-deny / MSRV / TS typecheck / cross-language E2E / Swift build+test を回す。
+CI (`.github/workflows/ci.yml`) は fmt / clippy (`--all-targets --workspace -- -D warnings`) /
+test (ubuntu + macos、 Small の `cargo test --workspace` と Medium の `-- --ignored`) /
+cargo-deny / MSRV (1.95) / TS typecheck / Ruby client (`rake test`) / cross-language E2E /
+Swift build+test を回す。
 
 ### 主要依存クレート
 
@@ -56,7 +59,7 @@ cargo-deny / MSRV / TS typecheck / cross-language E2E / Swift build+test を回�
 | WebTransport | wtransport 0.7 (ブラウザ ingress) |
 | 圧縮 | zstd |
 | 非同期ランタイム | tokio |
-| KDL パース | kdl, club-kdl (derive) |
+| KDL パース | club-kdl (derive)。 `kdl` crate は unison-cli の schema-diff だけが使う |
 | エラー | thiserror (型付き)、 anyhow (transport 境界) |
 | その他 | sha2 (discovery の schema hash)、 uuid (connection id)、 tracing |
 | unison-mcp | rmcp 3 (server / transport-io / elicitation)、 schemars |
@@ -76,6 +79,7 @@ crates/unison-protocol/src/
   parser/
     mod.rs           -- SchemaParser、 ParseError
     schema.rs        -- ParsedSchema / Protocol / Channel / Field / FieldType (club-kdl derive)
+    check.rs         -- TypeIndex / Violation: JSON が約束の型を満たすかの判定 (design/schema-check.md)
   packet/            -- UnisonPacket wire frame (design/packet.md)
     mod.rs           -- UnisonPacket
     header.rs        -- UnisonPacketHeader、 PacketType
@@ -133,7 +137,7 @@ sequenceDiagram
         PC-->>App: UnisonChannel
     else なし
         D->>Net: __channel_ack { id=N, Error, channel-not-found }
-        PC-->>App: Err(HandlerNotFound)
+        PC-->>App: Err(Protocol("… open rejected …"))
     end
 
     loop チャネル通信
@@ -149,9 +153,9 @@ sequenceDiagram
 ### 4.2 Identity handshake
 
 接続確立直後に server が `__identity` Event を **server 発の stream** で 1 本送る。 client は
-`QuicClient` の `client_accept_bi_loop` でそれを oneshot に流し、 `ProtocolClient::connect` が
-`ConnectionContext::set_identity` に保存する。 以後 `server_identity()` で利用可能 channel
-一覧が読める (spec/01 §5、 spec/02 §5.1)。
+`QuicClient` が接続ごとに spawn する `client_accept_bi_loop` (= `dispatch.rs`) でそれを
+oneshot に流し、 `ProtocolClient::connect` が `ConnectionContext::set_identity` に保存する。
+以後 `server_identity()` で利用可能 channel 一覧が読める (spec/01 §5、 spec/02 §5.1)。
 
 ### 4.3 Datagram channel
 
@@ -171,22 +175,25 @@ log level の判断に使う。
 
 ```rust
 pub enum NetworkError {
+    ChannelEof(ChannelEof),                 // channel の正常終端 (真の error ではない、 is_normal_close() が true)
     Connection(String),                     // 接続断、 stream 非アクティブ
-    Protocol(String),                       // 不正メッセージ、 channel 状態 (正常終端もここ、 is_normal_close())
+    Protocol(String),                       // 不正メッセージ、 channel 状態、 channel open の nack
     Serialization(serde_json::Error),       // JSON codec
     Codec(CodecError),                      // Codec trait
     FrameSerialization(SerializationError), // packet (buffa / zstd / version)
     Quic(String),                           // transport 操作 (quinn / wtransport / TLS / bind)
     Timeout,                                // request timeout
-    HandlerNotFound { method: String },     // channel-not-found nack
+    HandlerNotFound { method: String },     // broadcast 先の datagram channel が未登録
     NotConnected,
     UnsupportedTransport(String),
 }
 ```
 
-transport 直下 (`quic.rs` / `frame.rs` / `stream.rs` / `dispatch.rs` / `cert.rs` / `trust.rs`) は
-`anyhow::Result` を使い、 `server.rs` / `client.rs` の境界で `NetworkError::Quic(String)` に
-畳んでいる。 この境界は俯瞰 (2026-09-05) の MEDIUM #21 として整理予定。
+transport 直下 (`quic.rs` / `frame.rs` / `dispatch.rs` / `cert.rs` / `trust.rs` / `mesh.rs` /
+`webtransport.rs` / `addr.rs` 等) は `anyhow::Result` を使い、 `server.rs` / `client.rs` の境界で
+`NetworkError` の文字列 variant (`Quic` / `Connection` / `Protocol`) に畳んでいる。
+`stream.rs` / `channel.rs` は最初から `NetworkError` を返す。 この境界は俯瞰 (2026-09-05) の
+MEDIUM #21 として整理予定。
 
 ---
 

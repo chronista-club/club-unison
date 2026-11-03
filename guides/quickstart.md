@@ -1,8 +1,8 @@
 # クイックスタート — Unison サーバ + TypeScript クライアント
 
 KDL スキーマで定義した channel を、Rust サーバと TypeScript クライアントで
-end-to-end に疎通させるまでの手順。**ここに載るコード・コマンドは v1.0 時点で
-実際に動作するもの**（`clients/typescript/tests/integration/webtransport_e2e.test.ts`
+end-to-end に疎通させるまでの手順。**ここに載るコード・コマンドは club-unison 2.2.1 /
+TS SDK 1.2.0 時点で実際に動作するもの**（`clients/typescript/tests/integration/webtransport_e2e.test.ts`
 が実 WebTransport で検証している構成）。
 
 ---
@@ -12,7 +12,7 @@ end-to-end に疎通させるまでの手順。**ここに載るコード・コ�
 Unison は **KDL スキーマ駆動の QUIC プロトコルフレームワーク**。
 
 - **サーバ・プロトコルコア**: Rust crate `club-unison`（lib 名 `unison`）
-- **開発者 CLI**: `unison`（crate `unison-cli`）— ping / sniff / mock / schema-lint / schema-diff / schema-check
+- **開発者 CLI**: `unison`（crate `unison-cli`）— ping / call / sniff / mock / schema-lint / schema-diff / schema-check
 - **TypeScript クライアント SDK**: `@chronista-club/unison-client`
   — ブラウザ / Node.js から WebTransport 経由でサーバに直結
 
@@ -70,7 +70,7 @@ protocol "quickstart" version="1.0.0" {
 スキーマの妥当性は CLI で検証できる:
 
 ```bash
-!cargo run -p unison-cli -- schema-lint schemas/quickstart.kdl
+cargo run -p unison-cli -- schema-lint schemas/quickstart.kdl
 ```
 
 `schema-lint` は KDL syntax error に加え、datagram の `channel_id` 衝突 /
@@ -80,7 +80,7 @@ channel 名重複 / request・event 名の重複などの不変条件もチェ�
 無いかを確かめられる（壊れる変更があれば exit 1。CI 向け）:
 
 ```bash
-!cargo run -p unison-cli -- schema-diff schemas/old.kdl schemas/quickstart.kdl
+cargo run -p unison-cli -- schema-diff schemas/old.kdl schemas/quickstart.kdl
 ```
 
 判定の規則（要求と応答で逆になる）は [design/schema-diff.md](../design/schema-diff.md)。
@@ -88,7 +88,7 @@ channel 名重複 / request・event 名の重複などの不変条件もチェ�
 実際の応答 JSON が約束の型を満たすかは `schema-check` で確かめられる（満たさなければ exit 1）:
 
 ```bash
-!cargo run -p unison-cli -- schema-check schemas/quickstart.kdl --message EchoResp response.json
+cargo run -p unison-cli -- schema-check schemas/quickstart.kdl --message EchoResp response.json
 ```
 
 複数の組は `--cases`、機械が読む形は `--json`。規則は [design/schema-check.md](../design/schema-check.md)。
@@ -101,7 +101,7 @@ channel 名重複 / request・event 名の重複などの不変条件もチェ�
 channel を実装し、WebTransport ingress を開く:
 
 ```bash
-!cargo run -p club-unison --example webtransport_echo_server -- 127.0.0.1:4439
+cargo run -p club-unison --example webtransport_echo_server -- 127.0.0.1:4439
 ```
 
 起動すると stdout に 2 行を印字する（クライアントが parse する契約）:
@@ -118,10 +118,10 @@ READY addr=https://127.0.0.1:4439
 サーバ側のハンドラ実装（`webtransport_echo_server.rs` 抜粋）:
 
 ```rust
+use std::sync::Arc;
 use unison::ProtocolServer;
 use unison::network::webtransport::WebTransportServer;
 use unison::network::{MessageType, UnisonChannel};
-use unison::network::quic::UnisonStream;
 
 let server = ProtocolServer::with_identity(
     "unison-webtransport-echo", env!("CARGO_PKG_VERSION"), "example",
@@ -160,7 +160,7 @@ wt.start().await?;
 ### 4.1 channel meta を用意する
 
 クライアントは channel ごとに `ChannelMeta` を渡す。これは KDL スキーマから
-codegen される（後述）が、手書きしても良い。`echo` channel の meta:
+codegen される（[typescript-sdk.md §1](typescript-sdk.md) 参照）が、手書きしても良い。`echo` channel の meta:
 
 ```typescript
 import type { ChannelMeta } from "@chronista-club/unison-client";
@@ -200,7 +200,7 @@ await client.disconnect();
 
 ### 4.3 server push event を受信する
 
-`clock` channel は `Tick` event を 200ms 間隔で push する。event は
+`clock` channel は `Tick` event を 200ms 間隔で 3 回 push して終わる。event は
 `AsyncIterable` として読む:
 
 ```typescript
@@ -210,10 +210,15 @@ const ClockMeta = {
 } as const satisfies ChannelMeta;
 
 const clock = await client.openChannel(ClockMeta);
+let received = 0;
 for await (const ev of clock.events()) {
-  console.log(ev); // { seq: 0 }, { seq: 1 }, ...
-  // break すると iterator が閉じ、channel close へ cascade する
+  console.log(ev); // { seq: 0 }, { seq: 1 }, { seq: 2 } の 3 件で終わる
+  // サーバは 3 回送ると送らなくなるが stream は開いたままなので、iterator は
+  // 自分では終わらない。欲しい件数を受けたら break する
+  if (++received === 3) break;
 }
+// break しても channel は開いたまま。使い終わったら close する
+await clock.close();
 ```
 
 ---
@@ -265,30 +270,31 @@ Node native QUIC adapter は v1.x deferred。
 
 ```bash
 # KDL schema を検証する
-!cargo run -p unison-cli -- schema-lint schemas/quickstart.kdl
+cargo run -p unison-cli -- schema-lint schemas/quickstart.kdl
 
 # KDL schema から stub server を起動する（実バックエンド不要）
-!cargo run -p unison-cli -- mock --schema schemas/quickstart.kdl --addr '[::1]:7878'
+cargo run -p unison-cli -- mock --schema schemas/quickstart.kdl --addr '[::1]:7878'
 
 # サーバへ疎通 + RTT 計測
-!cargo run -p unison-cli -- ping 'quic://[::1]:7878'
+cargo run -p unison-cli -- ping 'quic://[::1]:7878'
 
 # channel traffic を覗く packet inspector
-!cargo run -p unison-cli -- sniff 'quic://[::1]:7878' --channel echo
+cargo run -p unison-cli -- sniff 'quic://[::1]:7878' --channel echo
 ```
 
 `mock` は KDL の `returns` 型から決定的に stub payload を組み立てて返す
-（string→`""`, number→`0`, bool→`false`, json→`{}`）。
+（string / enum→`""`、int→`0`、float→`0.0`、bool→`false`、array→`[]`、json / map→`{}`）。
+datagram channel は登録しない（stub するのは stream channel だけ）。
 
 ---
 
 ## 7. 次に読むもの
 
-- [migration.md](migration.md) — v1.0 までの破壊的変更
+- [migration.md](migration.md) — v2.0 までの破壊的変更
 - [typescript-sdk.md](typescript-sdk.md) — TS SDK API リファレンス
 - [channel-guide.md](channel-guide.md) — Rust 側 channel API
 - [spec/02-unified-channel/SPEC.md](../spec/02-unified-channel/SPEC.md) — プロトコル仕様
 
 ---
 
-**最終更新**: 2026-05-17（v1.0）
+**最終更新**: 2026-11-04（club-unison 2.2.1 / TS SDK 1.2.0）

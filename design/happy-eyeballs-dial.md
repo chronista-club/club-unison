@@ -34,7 +34,7 @@ race に乗せる候補は 2 種（[`Candidate`]）:
 
 `WldId` = location 独立の home-World 番地（ADR-020 D2）。relay 中継の宛先 routing key。
 
-**現状の実装スコープ（direct-first-cut）**: engine は direct/relay 両方を扱えるが、`QuicClient::connect_race` の adapter は **IPv6 GUA direct のみ**配線している。IPv4 は §D3 で deferred（warn して skip、silent drop はしない）。relay fallback は「別到達機構ゆえ `Transport` 抽象が要る」ため次段（§8）。
+**現状の実装スコープ（direct-first-cut）**: engine は direct/relay 両方を扱えるが、`QuicClient::connect_race` の adapter は **IPv6 direct のみ**配線している。選別は address family（`SocketAddr::is_ipv6`）だけで、GUA かどうかは見ない（ULA / loopback 等の IPv6 も race に乗る）。IPv4 は §D3 で deferred（warn して skip、silent drop はしない）。relay fallback は「別到達機構ゆえ `Transport` 抽象が要る」ため次段（§8）。
 
 ---
 
@@ -42,8 +42,8 @@ race に乗せる候補は 2 種（[`Candidate`]）:
 
 `network::dial` は 3 つに分かれる:
 
-- **`rank(candidates, my_addrs) -> Vec<Candidate>`** — 副作用ゼロの純関数（calc）。hub の opaque 順序付き候補（D2）に *消費側で* 意味を与える。
-- **`race<T, F, Fut>(candidates, my_addrs, cfg, attempt) -> Result<Winner<T>, RaceError>`** — network 非依存の generic engine（calc + タイマ）。実際の握手は呼び出し側が渡す `attempt: FnMut(Candidate) -> Fut` closure に閉じる。engine は `Candidate` の direct/relay 区別とタイマだけを見て、I/O を一切知らない。
+- **`rank(candidates) -> Vec<Candidate>`**（module private）— 副作用ゼロの純関数（calc）。hub の opaque 順序付き候補（D2）に *消費側で* 意味を与える。現状の規則は「direct は入力順を保持、relay は末尾」だけ。自アドレス等の入力は同一サイト優先を入れる段（§8）で足す。
+- **`race<T, F, Fut>(candidates, cfg, attempt) -> Result<Winner<T>, RaceError>`** — network 非依存の generic engine（calc + タイマ）。実際の握手は呼び出し側が渡す `attempt: FnMut(Candidate) -> Fut` closure に閉じる。engine は `Candidate` の direct/relay 区別とタイマだけを見て、I/O を一切知らない。
 - **adapter（action）** — `QuicClient::connect_race` が `attempt` に quinn の `endpoint.connect(addr, sni)` を閉じ込める。relay adapter（次段）は hub channel open を閉じ込める。
 
 この分離の**帰結**: 並行タイミングの状態機械を `#[tokio::test(start_paused = true)]` の**仮想時間**で決定論的にテストできる（§7）。全 `attempt` 呼び出しが同一 future 型を返すため `FuturesUnordered<Fut>` で boxing 不要。
@@ -146,7 +146,7 @@ unit test が押さえる不変条件: first-direct-wins / 黒穴 direct = stagg
   - 同一 prefix（/64, /48）共有の direct GUA を先頭へ（同一サイト・低 RTT 期待）。
   - IPv4 導入時は family interleave（v6, v4, …）で片 family 黒穴の頭独占を防ぐ。
 - **win-cache**（ADR-020 Open point #1「庭師の actual reachability」）— `Winner.rtt` を実測 RTT として蓄積し、stagger を適応化（RFC 下限 100–150ms まで詰める）。
-- **IPv4 / tailnet direct**（§D3）— 現状 IPv6 GUA のみ。adapter の family skip を解除する。
+- **IPv4 / tailnet direct**（§D3）— 現状は IPv6 のみ（family だけで選別し、GUA 判定は無い）。adapter の family skip を解除する。
 
 ---
 

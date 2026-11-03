@@ -1,19 +1,68 @@
-# 移行ガイド — v1.0 までの破壊的変更
+# 移行ガイド — v2.0 までの破壊的変更
 
-既存の caller が v1.0 へ上がる際に把握すべき破壊的変更をまとめる。
+既存の caller が v2.0 へ上がる際に把握すべき破壊的変更をまとめる。
 内容は [`CHANGELOG.md`](../CHANGELOG.md) を一次情報とする。
 
-破壊的変更は大きく 3 つ:
+破壊的変更は大きく 4 つ:
 
-1. lib 名の rename（`club_unison` → `unison`）
+0. v2.0 の呼び出し元の無い public API の削除（Rust API のみ、wire は不変）
+1. lib 名の rename（`club_unison` → `unison`、v1.0）
 2. v0.9.0 の wire format pivot（rkyv → buffa）
 3. RPC 廃止 → Unified Channel（v0.2.0、過去変更だが現行 API の前提）
 
 ---
 
+## 0. v1.9 → v2.0 — 呼び出し元の無い public API の削除
+
+2.0.0 は、workspace と利用側の repo を grep して呼び出し元が無いと確かめた public API を
+削除した major。**wire bytes は変わらない**ので、TS / Swift / Ruby client との互換は
+そのままで、client 側の変更は要らない。破壊的なのは Rust の API surface だけで、
+いずれも機械的に置き換えられる。
+
+### 置き換え
+
+| 1.9 | 2.0 |
+|---|---|
+| `server.listen(addr)` / `spawn_listen` / `spawn_listen_shared` / `spawn_listen_with_cert` / `spawn_listen_shared_with_cert` | `Arc::new(server).listener(addr).spawn()`（background、`ServerHandle` を返す）。呼び出し側で待つなら `.run()`。cert を載せるなら `.cert(src)` を挟む |
+| `ProtocolClient::new_default()` | `ProtocolClient::insecure_localhost()`（中身は同じ。証明書を検証しないことを名前で示す） |
+| `QuicClient::new()` / `QuicServer::new(server)` | `QuicClient::insecure_localhost()` / `QuicServer::builder(server).build()` |
+| `NetworkError::Protocol("channel closed")` の文字列一致 | `NetworkError::ChannelEof(_)` の match、または `err.is_normal_close()` |
+| `ConnectionEvent::Connected { remote_addr, context }` / `Disconnected { remote_addr }` の分解 | どちらも `connection_id` が増えたので `..` を足す |
+| `unison::network::quic::{UnisonStream, TypedFrame}` | `unison::network::{UnisonStream, TypedFrame}` |
+| `unison::network::quic::{read_typed_frame, write_typed_frame, CHANNEL_ACK_METHOD, FRAME_TYPE_*}` | `unison::network::frame::*` |
+| `use unison::prelude::*`（`prelude` は廃止） | 使う型を明示して import（`unison::{ProtocolClient, ProtocolServer, UnisonChannel, NetworkError, ...}`、`unison::parser::{SchemaParser, ...}`） |
+| `ProtocolServer::spawn_listen_webtransport(...)` | `WebTransportServer::new(server, cert).bind(addr)` → `start_with_shutdown` |
+
+`SchemaParser::parse` のエラー型、`UnisonPacket` の builder、`PacketType` の変換、
+証明書生成ヘルパー、`unison-agent` crate など、残りの項目は CHANGELOG の
+「Migration (1.9 → 2.0)」の表を参照。
+
+```rust
+// 旧（1.9）
+server.listen("[::1]:8080").await?;
+let client = ProtocolClient::new_default()?;
+
+// 新（2.0）
+use std::sync::Arc;
+Arc::new(server).listener("[::1]:8080").run().await?; // background なら .spawn() で ServerHandle
+let client = ProtocolClient::insecure_localhost()?;
+```
+
+channel の正常終端は文字列ではなく variant で判定する:
+
+```rust
+match channel.recv().await {
+    Ok(msg) => { /* … */ }
+    Err(e) if e.is_normal_close() => { /* 相手が channel を閉じた（ChannelEof） */ }
+    Err(e) => return Err(e),
+}
+```
+
+---
+
 ## 1. lib 名の rename — `club_unison` → `unison`
 
-**最新の破壊的変更（source-breaking）**。chronista-club 命名規則に合わせ、
+**v1.0 時点の破壊的変更（source-breaking）**。chronista-club 命名規則に合わせ、
 公開 crate の lib 名を bare name に戻した。
 
 ### 影響
@@ -88,7 +137,8 @@ v0.2.0 で **RPC を全廃し、全通信を channel に統一**した。現行 
 
 - `register_handler()` / `call()` / `open_typed_channel()` — 旧 RPC メソッド
 - `ProtocolClientTrait` / `ProtocolServerTrait` 等の旧トレイト
-- KDL の `service` / `method` / `send` / `recv` 構文
+- KDL の `service` / `method` / `send` / `recv` 構文（書いてもエラーにならず無視される。
+  schema-lint も通るので、残っていても気づきにくい）
 
 ### 置き換え
 
@@ -99,7 +149,7 @@ v0.2.0 で **RPC を全廃し、全通信を channel に統一**した。現行 
 | KDL `service` / `method` | KDL `channel` / `request` + `returns` / `event` |
 
 ```kdl
-// 旧（非推奨、削除済み）
+// 旧（廃止。書いてもエラーにならず無視される）
 service "MyService" {
     method "doThing" { ... }
 }
@@ -129,8 +179,8 @@ build.rs での証明書自動生成・埋め込みが廃止された。trust / 
 // v0.8.0+ Builder API（推奨）
 let client = QuicClient::builder()
     .trust_anchors(TrustAnchors::System)
-    .build();
-let server = QuicServer::builder(server)
+    .build()?;
+let server = QuicServer::builder(Arc::new(server))
     .cert_source(CertSource::dev_localhost())
     .build();
 ```
@@ -155,8 +205,6 @@ v0.9.0 で Rust 1.95 に bump。
 
 以下は v1.0 ではまだ対応していない:
 
-- **TypeScript codegen の datagram 対応** — Rust codegen のみ datagram 対応、
-  TS generator は v1.x
 - **proto-descriptor codegen** — `ProtoCodec` は使えるが、KDL → proto
   descriptor の自動生成は未対応
 - **Node native WebTransport** — Node では polyfill が必要
@@ -166,4 +214,4 @@ v0.9.0 で Rust 1.95 に bump。
 
 ---
 
-**最終更新**: 2026-05-17（v1.0）
+**最終更新**: 2026-11-04（v2.2.1）

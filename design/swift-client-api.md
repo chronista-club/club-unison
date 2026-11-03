@@ -1,7 +1,7 @@
 # design/swift-client-api.md — Swift Client SDK API Design
 
-**バージョン**: 0.1（v1.3.0 で stream channel GA）
-**最終更新**: 2026-06-25
+**バージョン**: 0.2（v1.3.0 で stream channel GA、v1.4.0 で auth、v2.2.0 で connection migration）
+**最終更新**: 2026-11-04
 **ステータス**: Implemented（`clients/swift`）— stream channel が実 QUIC で動作
 
 ---
@@ -23,8 +23,9 @@ semantics / version 互換は本 framework が owns し、consumer（VP の `VPP
 | transport | Apple `Network.framework` の `NWProtocolQUIC`（生 QUIC: streams + datagrams, TLS1.3） |
 | stream 多重化 | `NWMultiplexGroup` + `NWConnectionGroup`（client 起点 = `NWConnection(from:)`、server 起点 = `newConnectionHandler`） |
 | ALPN | `"unison"` 固定 = Rust `network::UNISON_ALPN`（QUIC は RFC 9001 §8.1 で ALPN 必須、Apple は強制） |
-| wire | `proto/protocol.proto` → `swift-protobuf` 生成（`Protocol_PacketHeader` / `Protocol_ProtocolMessage`） |
-| framing | typed frame `[4B BE len][1B type][UnisonPacket]`（Rust `quic.rs` と byte 一致、golden fixture 検証済み） |
+| wire | `proto/protocol.proto` → `swift-protobuf` 生成（`Protocol_PacketHeader` / `Protocol_ProtocolMessage`）。コミット済みの生成物（`clients/swift/Sources/UnisonClient/Wire/Generated/protocol.pb.swift`）は v2.0 の reserved 化以前のままで、`PacketHeader` の field 6 / 8-11 を持つ（SDK は既定値のまま送るので wire 上の bytes は一致） |
+| framing | typed frame `[4B BE len][1B type][UnisonPacket]`（Rust `network/frame.rs` と byte 一致、golden fixture 検証済み） |
+| 圧縮 | 送信は非圧縮、受信は zstd 展開（libzstd）。展開後サイズは `Packet.maxPayloadSize` = 16MB で上限（`clients/swift/Sources/UnisonClient/Wire/Packet.swift`） |
 
 ## 3. API contract
 
@@ -99,7 +100,8 @@ reserved channel meta / 定数（`AUTH_CHANNEL_NAME` = `"unison.auth"` / `AUTHEN
 
 ## 5. codegen 2 層
 
-1. **wire**: `protocol.proto` → swift-protobuf（生成物はコミット、consumer は protoc 不要）
+1. **wire**: `protocol.proto` → swift-protobuf（生成物はコミット、consumer は protoc 不要）。
+   コミット済みの生成物は v2.0 の reserved 化以前のまま（§2）
 2. **app**: KDL schema → Swift channel meta + 型（当面手書き、将来 KDL→Swift codegen）。
    consumer の `VPProtocol`（`vp-world.kdl`→Swift）は VP repo 側に置く。
 

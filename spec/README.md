@@ -70,7 +70,7 @@ Unisonプロトコルの正式な要求仕様・機能仕様です。
 ### バージョン管理
 - 各仕様書にバージョン番号を記載
 - 最終更新日を明記
-- ステータス（Draft/Approved/Deprecated）を明示
+- ステータス（Draft/Approved/Stable/Deprecated）を明示
 
 ## 関連ドキュメント
 

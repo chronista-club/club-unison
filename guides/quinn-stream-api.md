@@ -4,6 +4,8 @@
 
 QuinnはRust向けのQUIC実装で、`SendStream`（送信ストリーム）と`RecvStream`（受信ストリーム）を通じて高性能な非同期通信を提供します。本ドキュメントでは、これらのストリームAPIの詳細と効果的な使用方法を解説します。
 
+内容は **quinn 0.11 時点** のもの（club-unison の workspace が `quinn = "0.11"` を使っている）。
+
 ## SendStream - 送信ストリーム
 
 ### 基本的な書き込みメソッド
@@ -34,7 +36,7 @@ send_stream.write_chunk(data).await?;
 ```
 
 #### `write_chunks(&mut self, bufs: &mut [Bytes]) -> Result<Written>`
-複数のチャンクを一度に書き込むベクタライズドI/Oメソッドです。
+複数のチャンクを一度に書き込むメソッドです。輻輳制御・フロー制御により一部だけ書かれることがあり、`Written` に書けたチャンク数・バイト数が入ります。全部書き切るなら `write_all_chunks` を使います。
 
 ```rust
 let mut chunks = vec![
@@ -54,11 +56,11 @@ send_stream.finish()?;
 // これ以降write()は使えない
 ```
 
-#### `reset(&mut self, error_code: VarInt)`
+#### `reset(&mut self, error_code: VarInt) -> Result<(), ClosedStream>`
 ストリームを異常終了し、RESETフレームを送信します。
 
 ```rust
-send_stream.reset(VarInt::from_u32(1));
+send_stream.reset(VarInt::from_u32(1))?;
 // 未送信データは破棄される
 ```
 
@@ -72,7 +74,7 @@ if let Some(error_code) = send_stream.stopped().await? {
 ```
 
 #### `set_priority(&self, priority: i32) -> Result<()>` / `priority(&self) -> Result<i32>`
-ストリームの優先度を設定・取得します（-256 ～ 255）。
+ストリームの優先度を設定・取得します（`i32`、既定 0。値が大きいストリームのデータほど先に送られる）。
 
 ```rust
 send_stream.set_priority(100)?;  // 高優先度設定
@@ -118,7 +120,8 @@ while let Some(chunk) = recv_stream.read_chunk(4096, true).await? {
 複数のチャンクを一度に読み込みます。
 
 ```rust
-let mut chunks = Vec::with_capacity(10);
+// 読む数だけ要素を用意する（長さ 0 のスライスを渡すと何も読まずに Some(0) が返る）
+let mut chunks = vec![Bytes::new(); 10];
 if let Some(count) = recv_stream.read_chunks(&mut chunks).await? {
     println!("Read {} chunks", count);
 }
@@ -163,63 +166,59 @@ match connection.accept_bi().await {
     Ok((mut send_stream, mut recv_stream)) => {
         // 双方向ストリームの処理
     }
+    Err(e) => {
+        // 接続が閉じられた等
+        eprintln!("accept_bi failed: {}", e);
+    }
 }
 ```
 
-## ベクタライズドI/O（Vectored I/O）
+## 複数チャンクをまとめて書く（`write_chunks`）
 
 ### 概念
-ベクタライズドI/O（Scatter-Gather I/Oとも呼ばれる）は、複数の不連続なメモリ領域を1回のシステムコールで読み書きする技術です。
+`write_chunks` / `write_all_chunks` は、複数の `Bytes` を 1 回の呼び出しでストリームに積むメソッドです。名前は Scatter-Gather I/O に似ていますが、quinn では呼び出し回数とシステムコールの回数は対応しません。
 
-### 通常のI/O vs ベクタライズドI/O
+### write の回数と送信の関係
 
-#### 非効率な実装（複数回のシステムコール）
+quinn の `write` 系メソッドは、データをコネクションの送信バッファに積んでコネクションの driver を起こすだけで、その場では送信しません。UDP パケットをいつ・何個組み立てて送るかは driver が輻輳制御・フロー制御に従って決めます。複数回の write が 1 パケットにまとまることも、1 回の write が複数パケットに分かれることもあり、「write 3 回 = システムコール 3 回」にはなりません。
+
+#### 分けて書く
 ```rust
-// ❌ 3回のシステムコールが必要
-send_stream.write(header).await?;      // システムコール1
-send_stream.write(metadata).await?;    // システムコール2  
-send_stream.write(payload).await?;     // システムコール3
+// 呼び出しごとにコネクションのロックを取り、&[u8] を送信バッファへコピーする
+send_stream.write_all(&header).await?;
+send_stream.write_all(&metadata).await?;
+send_stream.write_all(&payload).await?;
 ```
 
-#### 効率的な実装（1回のシステムコール）
+#### まとめて書く
 ```rust
-// ✅ 1回のシステムコールで完了
-let mut chunks = vec![
-    Bytes::from(header),
-    Bytes::from(metadata),
-    Bytes::from(payload),
-];
-send_stream.write_chunks(&mut chunks).await?;  // システムコール1回だけ
+// 呼び出しは 1 回。Bytes は参照カウントを渡すだけで中身をコピーしない
+let mut chunks = [header, metadata, payload]; // いずれも Bytes
+send_stream.write_all_chunks(&mut chunks).await?;
 ```
 
-### なぜ効率的なのか？
+### まとめて書く利点
 
-1. **システムコールのオーバーヘッド削減**
-   - カーネルとユーザー空間の切り替えコストを最小化
-   - 1回の切り替えで複数のデータを処理
+1. **呼び出し回数とロック取得が減る**
+   - `write` 系は呼び出しごとにコネクション状態のロックを取る。まとめれば（フロー制御で待たされなければ）1 回で済む
 
-2. **メモリコピーの最小化**
-   - データを連続したバッファにコピーする必要がない
-   - 各チャンクをその場所から直接送信
+2. **コピーしない**
+   - `write` / `write_all` は渡した `&[u8]` を送信バッファ用にコピーする
+   - `write_chunk` / `write_chunks` は `Bytes` をそのまま（参照カウントで）受け取る
 
-3. **ネットワーク効率の向上**
-   - パケットの組み立てが効率化
-   - TCPセグメントの最適化
+3. **送信回数は driver が決める**
+   - まとめて書いても UDP の送信回数が減るとは限らない。パケットの組み立ては driver の仕事
 
-### 実装例：プロトコルメッセージの効率的な送信
+### 実装例：プロトコルメッセージの送信
 
 ```rust
-async fn send_message_efficient(stream: &mut SendStream, msg: Message) -> Result<()> {
-    // 各部分を個別のBytesとして準備（コピーなし）
-    let mut chunks = vec![
-        Bytes::from(msg.header.to_bytes()),
-        Bytes::from(msg.length.to_le_bytes().to_vec()),
-        Bytes::copy_from_slice(&msg.body),
-        Bytes::from(msg.checksum.to_le_bytes().to_vec()),
-    ];
-    
-    // 1回のシステムコールですべて送信
-    stream.write_chunks(&mut chunks).await?;
+async fn send_message(stream: &mut SendStream, header: Bytes, body: Bytes) -> anyhow::Result<()> {
+    // 長さ prefix だけは新しく作る（4 バイトのコピー）。header / body は Bytes のまま渡す
+    let len = Bytes::copy_from_slice(&(body.len() as u32).to_be_bytes());
+    let mut chunks = [header, len, body];
+
+    // write_chunks は一部しか書けないことがあるので、書き切る write_all_chunks を使う
+    stream.write_all_chunks(&mut chunks).await?;
     Ok(())
 }
 ```
@@ -267,7 +266,7 @@ normal.set_priority(0)?;  // 通常優先度
 match recv_stream.read(&mut buf).await {
     Ok(Some(n)) => { /* データ処理 */ },
     Ok(None) => { /* 正常終了 */ },
-    Err(e) if e.kind() == quinn::ReadError::Reset(code) => {
+    Err(quinn::ReadError::Reset(code)) => {
         // 相手がリセット
         println!("Stream reset with code: {}", code);
     },
@@ -294,52 +293,10 @@ match recv_stream.read(&mut buf).await {
 - **フロー制御**: QUICレベルで自動的にフロー制御
 - **エラー分離**: 個別のストリームエラーは接続全体に影響しない
 
-## パフォーマンス比較
-
-ベクタライズドI/Oを使用した場合の実測例：
-
-```
-1000個の小さなメッセージを送信した場合：
-
-通常のwrite（1000回のシステムコール）
-- 実行時間: 45ms
-- CPU使用率: 25%
-
-ベクタライズドI/O（10回のシステムコール、100個ずつバッチ）
-- 実行時間: 8ms
-- CPU使用率: 5%
-
-改善率：5.6倍の高速化、CPU使用率80%削減
-```
-
 ## 使用上の注意点
 
 1. **メモリ使用量**: 多くのチャンクを保持するとメモリ使用量が増える
 2. **レイテンシー vs スループット**: バッチ処理は待機時間を生む可能性
 3. **プラットフォーム依存**: OSによって最適なチャンクサイズが異なる
-
-## プロジェクトでの実装例
-
-```rust
-// unisonでの最適化例
-impl UnisonStream {
-    async fn send_optimized(&mut self, messages: Vec<ProtocolMessage>) -> Result<()> {
-        let mut chunks = Vec::new();
-        
-        for msg in messages {
-            // 各メッセージをチャンクとして準備
-            let json = serde_json::to_vec(&msg)?;
-            chunks.push(Bytes::from(json));
-        }
-        
-        // すべてのメッセージを1回で送信
-        if let Some(stream) = self.send_stream.lock().await.as_mut() {
-            stream.write_chunks(&mut chunks).await?;
-        }
-        
-        Ok(())
-    }
-}
-```
 
 このドキュメントは、QuinnのストリームAPIを効果的に使用するための包括的なガイドです。プロジェクトの要件に応じて、適切なメソッドと最適化手法を選択してください。
