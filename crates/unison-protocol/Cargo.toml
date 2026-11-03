@@ -37,7 +37,6 @@ tokio.workspace = true
 # QUIC support
 quinn.workspace = true
 rustls.workspace = true
-rustls-pemfile.workspace = true
 rcgen.workspace = true
 webpki-roots.workspace = true
 futures-util.workspace = true
