@@ -21,6 +21,7 @@ use rcgen::{
     KeyUsagePurpose,
 };
 use rustls::crypto::ring::sign::any_supported_type;
+use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::sign::CertifiedKey;
 use time::{Duration, OffsetDateTime};
@@ -173,10 +174,8 @@ impl MeshCa {
             .context("MeshCa: parsing CA certificate PEM")?;
         // `Issuer` は CA cert DER を保持しない (rcgen の設計) ため、rustls 用の
         // trust anchor / leaf chain に渡す DER は PEM から独立に取り出す。
-        let ca_cert_der = rustls_pemfile::certs(&mut ca_cert_pem.as_bytes())
-            .next()
-            .context("MeshCa: no certificate found in CA PEM")?
-            .context("MeshCa: parsing CA certificate PEM")?;
+        let ca_cert_der = CertificateDer::from_pem_slice(ca_cert_pem.as_bytes())
+            .map_err(|e| anyhow::anyhow!("MeshCa: parsing CA certificate PEM: {e}"))?;
 
         Ok(Self {
             issuer,

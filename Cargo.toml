@@ -7,7 +7,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "2.2.0"
+version = "2.2.1"
 edition = "2024"
 authors = ["Mako<mito@chronista.club>"]
 license = "MIT"
@@ -26,7 +26,6 @@ tokio = { version = "1.52", features = ["full"] }
 # QUIC support
 quinn = "0.11"
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
-rustls-pemfile = "2.2"
 # x509-parser feature: MeshCa::from_pem が CA cert PEM から Issuer を
 # 復元する (Issuer::from_ca_cert_pem) のに必要。
 rcgen = { version = "0.14", features = ["x509-parser"] }
@@ -51,7 +50,7 @@ sha2 = "0.11"
 
 # Packet module dependencies
 bytes = "1.11"
-zstd = "0.13"
+zstd = "0.14.3"
 
 # CLI
 clap = { version = "4.6", features = ["derive", "cargo", "color"] }

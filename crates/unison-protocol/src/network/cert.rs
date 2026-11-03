@@ -36,6 +36,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use rustls::crypto::ring::sign::any_supported_type;
+use rustls::pki_types::pem::{self, PemObject};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::sign::CertifiedKey;
 
@@ -142,21 +143,11 @@ impl CertSource {
                 let key_pem_bytes = std::fs::read(key_path)
                     .with_context(|| format!("failed to read key file: {}", key_path.display()))?;
 
-                let certs: Vec<Vec<u8>> = rustls_pemfile::certs(&mut cert_pem.as_bytes())
-                    .collect::<std::result::Result<Vec<_>, _>>()
-                    .with_context(|| format!("failed to parse cert PEM: {}", cert_path.display()))?
+                let certs = certs_from_pem(&cert_pem, cert_path)?
                     .into_iter()
                     .map(|c| c.to_vec())
                     .collect();
-                if certs.is_empty() {
-                    anyhow::bail!("no certificates found in {}", cert_path.display());
-                }
-
-                let key = rustls_pemfile::private_key(&mut key_pem_bytes.as_slice())
-                    .with_context(|| format!("failed to parse key PEM: {}", key_path.display()))?
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("no private key found in {}", key_path.display())
-                    })?;
+                let key = private_key_from_pem(&key_pem_bytes, key_path)?;
                 Ok((certs, key.secret_der().to_vec()))
             }
             Self::Provided { .. } => anyhow::bail!(
@@ -225,6 +216,28 @@ pub(super) fn generate_webtransport_self_signed(
     Ok(rcgen::CertifiedKey { cert, signing_key })
 }
 
+/// PEM の CERTIFICATE section を全部読む。 1 つも無ければ error。
+///
+/// `pem::Error` の `std::error::Error` 実装は pki-types の `std` feature 付きでしか
+/// 入らないので、 `Display` だけで anyhow に変換する。
+fn certs_from_pem(cert_pem: &str, path: &std::path::Path) -> Result<Vec<CertificateDer<'static>>> {
+    let certs = CertificateDer::pem_slice_iter(cert_pem.as_bytes())
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| anyhow::anyhow!("failed to parse cert PEM: {}: {e}", path.display()))?;
+    if certs.is_empty() {
+        anyhow::bail!("no certificates found in {}", path.display());
+    }
+    Ok(certs)
+}
+
+/// PEM から最初の秘密鍵 (PKCS#1 / PKCS#8 / SEC1) を読む。
+fn private_key_from_pem(key_pem: &[u8], path: &std::path::Path) -> Result<PrivateKeyDer<'static>> {
+    PrivateKeyDer::from_pem_slice(key_pem).map_err(|e| match e {
+        pem::Error::NoItemsFound => anyhow::anyhow!("no private key found in {}", path.display()),
+        e => anyhow::anyhow!("failed to parse key PEM: {}: {e}", path.display()),
+    })
+}
+
 fn load_from_files(
     cert_path: &std::path::Path,
     key_path: &std::path::Path,
@@ -234,19 +247,112 @@ fn load_from_files(
     let key_pem_bytes = std::fs::read(key_path)
         .with_context(|| format!("failed to read key file: {}", key_path.display()))?;
 
-    let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_pem.as_bytes())
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .with_context(|| format!("failed to parse cert PEM: {}", cert_path.display()))?;
-    if certs.is_empty() {
-        anyhow::bail!("no certificates found in {}", cert_path.display());
-    }
-
-    let private_key = rustls_pemfile::private_key(&mut key_pem_bytes.as_slice())
-        .with_context(|| format!("failed to parse key PEM: {}", key_path.display()))?
-        .ok_or_else(|| anyhow::anyhow!("no private key found in {}", key_path.display()))?;
+    let certs = certs_from_pem(&cert_pem, cert_path)?;
+    let private_key = private_key_from_pem(&key_pem_bytes, key_path)?;
 
     let signing_key = any_supported_type(&private_key)
         .map_err(|e| anyhow::anyhow!("rustls signing_key build: {}", e))?;
 
     Ok(Arc::new(CertifiedKey::new(certs, signing_key)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    /// rcgen で作った `(cert PEM, key PEM, cert DER, key DER)`
+    fn generated_pem() -> (String, String, Vec<u8>, Vec<u8>) {
+        let ck = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        (
+            ck.cert.pem(),
+            ck.signing_key.serialize_pem(),
+            ck.cert.der().to_vec(),
+            ck.signing_key.serialize_der(),
+        )
+    }
+
+    /// `dir` に cert / key を書き、 それを指す `FromFile` を返す
+    fn from_file(dir: &Path, cert_pem: &str, key_pem: &str) -> CertSource {
+        let cert_path = dir.join("tls.crt");
+        let key_path = dir.join("tls.key");
+        std::fs::write(&cert_path, cert_pem).unwrap();
+        std::fs::write(&key_path, key_pem).unwrap();
+        CertSource::FromFile {
+            cert_path,
+            key_path,
+        }
+    }
+
+    #[test]
+    fn from_file_loads_cert_and_key_pem() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert_pem, key_pem, cert_der, key_der) = generated_pem();
+        let source = from_file(dir.path(), &cert_pem, &key_pem);
+
+        let (certs, key) = source.resolve_der().unwrap();
+        assert_eq!(certs, vec![cert_der.clone()]);
+        assert_eq!(key, key_der);
+
+        let certified = source.resolve().unwrap();
+        assert_eq!(certified.cert.len(), 1);
+        assert_eq!(certified.cert[0].as_ref(), cert_der.as_slice());
+    }
+
+    #[test]
+    fn from_file_rejects_key_file_without_private_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert_pem, _, _, _) = generated_pem();
+        // key file に cert しか無い (= 秘密鍵の section が無い)
+        let source = from_file(dir.path(), &cert_pem, &cert_pem);
+
+        let err = source.resolve_der().unwrap_err();
+        assert!(
+            format!("{err:#}").contains("no private key found"),
+            "{err:#}"
+        );
+        let err = source.resolve().unwrap_err();
+        assert!(
+            format!("{err:#}").contains("no private key found"),
+            "{err:#}"
+        );
+    }
+
+    #[test]
+    fn from_file_rejects_cert_file_without_certificate() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, key_pem, _, _) = generated_pem();
+        // cert file に秘密鍵しか無い
+        let source = from_file(dir.path(), &key_pem, &key_pem);
+
+        let err = source.resolve_der().unwrap_err();
+        assert!(
+            format!("{err:#}").contains("no certificates found"),
+            "{err:#}"
+        );
+        let err = source.resolve().unwrap_err();
+        assert!(
+            format!("{err:#}").contains("no certificates found"),
+            "{err:#}"
+        );
+    }
+
+    #[test]
+    fn from_file_rejects_broken_cert_pem() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, key_pem, _, _) = generated_pem();
+        let broken = "-----BEGIN CERTIFICATE-----\n!!!!\n-----END CERTIFICATE-----\n";
+        let source = from_file(dir.path(), broken, &key_pem);
+
+        let err = source.resolve_der().unwrap_err();
+        assert!(
+            format!("{err:#}").contains("failed to parse cert PEM"),
+            "{err:#}"
+        );
+        let err = source.resolve().unwrap_err();
+        assert!(
+            format!("{err:#}").contains("failed to parse cert PEM"),
+            "{err:#}"
+        );
+    }
 }

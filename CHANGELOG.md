@@ -6,6 +6,36 @@
 このプロジェクトは [セマンティックバージョニング](https://semver.org/lang/ja/) に準拠しています。
 ## [Unreleased]
 
+## [2.2.1] - 2026-11-04 — 圧縮 payload の展開上限と依存の advisory 対応
+
+> 2026-10-21 の security-audit と依存の照合で見つかった問題の修正。公開 API と
+> wire bytes は変わらない。
+
+### Security
+
+- 圧縮 payload を、header が申告した展開後サイズで打ち切って展開する。これまでは
+  `zstd::stream::decode_all` で全量を展開してからサイズを検査していたため、
+  認証前のピアが 8MB 以内のフレームひとつで任意量のメモリを確保させられた (#122)。
+- Swift client: peer が申告した展開後サイズ (`payloadLength`) を、確保する前に
+  16MB (= Rust の既定 `max_payload_size`) で弾く。これまでは最大 4GB をそのまま
+  確保していた (#122)。
+- zstd を 0.14.3 に上げ、RUSTSEC-2026-0391 / 0398 / 0403 ほか zstd-safe の
+  unsound 指摘を外す (#123)。
+
+### Changed
+
+- unmaintained の `rustls-pemfile` (RUSTSEC-2025-0134) を外し、rustls の
+  `pki_types::pem::PemObject` で PEM を読む。`CertSource::FromFile` の読み込みと
+  エラーメッセージは変わらない (#124)。
+- Ruby native extension の依存ロックを互換範囲内の最新に更新し、quinn-proto
+  0.11.14 / rustls 0.23.40 などに残っていた advisory 16 件を外す (#124)。
+- TypeScript client の dev 依存を `npm audit fix` で更新 (#124)。
+
+### Docs
+
+- `design/connection-auth.md`: datagram handler が principal を読めるとしていた
+  記述を、既知の制約 (ctx を受け取らない) と揃える (#122)。
+
 ## [2.2.0] - 2026-10-22 — Swift QUIC の回線切り替え対応
 
 ### Added
