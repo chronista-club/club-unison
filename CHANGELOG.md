@@ -19,6 +19,41 @@
   その接続の相手の `SocketAddr` を引ける。 「loopback からの接続にだけ答える」 のような
   判定を、 listener を分けずに handler の中で書ける。 server 側の ctx のみ値を返し、
   client 側は `None`。 返すのは呼んだ時点のアドレス (connection migration で変わりうる)。
+### Fixed
+
+- **Swift client: `disconnect()` しても UDP socket が残る**。 Network.framework は、
+  cancel されない stream (`NWConnection`) が 1 本でも残ると QUIC 接続と socket を
+  生かし続ける。 server が接続直後に開く identity stream (受け取り手がいないまま
+  残る) と、 閉じ忘れた channel の stream を、 `disconnect()` で全部閉じるようにした。
+  `disconnect()` / `close()` を呼ばずに `Connection` / `StreamChannel` を手放した場合、
+  open に失敗した stream、 読み終えた identity stream、 接続に失敗した group も閉じる。
+  (lnx creare で、 つなぎ直すたびに 1 本ずつ溜まり、 一晩で 1,497 本になっていた。)
+- **Swift client: 待ちが Task の cancel に応じない**。 `connect` / `openChannel` /
+  `request` / `serverIdentity` は、 cancel されたら `CancellationError` で戻る。 これまでは
+  `withThrowingTaskGroup` で期限と競わせても、 期限で戻れなかった。
+- **Swift client: 受信が終わった channel への request が永久に返らない**。 server が
+  stream を閉じた / 壊れた frame を受けたあとの request は、 待たずに失敗する。
+- **Swift client: 相手からの切断で `.disconnected` が出ない**。 `connectionEvents` は、
+  server が接続を閉じた場合や経路が失敗した場合にも `.disconnected(reason:)` を流す。
+  server が接続を閉じてから終われば即時、 黙って消えた場合 (crash / kill) は QUIC の
+  idle timeout (最大 30 秒) で検知する。
+- **Swift client: `events` を途中でやめると、 以降の event が全部消える**。 `break` しても
+  channel は開いたままで、 もう一度回せば続きから読める。
+- Swift client: `serverIdentity()` を同時に呼ぶと片方が永久に返らない。 identity の
+  読み込みを接続で 1 本にまとめ、 同時に呼んだ全員が同じ値を受け取る。 2 回目以降は
+  読めた値を返す。
+
+### Changed
+
+- **Swift client: 待ちに既定の期限が付く**。 `request` は 30 秒 (= Rust `UnisonChannel`
+  と同じ)、 `openChannel` と `serverIdentity` は 5 秒で `UnisonError.timeout` を投げる。
+  これまでは無期限に待っていた。 `timeout:` 引数で変えられ、 `nil` で期限なし。
+- Swift client: `connect` の 10 秒の期限切れは、 `UnisonError.transport("QUIC connect
+  timeout")` ではなく `UnisonError.timeout` を投げる (= 期限切れの error を 1 つに揃える)。
+- Swift client: 読まれていない event は 256 件まで溜め、 超えた分は捨てる (= Rust と
+  同じ上限。 これまでは無制限に溜めていた)。
+- Swift client: `ChannelTransport` に `onClosed(_:)` を追加 (既定の実装あり)。 独自の
+  transport は、 これを実装すると相手からの切断を `connectionEvents` に流せる。
 
 ## [2.2.1] - 2026-11-04 — 圧縮 payload の展開上限と依存の advisory 対応
 

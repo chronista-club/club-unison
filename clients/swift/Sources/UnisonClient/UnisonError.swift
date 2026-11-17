@@ -10,7 +10,8 @@ public enum UnisonError: Error, Sendable {
     case channelRejected(channel: String, reason: String)
     /// wire メッセージの encode / decode に失敗した。
     case codec(String)
-    /// request がタイムアウトした。
+    /// 期限までに終わらなかった (= connect の 10 秒、 openChannel / request /
+    /// serverIdentity の `timeout:`)。
     case timeout
     /// connection-level auth が server の verifier に拒否された (= AuthResult.ok == false)。
     case authenticationDenied
