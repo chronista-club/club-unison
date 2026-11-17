@@ -34,7 +34,7 @@ channel "name" from="client" lifetime="persistent" {
 }
 ```
 
-旧 `service` / `method` / `send` / `recv` 構文は非推奨。
+知らない名前の node（旧 `service` / `method` / `send` / `recv` 構文、タイプミス）は parse error になる。
 
 ## テスト
 

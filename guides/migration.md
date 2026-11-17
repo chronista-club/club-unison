@@ -1,14 +1,34 @@
-# 移行ガイド — v2.0 までの破壊的変更
+# 移行ガイド — v2.3 までの破壊的変更
 
-既存の caller が v2.0 へ上がる際に把握すべき破壊的変更をまとめる。
+既存の caller が v2.3 へ上がる際に把握すべき破壊的変更をまとめる。
 内容は [`CHANGELOG.md`](../CHANGELOG.md) を一次情報とする。
 
-破壊的変更は大きく 4 つ:
+破壊的変更は大きく 4 つと、v2.3 で厳しくなった挙動が 1 つ:
 
+- v2.3 の KDL schema の厳格化（知らない名前の node が parse error。下の節）
 0. v2.0 の呼び出し元の無い public API の削除（Rust API のみ、wire は不変）
 1. lib 名の rename（`club_unison` → `unison`、v1.0）
 2. v0.9.0 の wire format pivot（rkyv → buffa）
 3. RPC 廃止 → Unified Channel（v0.2.0、過去変更だが現行 API の前提）
+
+---
+
+## v2.2 → v2.3 — schema の知らない node が parse error になる
+
+2.2 までの `SchemaParser` は、その位置に書けない名前の node を黙って捨てていた。
+旧構文（`service` / `send` / `recv`）や `requst` のようなタイプミスが、`schema-lint` も
+通る「空の channel」として読まれていた。2.3 からは parse error になる:
+
+```
+unknown node "send" in protocol "x" > channel "users" (allowed: request, event)
+```
+
+- 上げる前に `unison schema-lint <file>` を通す。エラーが出たら、その node を直すか消す
+- 一時的に外したい node は `/-`（KDL のコメントアウト）を付ける
+- server / client / MCP が読み込む schema も同じ規則で弾かれる（= 起動時に気づける）
+- `schema-check` / `schema-diff` だけは、他の方言の約束（top level に `route` などを持つ
+  もの）を読めるよう、top level の知らない node を読み飛ばす
+- Rust の API と wire bytes は変わらない
 
 ---
 
@@ -137,8 +157,8 @@ v0.2.0 で **RPC を全廃し、全通信を channel に統一**した。現行 
 
 - `register_handler()` / `call()` / `open_typed_channel()` — 旧 RPC メソッド
 - `ProtocolClientTrait` / `ProtocolServerTrait` 等の旧トレイト
-- KDL の `service` / `method` / `send` / `recv` 構文（書いてもエラーにならず無視される。
-  schema-lint も通るので、残っていても気づきにくい）
+- KDL の `service` / `method` / `send` / `recv` 構文（2.3.0 から parse error。知らない名前の
+  node はすべて弾かれる。2.2 以前は黙って無視され、空の channel として読まれていた）
 
 ### 置き換え
 
@@ -149,7 +169,7 @@ v0.2.0 で **RPC を全廃し、全通信を channel に統一**した。現行 
 | KDL `service` / `method` | KDL `channel` / `request` + `returns` / `event` |
 
 ```kdl
-// 旧（廃止。書いてもエラーにならず無視される）
+// 旧（廃止。2.3.0 から parse error）
 service "MyService" {
     method "doThing" { ... }
 }

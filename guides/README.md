@@ -17,7 +17,7 @@
 |-------|------|
 | [integration-guide.md](integration-guide.md) | 呼び出し側プロジェクトへ Unison 統合を組み込むためのオンボーディング（ここから始める） |
 | [quickstart.md](quickstart.md) | Unison サーバ + TypeScript クライアントを end-to-end で疎通させる |
-| [migration.md](migration.md) | v2.0 までの破壊的変更と移行手順 |
+| [migration.md](migration.md) | v2.3 までの破壊的変更と移行手順 |
 | [typescript-sdk.md](typescript-sdk.md) | TypeScript クライアント SDK の API リファレンス |
 | [channel-guide.md](channel-guide.md) | Rust 側 UnisonChannel API の実践ガイド |
 | [quinn-stream-api.md](quinn-stream-api.md) | Quinn（QUIC実装）のストリームAPIの使い方 |

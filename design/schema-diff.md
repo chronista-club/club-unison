@@ -97,7 +97,7 @@ field "labels" type="map" keys="string" values="Label"
 
 - CLI: `unison schema-diff <old.kdl> <new.kdl> [--unknown-direction both|skip] [--lenient-enum-additions]`
 - 出力: 警告は `!`、壊れる変更は `✗` で stderr に場所つきで並べる。壊れる変更があれば exit 1、無ければ `✓` を stdout に出して exit 0
-- 未知 node の属性は `kdl` crate で生の文書を読んで拾う（`SchemaParser` は未知 node を捨てるため）
+- 約束は `SchemaParser::parse_contract` で読む（top level の未知 node を読み飛ばす。`parse` は未知 node を弾く）。未知 node の属性は `kdl` crate で生の文書を読んで拾う
 - テスト: `schema_diff.rs` の unit test（判定表の各行、向きの伝播、未知 node の種、enum の向き）
 
 ### 既知の制約

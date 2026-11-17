@@ -1,7 +1,7 @@
 // creo-memories `apps/creo-app-server/contracts/ios/1.0.1-b11.kdl` (Creo iOS 1.0.1 build 11 の
 // REST の約束) から、schema-check の受け入れテストに使う部分だけを抜いたもの。
 // 一覧の応答 → 要素 (message) → 入れ子 (items) / 任意 field / 要求側の enum を含む。
-// `route` は Creo 独自の node で、Unison の parser は読み飛ばす。
+// `route` は Creo 独自の node で、`SchemaParser::parse_contract` は読み飛ばす (`parse` は弾く)。
 
 protocol "creo-ios-rest" version="1.0.1-b11" {
     description "Creo iOS 1.0.1 (11) が使う REST の口 (抜粋)"

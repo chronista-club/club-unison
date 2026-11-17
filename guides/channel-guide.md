@@ -57,7 +57,7 @@ protocol "my-protocol" version="1.0.0" {
 |------|------|
 | `request` + `returns` | Request/Response パターン（応答あり） |
 | `event` | 一方向イベント（応答不要） |
-| `send` / `recv` | 廃止。書いてもエラーにならず無視される（schema-lint も通る）ので使わない |
+| `send` / `recv` | 廃止。書くと parse error（知らない node はすべて弾かれる。2.3.0 から） |
 
 ### 2.2 サーバー: register_channel
 
