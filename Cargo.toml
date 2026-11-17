@@ -21,7 +21,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Async runtime
-tokio = { version = "1.52", features = ["full"] }
+tokio = { version = "1.54", features = ["full"] }
 
 # QUIC support
 quinn = "0.11"
@@ -42,14 +42,14 @@ thiserror = "2.0"
 anyhow = "1.0"
 
 # Protocol Buffers
-buffa = "0.9.1"
-buffa-build = "0.9.1"
+buffa = "0.9.2"
+buffa-build = "0.9.2"
 
 # Hashing (= unison.discovery channel の protocol KDL hash 用)
 sha2 = "0.11"
 
 # Packet module dependencies
-bytes = "1.11"
+bytes = "1.12"
 zstd = "0.14.3"
 
 # CLI
@@ -59,24 +59,24 @@ clap = { version = "4.6", features = ["derive", "cargo", "color"] }
 # default = [base64, macros, server]。macros（`#[tool]` 系）は未使用のため
 # default-features = false で切り、必要な feature のみ明示列挙する。
 # elicitation + schemars は `Peer::elicit`（endpoint 未設定時のユーザー質問）用。
-rmcp = { version = "3.5", default-features = false, features = ["server", "transport-io", "base64", "elicitation", "schemars"] }
+rmcp = { version = "3.8", default-features = false, features = ["server", "transport-io", "base64", "elicitation", "schemars"] }
 schemars = "1"
 
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1.23", features = ["v4", "v7", "serde"] }
+uuid = { version = "1.29", features = ["v4", "v7", "serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-stream = "0.3"
 tempfile = "3.27"
-kdl = "6.5.0"
-club-kdl = "0.14"
+kdl = "6.7.1"
+club-kdl = "0.17"
 
 # Dev dependencies
 pretty_assertions = "1.4"
 tokio-test = "0.4"
 criterion = { version = "0.8", features = ["async_tokio", "html_reports"] }
-hdrhistogram = "7.5"
+hdrhistogram = "7.6"
 
 [profile.dev]
 split-debuginfo = "unpacked"

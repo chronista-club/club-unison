@@ -38,6 +38,9 @@ channel "name" from="client" lifetime="persistent" {
 
 ## テスト
 
+開発用の Rust toolchain は `.mise.toml` で指定する（`mise install`）。MSRV は
+`Cargo.toml` の `rust-version`（1.95）で、CI の `MSRV` job が別に守る。
+
 ```bash
 # 標準テスト実行 (lib unit + Small の integration test)
 RUSTFLAGS="-C symbol-mangling-version=v0" cargo test --workspace
