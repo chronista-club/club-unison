@@ -386,7 +386,7 @@ const client = await unisonClient.connect({ url: "..." });
 ### 8.1 ESM only (= no CommonJS)
 
 理由:
-- Modern target (= browsers + Node.js 18+) は ESM native
+- Modern target (= browsers + Node.js 26+、 package.json の `engines`) は ESM native
 - CJS 同梱は bundle size + maintenance cost
 - caller dev tool (= vite / next / etc.) は ESM 前提
 
