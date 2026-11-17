@@ -17,10 +17,11 @@
 |-------|------|
 | [integration-guide.md](integration-guide.md) | 呼び出し側プロジェクトへ Unison 統合を組み込むためのオンボーディング（ここから始める） |
 | [quickstart.md](quickstart.md) | Unison サーバ + TypeScript クライアントを end-to-end で疎通させる |
-| [migration.md](migration.md) | v1.0 までの破壊的変更と移行手順 |
+| [migration.md](migration.md) | v2.0 までの破壊的変更と移行手順 |
 | [typescript-sdk.md](typescript-sdk.md) | TypeScript クライアント SDK の API リファレンス |
 | [channel-guide.md](channel-guide.md) | Rust 側 UnisonChannel API の実践ガイド |
 | [quinn-stream-api.md](quinn-stream-api.md) | Quinn（QUIC実装）のストリームAPIの使い方 |
+| [swift-handover.md](swift-handover.md) | Swift SDK の回線切り替え（QUIC handover）を実機で確認する手順と記録 |
 
 ## ガイドの書き方
 

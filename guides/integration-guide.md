@@ -23,7 +23,7 @@ Unison は **KDL スキーマ駆動の QUIC プロトコルフレームワーク
 - **太い Rust サーバ** — TLS・accept loop・接続管理・channel 多重化の複雑さを
   Rust crate `club-unison`（lib 名 `unison`）に閉じ込める。
 - **細い polyglot クライアント** — 各言語の薄い SDK。TypeScript SDK は
-  `@chronista-club/unison-client`（npm、`1.0.0-rc.1`）。ブラウザ / Node から
+  `@chronista-club/unison-client`（npm、1.2.0）。ブラウザ / Node から
   WebTransport で直結する。
 
 呼び出し側がやることは「サーバが公開した channel に接続して使う」だけ。
@@ -77,7 +77,8 @@ sequenceDiagram
 - `connect()` は WebTransport 接続を確立し、サーバが接続直後に送る
   **identity stream** を待ってから resolve する（`awaitIdentity` で制御可能）。
 - `openChannel()` は bidi stream を 1 本開き、`open` → `open_ack` の handshake を
-  経てから resolve する。サーバがその channel を accept しないと timeout で reject する。
+  経てから resolve する。サーバにその channel が無ければ即座に reject（nack）、
+  応答が無ければ `openTimeoutMs`（既定 5000ms）で reject する。
 - `openDatagramChannel()` は共有 datagram path 上の仮想 channel。handshake はなく
   同期的に返る。
 - ライブラリは **auto-reconnect しない**。`client.events()` で `disconnected` を
@@ -90,8 +91,19 @@ sequenceDiagram
 ### ① SDK をインストール
 
 ```bash
-!npm install @chronista-club/unison-client@1.0.0-rc.1
+npm install @chronista-club/unison-client
 ```
+
+> **CLI と example は club-unison のリポジトリ内で動かす**: この節以降の
+> `cargo run -p unison-cli …`（`unison-cli` は crates.io に公開していない）と
+> `cargo run -p club-unison --example …` は、club-unison を clone してその中で実行する。
+> スキーマは呼び出し側プロジェクトのパスを渡す（以下の `schemas/vp-dashboard.kdl` は
+> 呼び出し側のパスに読み替える）。
+>
+> ```bash
+> git clone https://github.com/chronista-club/club-unison && cd club-unison
+> cargo run -p unison-cli -- schema-lint ../my-app/schemas/vp-dashboard.kdl
+> ```
 
 ### ② KDL channel schema を書く
 
@@ -123,7 +135,9 @@ protocol "vp-dashboard" version="1.0.0" {
     // dashboard control (= client → server、request/response)
     channel "control" from="client" lifetime="persistent" {
         request "SubscribeMetric" {
-            field "names" type="array"
+            // string の配列。配列型の書き方が unison と club-kdl-codegen で揃っていないので
+            // 両方を通る json にしておく（§3③ の注記を参照）
+            field "names" type="json"
             returns "Subscribed" {
                 field "ok" type="bool"
             }
@@ -144,7 +158,7 @@ protocol "vp-dashboard" version="1.0.0" {
 スキーマの妥当性は CLI で検証する:
 
 ```bash
-!cargo run -p unison-cli -- schema-lint schemas/vp-dashboard.kdl
+cargo run -p unison-cli -- schema-lint schemas/vp-dashboard.kdl
 ```
 
 ### ③ TS 型を生成する
@@ -153,8 +167,8 @@ Unison は **KDL スキーマが型の SSOT**。コード生成は `club-kdl-cod
 分離されている（club-unison 本体からは独立、crates.io で公開）。CLI で TS 型を生成:
 
 ```bash
-!cargo install club-kdl-codegen
-!club-kdl-codegen schemas/vp-dashboard.kdl --target typescript > generated/vp-protocol.ts
+cargo install club-kdl-codegen
+club-kdl-codegen schemas/vp-dashboard.kdl --target typescript > generated/vp-protocol.ts
 ```
 
 生成物は channel ごとに以下を吐く:
@@ -164,10 +178,16 @@ Unison は **KDL スキーマが型の SSOT**。コード生成は `club-kdl-cod
 - `as const` の `ChannelMeta`（`__types` phantom carrier 込み — これにより
   `events()` / `request()` が生成 interface に型 narrow される）
 
-> **codegen の対応範囲**: `club-kdl-codegen 0.9.0` で stream channel + datagram channel
+> **codegen の対応範囲**: `club-kdl-codegen`（0.17.0 で確認）で stream channel + datagram channel
 > どちらも codegen 動く。 datagram channel は専用 field `channelId` も含めて生成される
 > （2026-05-26 の Vantage Point dogfood で検証済み）。 datagram の `ChannelMeta` 手書きは [`vp-dashboard.ts` example](../clients/typescript/examples/vp-dashboard.ts)
 > に教材として残っているが、実 use では codegen 経由を推奨。
+
+> **配列型の書き方が揃っていない**: unison（`schema-lint` / `mock` / `schema-check`）は
+> 配列を `type="array" items="T"` と書き、club-kdl-codegen は `type="array<T>"` と書く。
+> club-kdl-codegen は `type="array"` を未知の型として失敗し、unison は `array<T>` を配列と
+> 解釈しない（未知の custom 型として扱う）。両方を通す書き方は現状 `type="json"` だけなので、
+> ② の `names` はそうしている（生成される TS の型は `any`）。
 
 ### ④ 呼び出し側コードを書く
 
@@ -179,7 +199,7 @@ PART A がそのまま「呼び出し側が書きたいコード」の範。具�
 接続先の Unison server（Rust）が必要。dev では同梱の echo サーバ example が最短:
 
 ```bash
-!cargo run -p club-unison --example webtransport_echo_server -- 127.0.0.1:4439
+cargo run -p club-unison --example webtransport_echo_server -- 127.0.0.1:4439
 ```
 
 起動すると stdout に 2 行を印字する（呼び出し側が parse する契約）:
@@ -205,7 +225,7 @@ VP dashboard が `metric`（datagram）/ `agent_status`（stream event）/ `cont
 
 ```typescript
 import { connect } from "@chronista-club/unison-client";
-// codegen 出力（datagram meta は手書き、§3③ 参照）
+// codegen 出力（stream / datagram とも、§3③ 参照）
 import {
   MetricChannelMeta, type MetricUpdate,
   AgentStatusChannelMeta,
@@ -260,7 +280,7 @@ async function runDashboard(): Promise<void> {
     }
   })();
 
-  // --- cleanup（break / close で iterator が閉じ channel teardown へ cascade）---
+  // --- cleanup（close すると iterator も終わる。break だけでは channel は閉じない）---
   await metricChan.close();
   await agentChan.close();
   await control.close();
@@ -282,15 +302,13 @@ API の要点:
 
 ---
 
-## 5. rc 段階の正直な前提
+## 5. 現時点の前提（1.2.0）
 
-`1.0.0-rc.1` は実用可能だが、過大広告はしない。採用判断のために前提を明示する:
+1.2.0 は実用可能だが、過大広告はしない。採用判断のために前提を明示する:
 
 - **codec は JSON で運用**。`connect()` の `codec` default は `JsonCodec`。
   `ProtoCodec` も export されているが、KDL → proto descriptor の自動 codegen は
-  **v1.x deferred**。rc では JSON codec 一本で問題ない。
-- **datagram channel の TS codegen は未対応**。datagram の `ChannelMeta` は手書きする
-  （§3③、`vp-dashboard.ts` が範）。stream channel の codegen は v1.0 で動く。
+  **v1.x deferred**。現時点では JSON codec 一本で問題ない。
 - **ブラウザは Chromium 系のみ公式サポート**（Chrome / Edge / Opera 95+、native
   WebTransport）。Safari 18+ は stream が実装中、Firefox は flag 必要。
 - **Node から使うには polyfill が要る**。Node に native WebTransport は無いので
@@ -310,7 +328,7 @@ API の要点:
 |---|---|
 | end-to-end の動かし方（echo サーバ + TS client の疎通） | [`quickstart.md`](quickstart.md) |
 | TS SDK の API リファレンス（各 API の詳細） | [`typescript-sdk.md`](typescript-sdk.md) |
-| v1.0 までの破壊的変更と移行手順 | [`migration.md`](migration.md) |
+| v2.0 までの破壊的変更と移行手順 | [`migration.md`](migration.md) |
 | Rust 側 channel API（サーバ実装） | [`channel-guide.md`](channel-guide.md) |
 | 動くフル example（mock server harness 込み） | [`clients/typescript/examples/vp-dashboard.ts`](../clients/typescript/examples/vp-dashboard.ts) |
 | TS client SDK の設計契約・VP use case | [`design/typescript-client-api.md`](../design/typescript-client-api.md) |
@@ -320,15 +338,15 @@ API の要点:
 
 ```bash
 # KDL schema を検証
-!cargo run -p unison-cli -- schema-lint schemas/vp-dashboard.kdl
+cargo run -p unison-cli -- schema-lint schemas/vp-dashboard.kdl
 # KDL schema から stub server を起動（実バックエンド不要）
-!cargo run -p unison-cli -- mock --schema schemas/vp-dashboard.kdl --addr '[::1]:7878'
+cargo run -p unison-cli -- mock --schema schemas/vp-dashboard.kdl --addr '[::1]:7878'
 # サーバへ疎通 + RTT 計測
-!cargo run -p unison-cli -- ping 'quic://[::1]:7878'
-# channel traffic を覗く packet inspector
-!cargo run -p unison-cli -- sniff 'quic://[::1]:7878' --channel metric
+cargo run -p unison-cli -- ping 'quic://[::1]:7878'
+# channel traffic を覗く packet inspector（mock は datagram channel を登録しないので stream channel を指定）
+cargo run -p unison-cli -- sniff 'quic://[::1]:7878' --channel agent_status
 ```
 
 ---
 
-**最終更新**: 2026-05-17（v1.0.0-rc.1）
+**最終更新**: 2026-11-04（TS SDK 1.2.0 / club-unison 2.2.1）

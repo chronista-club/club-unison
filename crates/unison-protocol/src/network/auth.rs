@@ -79,9 +79,10 @@ pub type Verifier =
 /// `AuthResult { ok: true }` を、 失敗なら `AuthResult { ok: false }` を返す (principal は
 /// None のまま)。他 method / event は debug log を吐いて無視する (= forward-compat)。
 ///
-/// `ctx` は **connection 単位で全 channel handler と共有** される ([`super::dispatch`] が
-/// `Arc::clone` で配る) ため、 ここで立てた principal を worlds/wire/datagram handler が
-/// 読める。
+/// `ctx` は **connection 単位で全 stream channel handler と共有** される
+/// ([`super::dispatch`] が `Arc::clone` で配る) ため、 ここで立てた principal を
+/// worlds/wire などの handler が読める。 datagram channel handler は ctx を受け取らない
+/// (design/connection-auth.md §7「既知の制約」)。
 pub async fn handle_channel(
     verifier: Verifier,
     ctx: Arc<ConnectionContext>,

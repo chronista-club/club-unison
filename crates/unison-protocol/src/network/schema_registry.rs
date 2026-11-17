@@ -4,7 +4,7 @@
 //! KDL を parse して構築する。 channel → request/event の型情報を保持し、 client が
 //! request を送る前に payload validation を実行できるようにする。
 //!
-//! 設計: `spec/04-discovery/SPEC.md` §8 (= client 側 TypeRegistry 構築)。
+//! 設計: `spec/04-discovery/SPEC.md` §8 (= client 側 SchemaRegistry 構築)。
 //!
 //! # 役割
 //! - channel / request / event の **存在** 検証
@@ -14,11 +14,6 @@
 //! v0.1.0 では constraint (min/max/pattern) や response 側 validation は **out of
 //! scope** (= 別 Epic / phase)。 `FieldType::Custom`、 `FieldType::Enum` も
 //! v0.1.0 では type check を passthrough する (= 後続 phase で本格対応)。
-//!
-//! # 既存 `parser::TypeRegistry` との違い
-//! `parser::TypeRegistry` は **build-time codegen** 用の型名 mapping (= KDL の
-//! `typedef` 名から Rust / TypeScript の型文字列を引く)。 本 `SchemaRegistry` は
-//! **runtime channel schema lookup** + validation。 役割が直交するため別 type。
 
 use std::collections::HashMap;
 use thiserror::Error;

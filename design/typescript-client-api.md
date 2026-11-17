@@ -1,14 +1,18 @@
 # design/typescript-client-api.md — TS Client SDK API Design (= v1.0 Phase 3a deliverable)
 
-**バージョン**: 0.1-draft (= v1.0.0-alpha 系列で iterative refine)
-**最終更新**: 2026-05-16
-**ステータス**: Draft — Phase 2 (TS runtime SDK) implementation の API contract、 demo-driven design
+**バージョン**: 1.0 (= package `@chronista-club/unison-client` 1.2.0 の実装に追従)
+**最終更新**: 2026-11-04
+**ステータス**: Implemented (`clients/typescript`)。 §3 と §5 は実装前の設計 (歴史)、 §4 は現在の export に合わせてある
 
 ---
 
 ## 1. 目的
 
 「**ideal caller TS code を先に sketch して、 Phase 2 SDK の API surface を逆設計する**」 ための design exercise。 v0.10.0 で Rust 側で取った top-down approach (= codegen 出力 1f → 実装 1d/1e) を polyglot で再現。
+
+> Phase 2 は package 1.2.0 までに実装済み (§12)。 §3 (caller sketch) と §5 (codec 戦略) は
+> **実装前の設計 (歴史)** として当時の形のまま残し、 実装と違う点は各節の冒頭に注記する。
+> §4 の API 契約は現在の `clients/typescript/src/index.ts` の export に合わせてある。
 
 ## 2. 想定 caller use case (= Vantage Point dashboard subscribe)
 
@@ -62,6 +66,13 @@ protocol "vp-dashboard" version="1.0.0" {
 ---
 
 ## 3. Ideal caller TS code (= 「これで dashboard 書きたい」)
+
+> **実装前の設計 (歴史)**。 実装との差 (現在の API は §4):
+> - entry は `unisonClient.connect` ではなく関数 `connect` (`import { connect } from "@chronista-club/unison-client"`)、 戻り値は class `UnisonClient`
+> - `trust` は `"system" | { certHash: string }`。 browser の WebTransport に検証 skip は無いので `"skip-verify"` は存在しない
+> - `subscribeConnectionEvents()` / `events.on(...)` ではなく `client.events()` を `for await` で読む
+> - `serverIdentity()` は Promise ではなく、 connect 時に受けた `ServerIdentity | undefined` を同期で返す
+> - `openDatagramChannel` は Promise を返さない (同期で `DatagramChannel` を返す)
 
 ### 3.1 Connection setup
 
@@ -153,32 +164,54 @@ await client.disconnect();
 
 ---
 
-## 4. SDK API surface 要件 (= Phase 2 implementation contract)
+## 4. SDK API surface (= 現在の export、 `clients/typescript/src/index.ts`)
+
+当初は Phase 2 の implementation contract として書いた節。 package 1.2.0 の実装に合わせて
+更新してある。
 
 ### 4.1 Top-level API
 
 ```typescript
-export interface UnisonClientConnectOptions {
-  url: string;
-  trust?: "system" | "skip-verify" | { cert: string };
-  reconnect?: never;  // library does NOT auto-reconnect (= caller 責務)
+// transport/types.ts
+export type TrustMode = "system" | { certHash: string }; // certHash = DER server cert の SHA-256 (hex)
+
+export interface ConnectOptions {
+  url: string;          // https://host:port (WebTransport は https のみ)
+  trust?: TrustMode;    // 既定 "system"
+  signal?: AbortSignal; // abort で connect を中断、 確立後は connection と配下の stream を tear down
 }
 
-export const unisonClient = {
-  async connect(opts: UnisonClientConnectOptions): Promise<UnisonClient>;
-};
+// client.ts
+export interface UnisonConnectOptions extends ConnectOptions {
+  transport?: Transport;          // 既定 WebTransport。 test では mock transport を注入する
+  codec?: Codec<ChannelPayload>;  // 全 channel 共有の codec (= JsonCodec / ProtoCodec のインスタンス)。 既定 JsonCodec
+  awaitIdentity?: boolean;        // identity handshake を待つか (既定 true)
+  identityTimeoutMs?: number;     // identity handshake の timeout (既定 5000)
+  credential?: Uint8Array;        // connection-level auth (§4.5)
+}
 
-export interface UnisonClient {
-  serverIdentity(): Promise<ServerIdentity>;
-  subscribeConnectionEvents(): ConnectionEventEmitter;
+export function connect(opts: UnisonConnectOptions): Promise<UnisonClient>;
+
+export class UnisonClient {
+  // connect 時に受けた identity。 awaitIdentity: false / handshake が来なかった場合は undefined
+  serverIdentity(): ServerIdentity | undefined;
+  // connection lifecycle event (§4.4)
+  events(): AsyncIterable<ConnectionEvent>;
   // openChannel は open handshake (= `open` frame → server `open_ack`) を行い、
   // server peer が bidi stream を accept したことを確認してから resolve する。
-  // `openTimeoutMs` 内に accept されなければ reject + stream tear down (= no-accept signal)。
+  // `openTimeoutMs` (既定 5000) 内に accept されなければ reject + stream tear down (= no-accept signal)。
   openChannel<M extends ChannelMeta>(meta: M, openTimeoutMs?: number): Promise<UnisonChannel<M>>;
   openDatagramChannel<M extends DatagramChannelMeta>(meta: M): DatagramChannel<M>;
-  disconnect(): Promise<void>;
+  authenticate(credential: Uint8Array): Promise<void>; // §4.5
+  disconnect(reason?: string): Promise<void>;
 }
 ```
+
+- library は auto-reconnect しない (= caller 責務)
+- browser の WebTransport は「cert 検証を全部 skip」を持たないので、 CA 以外の経路は
+  `{ certHash }` の pinning (= `serverCertificateHashes`) だけ
+- identity handshake は best-effort。 失敗しても connection は使え、 `serverIdentity()` が
+  `undefined` を返す
 
 caller-facing の connection entry は **free function `connect`** で export する
 (= `import { connect } from "@chronista-club/unison-client"`)。 transport-level の
@@ -188,28 +221,31 @@ caller-facing の connection entry は **free function `connect`** で export �
 
 ```typescript
 // Stream channel
-export interface UnisonChannel<M extends ChannelMeta> {
+export interface UnisonChannel<M extends ChannelMeta = ChannelMeta> {
+  readonly name: M["name"];
+
   // Request → Response (= meta.requests[N].request / response 型推論)
-  request<N extends keyof M["requests"]>(
+  request<N extends RequestName<M>>(
     name: N,
     payload: RequestType<M, N>,
   ): Promise<ResponseType<M, N>>;
 
-  // Event subscribe (= server push、 AsyncIterable)
-  events(): AsyncIterable<EventType<M>>;
+  // Event subscribe (= server push、 `for await`、 break で channel close cascade)
+  events(): AsyncIterableIterator<EventType<M>>;
 
-  // Event send (= client → server、 from が client または either の時)
+  // Event send (= client → server、 応答なし)
   sendEvent<N extends EventName<M>>(name: N, payload: EventPayload<M, N>): Promise<void>;
 
-  close(): Promise<void>;
+  close(): Promise<void>; // idempotent
 }
 
 // Datagram channel (= event only、 request 不可)
-export interface DatagramChannel<M extends DatagramChannelMeta> {
-  events(): AsyncIterable<EventType<M>>;
-  sendEvent<N extends EventName<M>>(name: N, payload: EventPayload<M, N>): Promise<void>;
-  channelId: number;  // = compile-time const (from meta)
-  close(): Promise<void>;
+export interface DatagramChannel<M extends DatagramChannelMeta = DatagramChannelMeta> {
+  readonly name: M["name"];
+  readonly channelId: M["channelId"]; // = compile-time const (from meta)
+  events(): AsyncIterableIterator<EventType<M>>;
+  sendEvent<N extends EventName<M>>(name: N, payload: EventPayload<M, N>): Promise<void>; // MTU 超過は reject
+  close(): Promise<void>; // dispatcher から unregister、 idempotent
 }
 ```
 
@@ -242,10 +278,14 @@ export const MetricChannelMeta = {
   },
 } as const;
 
-// Phase 2 type narrowing:
-type EventName<M> = M extends { events: readonly (infer N)[] } ? N : never;
+// type narrowing (channel/types.ts):
+type EventName<M> = M extends { events: readonly (infer N)[] } ? N & string : never;
 type EventType<M> = // __types.events 経由で生成 interface に解決
-  M extends { __types?: infer T } ? T["events"][keyof T["events"]] : ChannelPayload;
+  M extends { __types?: infer T }
+    ? T extends ChannelTypeMap
+      ? T["events"][keyof T["events"]]
+      : ChannelPayload
+    : ChannelPayload;
 
 // 結果: caller code で
 const chan = client.openDatagramChannel(MetricChannelMeta);
@@ -260,12 +300,21 @@ for await (const update of chan.events()) {
 ### 4.4 Connection event API
 
 ```typescript
-export interface ConnectionEventEmitter {
-  on(event: "connected", handler: (e: { remoteAddr: string }) => void): void;
-  on(event: "disconnected", handler: (e: { reason: string }) => void): void;
-  // EventTarget standard interface 互換 (= browser ergonomic)
+// transport/types.ts
+export type ConnectionEvent =
+  | { type: "connected"; remoteAddr: string }
+  | { type: "disconnected"; reason: string }
+  | { type: "error"; error: Error };
+
+for await (const e of client.events()) {
+  if (e.type === "disconnected") {
+    // caller がここで自前 reconnect ロジック (= library は auto-reconnect しない)
+  }
 }
 ```
+
+emitter (`on(...)`) ではなく AsyncIterable にしたのは、 event subscribe (§8.3) と同じ
+`for await` の形に揃えるため。
 
 ### 4.5 Auth API (connection-level、 v1.4.0)
 
@@ -273,34 +322,32 @@ connection-level auth primitive（Rust `enable_auth` / `connect_with_credential`
 `design/connection-auth.md`）の TS 対応。auth は `unison.auth` channel を open して
 `Authenticate` request を送るだけなので、専用 transport は不要。
 
-```typescript
-// connect-time auth (= Rust connect_with_credential の対応物)
-export interface UnisonConnectOptions {
-  // ...既存...
-  /** 接続直後に 1 回提示する credential。指定すると identity handshake 後に
-   *  unison.auth で Authenticate し、拒否 (ok=false) なら connect が throw する。 */
-  credential?: Uint8Array;
-}
+API は §4.1 の 2 つ:
 
-export interface UnisonClient {
-  // ...既存...
-  /** post-connect / re-auth 用。unison.auth を open して Authenticate を送り、
-   *  ok=false なら throw。connect({credential}) は内部でこれを呼ぶ。 */
-  authenticate(credential: Uint8Array): Promise<void>;
-}
-```
+- `connect({ ..., credential })` — connect-time auth (= Rust `connect_with_credential` の対応物)。
+  identity handshake 後に `unison.auth` で Authenticate し、 拒否 (ok=false) なら connection を
+  畳んで throw する
+- `client.authenticate(credential)` — post-connect / re-auth 用。 `unison.auth` を open して
+  Authenticate を送り、 ok=false なら throw。 `connect({ credential })` は内部でこれを呼ぶ
 
 **wire 不変条件**（`design/connection-auth.md` §5.8 が SSOT）:
 - request payload = `{ credential: number[] }`。`Uint8Array` は **`Array.from(bytes)` で `number[]`
   に変換**してから送る（直接入れると JSON が `{"0":..}` object 化して Rust の `Vec<u8>` と非互換）。
 - response = `{ ok: boolean }`。`ok === false` → `authenticate` / `connect` が throw。
 
-reserved channel meta（`AUTH_CHANNEL` const）と定数（`AUTH_CHANNEL_NAME` = `"unison.auth"` /
-`AUTHENTICATE_METHOD` = `"Authenticate"`）は SDK が内蔵し、codegen 不要。
+reserved channel meta（`AUTH_CHANNEL_META`）と定数（`AUTH_CHANNEL_NAME` = `"unison.auth"` /
+`AUTHENTICATE_METHOD` = `"Authenticate"`）、 credential を wire 形に変える `toAuthenticateRequest` は
+SDK が内蔵し（`src/channel/auth.ts`）、codegen 不要。
 
 ---
 
 ## 5. Codec 戦略
+
+> **実装前の設計 (歴史)**。 実装との差: `codec` は `"json" | "proto"` の文字列ではなく
+> `Codec<ChannelPayload>` のインスタンスを渡す (既定は `JsonCodec.shared`、 §4.1)。
+> `ProtoCodec` は 1 つの message descriptor に束縛される (`new ProtoCodec(Schema)`) ため、
+> connection-level で一律に渡せるのは全 channel が同じ message を運ぶ場合に限られる。
+> per-channel の codec 指定は未実装。
 
 ### 5.1 Default = JsonCodec
 
@@ -347,9 +394,9 @@ Phase 2 では「connection-level codec 一律」 のみ実装、 channel 別 co
 
 ### 6.3 Tree-shake friendly
 
-- `import { unisonClient } from "@chronista-club/unison-client"` 時、 caller が使わない codec / transport adapter は dead-code elim
-- Sub-path import 検討: `import { unisonClient } from "@chronista-club/unison-client/transport"` で transport だけ
-- Phase 2e で size check CI gate (= bundle が threshold 超えたら fail)
+- `import { connect } from "@chronista-club/unison-client"` 時、 caller が使わない codec / transport adapter は dead-code elim
+- Sub-path import 検討: transport だけを sub-path で出す案。 現在の sub-path は `@chronista-club/unison-client/testing` (mock transport / server stub) のみ
+- size check CI gate (= bundle が threshold 超えたら fail) は未導入。 Phase 2e では build と size の計測まで (minified 56.3 KB / gzipped 14.7 KB、 2026-05-16)
 
 ---
 
@@ -373,9 +420,9 @@ v1.0 では:
 ### 7.3 Detection / graceful degradation
 
 ```typescript
-const client = await unisonClient.connect({ url: "..." });
+const client = await connect({ url: "..." });
 // 内部で `typeof WebTransport === "undefined"` check
-// 不可なら明示 error: "WebTransport not supported, use Chromium-based browser"
+// 不可なら明示 error: `WebTransportUnsupportedError`
 // (= silent fail せず、 caller に clear signal)
 ```
 
@@ -433,11 +480,10 @@ src/                     ← SDK 実装 (Phase 2b/c/d/e)
 
 ## 9. Phase 2 implementation sub-phase 詳細
 
-design doc が確定したら Phase 2b/c/d/e の具体的 deliverable:
+design doc が確定したら Phase 2b/c/d/e の具体的 deliverable (= 全て実装済み、 §12):
 
 ### Phase 2b: WebTransport adapter
-- `src/transport/web_transport.ts` — WebTransport wrapper
-- `src/transport/connection.ts` — Connection lifecycle
+- `src/transport/web_transport.ts` — WebTransport wrapper (`WebTransportClient`) と Connection lifecycle (`WebTransportConnection`)
 - `src/transport/types.ts` — Transport 抽象化 interface
 
 ### Phase 2c: Channel wrapper
@@ -451,19 +497,18 @@ design doc が確定したら Phase 2b/c/d/e の具体的 deliverable:
 - `src/codec/proto_codec.ts` — ProtoCodec (= @bufbuild/protobuf wrapping)
 
 ### Phase 2e: Tests + bundle
-- `tests/unit/` — vitest unit tests
-- `tests/integration/` — Phase 7 で本格化
+- vitest。 unit は層ごとの directory (`tests/{channel,codec,error,transport,wire}/`)、 結合は `tests/integration/`
 - vite production build
-- bundle size CI check
+- bundle size CI check は未導入 (§6.3)
 
 ---
 
 ## 10. v0.10.0 Rust 側 API との比較 (= polyglot consistency check)
 
-| 機能 | Rust (= v0.10.0) | TS (= v1.0 提案) |
+| 機能 | Rust (= v0.10.0) | TS (= package 1.2.0) |
 |---|---|---|
-| Connect | `client.connect(url)` | `unisonClient.connect({ url, trust })` |
-| Connection events | `client.subscribe_connection_events()` | `client.subscribeConnectionEvents()` |
+| Connect | `client.connect(url)` | `connect({ url, trust })` |
+| Connection events | `client.subscribe_connection_events()` | `client.events()` (AsyncIterable) |
 | Stream channel open | `client.open_channel("name")` | `client.openChannel(ChannelMeta)` |
 | Datagram channel open | `client.open_datagram_channel("name", id)` | `client.openDatagramChannel(ChannelMeta)` |
 | Request | `chan.request::<Req, Resp>("Name", &req)` | `chan.request("Name", payload)` |
@@ -473,7 +518,7 @@ design doc が確定したら Phase 2b/c/d/e の具体的 deliverable:
 
 ### 設計上の対称性 / 非対称性
 
-- **対称**: connect / disconnect / subscribe_connection_events、 概念 1:1
+- **対称**: connect / disconnect / connection event の購読 (Rust `subscribe_connection_events()` ↔ TS `events()`)、 概念 1:1
 - **対称的だが ergonomic 差**: Rust は turbofish 型 (`request::<Req, Resp>`)、 TS は ChannelMeta + name argument で narrowing。 TS の方が ergonomic 高い (= as const literal narrow による)
 - **非対称**: Rust の `open_datagram_channel(name, channel_id)` は 2 引数、 TS の `openDatagramChannel(meta)` は 1 引数 (= meta が channel_id を含む)。 TS の方が「IDE 補完で channel_id 思い出さなくて良い」 ergonomic 優位
 - **非対称**: Rust の event subscribe は `loop { recv_event().await }`、 TS は `for await` — どちらも各言語の idiom
@@ -492,11 +537,13 @@ design doc が確定したら Phase 2b/c/d/e の具体的 deliverable:
 ## 12. Phase 2 着手前の checklist
 
 - [x] design doc (= 本 file) commit、 caller code aspiration が固まる
-- [ ] Phase 2a: `clients/typescript/` skeleton 作成 (= 次の session 着手候補)
-- [ ] Phase 2b: WebTransport adapter (= 別 session)
-- [ ] Phase 2c: Channel wrapper (= 別 session)
-- [ ] Phase 2d: Codec (= 別 session)
-- [ ] Phase 2e: Tests + bundle (= 別 session)
+- [x] Phase 2a: `clients/typescript/` skeleton 作成
+- [x] Phase 2b: WebTransport adapter
+- [x] Phase 2c: Channel wrapper
+- [x] Phase 2d: Codec
+- [x] Phase 2e: Tests + bundle (bundle size の CI gate は未導入、 §6.3)
+
+いずれも 2026-05-16 に実装 (`git log -- clients/typescript`)。 現在の package は 1.2.0。
 
 各 sub-phase 完了で「caller の TS code が segment ごとに動く」 incremental verification。
 

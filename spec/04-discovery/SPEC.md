@@ -1,8 +1,8 @@
 # spec/04: Unison Protocol - Schema Discovery (Unison Hailing)
 
-**バージョン**: 0.1.0-draft
-**最終更新**: 2026-05-27
-**ステータス**: Draft (Unison Hailing Epic P0、 仕様確定 phase)
+**バージョン**: 0.1.0
+**最終更新**: 2026-11-04
+**ステータス**: Stable (v0.1.0、 server は `ProtocolServer::enable_discovery`、 client は `DynamicProtocol` で実装済み)
 
 ---
 
@@ -15,7 +15,7 @@
 5. [メッセージフロー](#5-メッセージフロー)
 6. [Bootstrap codec (= JSON 固定)](#6-bootstrap-codec--json-固定)
 7. [Schema hash と stale 検知](#7-schema-hash-と-stale-検知)
-8. [Client 側 TypeRegistry 構築 (informational)](#8-client-側-typeregistry-構築-informational)
+8. [Client 側 SchemaRegistry 構築 (informational)](#8-client-側-schemaregistry-構築-informational)
 9. [Out of scope (= 後続 Epic / phase)](#9-out-of-scope--後続-epic--phase)
 10. [関連ドキュメント](#10-関連ドキュメント)
 
@@ -27,10 +27,10 @@ Unison Schema Discovery (= Unison Hailing) は、 server が自身の **protocol
 
 ### 1.1 動機
 
-現状 (v0.10.x) の Unison では:
+Discovery 導入前 (v0.10.x) の Unison では:
 
 - **build-time codegen**: KDL ソースから Rust / TypeScript の型を生成し、 client は **既知の peer** に対しては type-safe に通信できる
-- **ServerIdentity** ([spec/01 §5](../01-core-concept/SPEC.md#5-identity---serveridentityによるノード認証)): 接続時に server が **channel listing** (= name / direction / lifetime / status) を返す
+- **ServerIdentity** ([spec/01 §5](../01-core-concept/SPEC.md#5-identity---serveridentity-によるノード認証)): 接続時に server が **channel listing** (= name / direction / lifetime / status) を返す
 
 しかし以下が解けない:
 
@@ -42,7 +42,7 @@ Unison Schema Discovery (= Unison Hailing) は、 server が自身の **protocol
 
 server が `unison.discovery` channel 経由で **完全な protocol KDL** を配信し、 client が:
 
-- runtime に **TypeRegistry** を構築して payload を validate / encode できる
+- runtime に **SchemaRegistry** を構築して request payload を validate できる
 - KDL を **JSON Schema** に変換して MCP tool / Anthropic structured output ecosystem に流せる
 - schema hash で stale 検知し、 必要に応じて refetch / refresh できる
 
@@ -68,7 +68,7 @@ KDL を 「型情報を含む構造化された schema 表現」 として 1 つ
 - Rust 型 (= build-time codegen)
 - TypeScript 型 + Zod schema (= build-time codegen)
 - JSON Schema (= MCP tool input / Anthropic structured output / OpenAI response_format / Vercel AI SDK generateObject)
-- runtime TypeRegistry (= 本 discovery の deliverable)
+- runtime SchemaRegistry (= 本 discovery の deliverable)
 
 すべて派生する。 KDL の rich type (= union / nested / refinement) は **JSON Schema Draft 7+ 準拠** で表現可能な範囲で best-effort、 lossy 部分は document 化する。
 
@@ -108,7 +108,7 @@ sequenceDiagram
     C->>S: request "GetProtocol" { format: "kdl+hash" }
     S->>C: ProtocolDocument { kdl, version, hash, codecs }
 
-    Note over C: KDL を parse →<br/>TypeRegistry 構築 →<br/>以後の channel call を type-safe に
+    Note over C: KDL を parse →<br/>SchemaRegistry 構築 →<br/>以後の channel call を type-safe に
 ```
 
 ### 3.2 ServerIdentity が discovery を含んでいることの確認
@@ -116,12 +116,18 @@ sequenceDiagram
 Server は `ServerIdentity.channels` に `unison.discovery` channel を含めて返す責務を持つ。 これにより client は接続直後に discovery が available か判定できる:
 
 ```rust
-let identity = client.server_identity().await?;
-let has_discovery = identity.channels.iter().any(|c| c.name == "unison.discovery");
+// server_identity() は Option (= identity を受け取れていなければ None)
+let has_discovery = client
+    .server_identity()
+    .await
+    .is_some_and(|identity| identity.channels.iter().any(|c| c.name == "unison.discovery"));
 if has_discovery {
-    let doc = client.open_channel("unison.discovery").await?
-        .request("GetProtocol", json!({ "format": "kdl+hash" })).await?;
-    // ... TypeRegistry 構築
+    let doc: serde_json::Value = client
+        .open_channel("unison.discovery")
+        .await?
+        .request("GetProtocol", &json!({ "format": "kdl+hash" }))
+        .await?;
+    // ... SchemaRegistry 構築 (Rust client では DynamicProtocol::fetch がここまでをまとめる、 §8)
 }
 ```
 
@@ -163,14 +169,14 @@ protocol "unison-discovery" version="0.1.0" {
 
 | 値 | 意味 | v0.1.0 挙動 |
 |---|---|---|
-| `"kdl"` | 生 KDL ソースのみ要求 | ProtocolDocument を返す (= hash は server が常に計算する) |
+| `"kdl"` | 生 KDL ソースのみ要求 | ProtocolDocument を返す (= hash も常に含む) |
 | `"kdl+hash"` | hash 検証付き | 同上 (= v0.1.0 では差なし、 future hint として残置) |
 
-**v0.1.0 server は未知 format を lenient に受理** (= debug log 出して default の `"kdl"` 扱い、 reject しない)。 これは future format 追加 (= `"kdl+diff"` 等) を non-breaking で導入できる余地を残す目的 (= forward-compat)。
+**v0.1.0 server は `format` の値を見ない** (= 未知の値でも reject せず、 同じ ProtocolDocument を返す)。 debug log を出すのは payload が JSON として読めないときだけ。 これは future format 追加 (= `"kdl+diff"` 等) を non-breaking で導入できる余地を残す目的 (= forward-compat)。
 
 **v1.0+ で strict 化を検討**: capability detection を clean に行うため、 「未知 format は server が `Error` で reject、 client は capability negotiation で確認」 の semantic に migrate する想定。 その時点で本 spec § と impl 両方を同時に更新する。
 
-実装: [`crates/unison-protocol/src/network/discovery.rs`](../../crates/unison-protocol/src/network/discovery.rs) `handle_channel` (= 不正 payload を debug log で受け流し、 default ProtocolDocument を返す)。
+実装: [`crates/unison-protocol/src/network/discovery.rs`](../../crates/unison-protocol/src/network/discovery.rs) `handle_channel` (= `format` を見ずに、 memoize 済みの ProtocolDocument を返す)。
 
 #### `ProtocolDocument.kdl`
 
@@ -215,12 +221,11 @@ sequenceDiagram
 
     C->>S: Request {<br/>  method: "GetProtocol",<br/>  payload: { format: "kdl+hash" }<br/>}
 
-    Note over S: 自分の protocol.kdl を load<br/>(= cache or file read)
-    Note over S: SHA-256(kdl) → hash
+    Note over S: enable_discovery 時に memoize した<br/>ProtocolCache (kdl / version / hash) を使う<br/>(= request ごとに load・hash 計算はしない)
 
     S->>C: Response {<br/>  ProtocolDocument {<br/>    kdl: "...",<br/>    version: "0.10.0",<br/>    hash: "abc...",<br/>    codecs: ["json"]<br/>  }<br/>}
 
-    Note over C: KDL parser で AST 構築<br/>→ TypeRegistry 生成<br/>→ cache に (version, hash, registry) を保存
+    Note over C: SHA-256(kdl) == hash を検証<br/>→ KDL を parse して SchemaRegistry 生成<br/>(Rust の DynamicProtocol::fetch は cache を持たず毎回生成、 cache は §7.2 の想定)
 ```
 
 ### 5.2 SchemaUpdated (hot reload、 v0.1.0 仕様のみ、 emit は別 Epic)
@@ -240,7 +245,7 @@ sequenceDiagram
 
     S->>C: Response { ProtocolDocument(new) }
 
-    Note over C: TypeRegistry を atomic に差し替え<br/>(= 既存 channel handle は古い registry で完了)
+    Note over C: SchemaRegistry を atomic に差し替え<br/>(= 既存 channel handle は古い registry で完了)
 ```
 
 ### 5.3 combined handshake (= Discovery 対応 client の典型起動)
@@ -260,11 +265,11 @@ sequenceDiagram
         C->>S: open_channel("unison.discovery")
         C->>S: GetProtocol
         S->>C: ProtocolDocument
-        Note over C: DynamicProtocol を構築<br/>(= TypeRegistry を持つ)
+        Note over C: DynamicProtocol を構築<br/>(= SchemaRegistry を持つ)
         C->>App: ready(DynamicProtocol)
     else discovery 非対応 (= 古い server)
         Note over C: build-time codegen + escape hatch に fallback
-        C->>App: ready(KnownProtocol or GenericProtocol)
+        C->>App: fallback
     end
 ```
 
@@ -314,14 +319,17 @@ hash = lowercase_hex(SHA-256(kdl_utf8_bytes))
 - 改行 (CRLF / LF) / 末尾空白も含めた **byte-exact** hash
 - hex は 64 文字 lowercase で固定
 
-### 7.2 client cache strategy
+### 7.2 client cache strategy (想定)
+
+client が registry を cache する場合に想定する流れ。 Rust の `DynamicProtocol::fetch` は cache を持たず、
+fetch のたびに hash を検証して `SchemaRegistry` を作り直す。
 
 ```mermaid
 flowchart TD
     START[GetProtocol 結果取得] --> CHECK_CACHE{cache に<br/>同 version あり?}
-    CHECK_CACHE -->|No| BUILD[KDL parse + TypeRegistry 構築]
+    CHECK_CACHE -->|No| BUILD[KDL parse + SchemaRegistry 構築]
     CHECK_CACHE -->|Yes| HASH_CMP{hash 一致?}
-    HASH_CMP -->|Yes| USE_CACHE[cache の TypeRegistry を使用]
+    HASH_CMP -->|Yes| USE_CACHE[cache の SchemaRegistry を使用]
     HASH_CMP -->|No| BUILD
     BUILD --> STORE[cache に <br/>(version, hash, registry) を保存]
     STORE --> USE_CACHE
@@ -330,37 +338,37 @@ flowchart TD
 ### 7.3 mismatch 時の挙動
 
 - **stale schema 検知** (= client が古い hash で channel を open しようとした): server は `Error` を返す or 古い registry のままで動作継続 (= v0.1.0 では後者、 backward compat 優先)
-- **client が新しい hash を持っていた**: server から見て unknown channel.method、 通常の `HandlerNotFound` error path
+- **client と server の schema が食い違っていた**: 次の 3 経路のどれかになる
+  - client の registry に無い channel / method: `DynamicProtocol::open_channel` / `DynamicChannel::request` が server に問い合わせる前に `DynamicError::Validation` (`ChannelNotFound` / `MethodNotFound`) を返す
+  - server に無い channel の open: server が nack を返し、 client は `NetworkError::Protocol("Channel '…' open rejected: …")` (`DynamicProtocol` 経由なら `DynamicError::Network` に包まれる)
+  - channel はあるが server の知らない method: 応答は handler 次第。 不明メソッドを無視する handler (built-in の discovery / auth を含む) に対しては、 client は request タイムアウト (既定 30s) まで待つ ([spec/02 §9.3](../02-unified-channel/SPEC.md#93-前方互換性))
 
 詳細な fail mode は別 Epic (= hot reload semantics と一緒に詰める) で確定する。 v0.1.0 では 「client が起動時に 1 度 fetch、 接続中は fix」 が想定。
 
 ---
 
-## 8. Client 側 TypeRegistry 構築 (informational)
+## 8. Client 側 SchemaRegistry 構築 (informational)
 
-本 spec は wire protocol 仕様。 client 側 API は **Hailing-α P2-Rust** ([creo-memories mem_1CbSyAVTPMSJyKrRfeUe8s](...)) で別途 detail 化する。 ここでは informational に流れを示す。
+本 spec は wire protocol 仕様。 client 側 API は **Hailing-α P2-Rust** (creo-memories mem_1CbSyAVTPMSJyKrRfeUe8s) で detail 化した。 ここでは informational に流れを示す。
+
+1. `unison.discovery` channel を open し、 `GetProtocol` (`format: "kdl+hash"`) で ProtocolDocument を受け取る
+2. `SHA-256(kdl)` が `hash` と一致するかを検証する (不一致は `DynamicError::Integrity`)
+3. `SchemaRegistry::from_kdl(&doc.kdl)` (内部で `SchemaParser::new().parse`) で channel → request / event の schema を引ける registry を作る
+4. `DynamicProtocol` (= client + registry + ProtocolDocument) を返す
+5. 以後の channel 呼び出しは registry で検証してから送る
+
+Rust では `DynamicProtocol::fetch` が 1〜4 をまとめる
+([dynamic.rs](../../crates/unison-protocol/src/network/dynamic.rs))。
 
 ```rust
-// 1. Discovery channel を open
-let chan = client.open_channel("unison.discovery").await?;
+// 1〜4: GetProtocol → hash 検証 → SchemaRegistry (client: Arc<ProtocolClient>)
+let proto = DynamicProtocol::fetch(client.clone()).await?;
 
-// 2. GetProtocol で ProtocolDocument を受信
-let doc: ProtocolDocument = chan.request("GetProtocol", json!({
-    "format": "kdl+hash"
-})).await?;
+// registry に無い channel はここで弾く (= server に問い合わせない)
+let chan = proto.open_channel("memory").await?;
 
-// 3. KDL parser で AST 構築
-let ast = unison::parser::parse(&doc.kdl)?;
-
-// 4. TypeRegistry を構築 (= request/event 名 → field schema の map)
-let registry = TypeRegistry::from_ast(&ast)?;
-
-// 5. DynamicProtocol を return
-let proto = DynamicProtocol::new(client, registry, doc.hash, doc.codecs);
-
-// 6. 以後の channel call は registry validate を経由
-let result = proto.call("memory.search", json!({ "query": "..." })).await?;
-//                       ^^^^^^^^^^^^^^^ runtime validate against registry
+// 5: 送信前に payload を registry で検証 (required と基本型) してから request
+let result = chan.request("Search", json!({ "query": "..." })).await?;
 ```
 
 ---
@@ -376,7 +384,7 @@ let result = proto.call("memory.search", json!({ "query": "..." })).await?;
 | Signing / trust (= 配信 KDL の偽装検知) | 別 Epic 「Hailing trust」 |
 | Partial schema fetch (= 1 channel だけ要求) | 別 Epic、 token cost 最適化目的 |
 | Diff-based update (= patch protocol) | 別 Epic、 大規模 schema 向け |
-| LLM-native payload generation (= structured output 連携) | Hailing-δ spark (= [[mem_1CbSyUr2Pg4dY6Yq3Gkztt]]) |
+| LLM-native payload generation (= structured output 連携) | Hailing-δ spark (creo-memories mem_1CbSyUr2Pg4dY6Yq3Gkztt) |
 | Federation discovery (= peer 間 schema 相互理解) | Hailing-γ 候補 |
 | Browser dynamic client (= TS SDK DynamicProtocol) | Hailing-β 候補 |
 
@@ -398,7 +406,9 @@ let result = proto.call("memory.search", json!({ "query": "..." })).await?;
 
 ### 実装 (= 本 spec の implementation 対応箇所、 Hailing-α P1-P3c で実装)
 
-- [crates/unison-protocol/src/network/server.rs](../../crates/unison-protocol/src/network/server.rs) — `register_channel` API (line 230)、 built-in `ping` channel example (line 612)
+- [crates/unison-protocol/src/network/server.rs](../../crates/unison-protocol/src/network/server.rs) — `enable_discovery`、 `register_channel`
+- [crates/unison-protocol/src/network/discovery.rs](../../crates/unison-protocol/src/network/discovery.rs) — `handle_channel` (server 側 handler)、 `ProtocolDocument`
+- [crates/unison-protocol/src/network/dynamic.rs](../../crates/unison-protocol/src/network/dynamic.rs) / [schema_registry.rs](../../crates/unison-protocol/src/network/schema_registry.rs) — `DynamicProtocol` / `DynamicChannel` / `SchemaRegistry` (client 側、 §8)
 - [crates/unison-protocol/src/network/identity.rs](../../crates/unison-protocol/src/network/identity.rs) — ServerIdentity / ChannelInfo
 - [crates/unison-mcp/](../../crates/unison-mcp/) — MCP bridge crate (= Hailing α P3a-c で実装、 probe の後継として probe を置換した)
 
@@ -411,6 +421,6 @@ let result = proto.call("memory.search", json!({ "query": "..." })).await?;
 
 ---
 
-**仕様バージョン**: 0.1.0-draft
-**最終更新**: 2026-05-27
-**ステータス**: Draft (Hailing-α P0 完了時に Stable 昇格、 P3c MCP demo 完了時に v0.1.0 GA)
+**仕様バージョン**: 0.1.0
+**最終更新**: 2026-11-04
+**ステータス**: Stable

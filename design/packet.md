@@ -1,6 +1,6 @@
 # UnisonPacket — バイナリパケット層
 
-**最終更新**: 2026-09-05
+**最終更新**: 2026-11-04
 **ステータス**: Stable (v0.9.0 buffa pivot 以降の wire、 v2.0 で未使用 field を整理)
 
 `UnisonPacket` は stream 経路 (= `UnisonChannel` の request / response / event) で
@@ -57,7 +57,14 @@ let header = restored.header()?;               // header のみ parse
 let payload = restored.payload()?;             // 必要なら解凍して返す
 ```
 
-`network::ProtocolMessage::into_frame` / `from_frame` が本 API の唯一の production caller。
+production の呼び出し元は 2 方向で形が違う:
+
+- **送信**: `network::ProtocolMessage::into_frame` が buffa encode した `ProtocolMessage`
+  を `UnisonPacket::new` で包む
+- **受信**: typed frame から取り出した bytes に対し、 caller が `UnisonPacket::from_bytes`
+  を直接呼んでから `ProtocolMessage::from_frame` に渡す (= `network/stream.rs` の
+  `UnisonStream`、 `network/client.rs` の `read_channel_ack`、 `network/dispatch.rs` の
+  `client_accept_bi_loop` / `handle_incoming_stream`)
 
 ## 4. 圧縮
 
@@ -66,9 +73,19 @@ let payload = restored.payload()?;             // 必要なら解凍して返す
 - `compression.threshold` 2048 byte 以上で zstd を試し、 縮んだ時だけ採用して
   `COMPRESSED` を立てる
 - `compression.level` 既定 1 (最速)
-- `max_payload_size` 既定 16 MiB。 serialize / deserialize 両方向で bound し、
-  解凍後サイズも header の `payload_length` と突き合わせる (= 圧縮爆弾対策、
-  `DecompressedSizeMismatch`)
+- `max_payload_size` 既定 16 MiB。 両方向で bound するが、 測る対象が違う:
+  - serialize: packet 全体 (= `4 + header + payload`、 圧縮時は圧縮後 payload) を測る
+  - deserialize: 圧縮時は header の `payload_length` (= 申告された展開後サイズ)、
+    非圧縮時は payload 長を測る。 `UnisonPacket::from_bytes` は受け取った bytes 全体も
+    同じ上限で弾く
+- 圧縮 payload は `zstd::bulk::decompress` に申告サイズを **出力上限** として渡して展開し、
+  超えた時点で打ち切る (= `DecompressionFailed`)。 全量を展開してから測ると検査の前に
+  任意量のメモリを確保させられるため (= 圧縮爆弾対策)。 申告より短く終わった場合は
+  `DecompressedSizeMismatch`
+
+stream 経路では packet の外側の typed frame に上限 8 MiB (= `network/frame.rs` の
+`MAX_MESSAGE_SIZE`) があるので、 受信できる圧縮後 packet の大きさは実質そちらで決まる
+(= 16 MiB は展開後サイズの上限として効く)。
 
 `CompressionConfig::disabled()` で圧縮を止められる (test / 既圧縮 payload 用)。
 
@@ -82,9 +99,12 @@ let payload = restored.payload()?;             // 必要なら解凍して返す
 ## 6. テスト
 
 - unit: `cargo test -p club-unison packet`
-- 他言語との byte 一致: `tests/test_wire_byte_compat.rs` が `tests/fixtures/wire/*.hex` を
-  生成し、 TS (`clients/typescript/tests/wire/byte_compat.test.ts`) / Swift
-  (`WireByteCompatTests.swift`) が同じ bytes を出すことを検証
+- 他言語との byte 一致: `tests/fixtures/wire/*.hex` は commit 済みの golden。
+  `tests/test_small_wire_byte_compat.rs` は Rust の encoder 出力をこの golden と **比較**
+  する (= 生成はしない。 意図して wire を変えたときだけ `UPDATE_WIRE_FIXTURES=1` で
+  再生成する)。 TS (`clients/typescript/tests/wire/byte_compat.test.ts`) は同じ golden を
+  直接読み、 Swift (`clients/swift/Tests/UnisonClientTests/WireByteCompatTests.swift`) は
+  test resource (`Fixtures/wire/`) にコピーした golden と突き合わせる
 
 ## 関連
 

@@ -1,7 +1,7 @@
 # design/datagram-channel.md — Datagram Channel 設計 (v0.10.0)
 
 **バージョン**: 0.1-skeleton (v0.10.0 で Hearing 完了、 実装と並行に詳細化)
-**最終更新**: 2026-05-15
+**最終更新**: 2026-11-04
 **ステータス**: Draft (= skeleton SDG、 詳細は実装中に追記)
 
 ---
@@ -78,7 +78,10 @@ channel "<name>" from="<direction>" lifetime="<lifetime>" [backend="<backend>"] 
 - **Explicit only**: KDL で `channel_id=N` を author が明示指定 (= proto3 field number 哲学)
 - **Wire compatibility**: schema reorder で channel_id 変えると wire format breaking、
   reorder OK だが ID は変えない規約
-- **Conflict detection**: KDL parser が同一 namespace 内の channel_id 重複を error
+- **Conflict detection**: `unison schema-lint` が同一 protocol 内の datagram channel 間の
+  channel_id 衝突を error にする (= `crates/unison-cli/src/schema_lint.rs`)。 runtime の
+  `SchemaParser` は検出しない (= `Channel::validate` は channel 単体しか見ず、 channel_id は
+  欠落と 0 だけを弾く)
 - **Reserved range**: 0 は予約 (= 後方互換 / sentinel)、 1.. が author 利用領域
 
 ### 3.3 例
@@ -122,11 +125,12 @@ protocol "vp-sync" version="0.1.0" {
 ### 4.1 Datagram payload layout
 
 ```text
-[varint channel_id] [buffa-encoded event message]
+[varint channel_id] [codec-encoded event message]
 ```
 
 - 先頭 1-2 byte が varint encoded `channel_id` (= proto3 LEB128 と同じ encoding)
-- 残りが buffa (protobuf) でエンコードされた event 本体
+- 残りが channel の codec (= `DatagramChannel<C>` の `C`、 既定 `JsonCodec`) でエンコードされた
+  event 本体。 `UnisonPacket` / `ProtocolMessage` は経由しない
 - 1 datagram = 1 event message、 chunking / fragmentation 不可
 
 ### 4.2 Channel ID 1-127 の hot path
@@ -142,22 +146,26 @@ transform 大量配信) で最も使用頻度が高い帯域。 MTU 1300B の 0.
 
 1. QUIC datagram frame 受信
 2. payload 先頭の varint をデコードして `channel_id` を取得
-3. `channel_id` を key に handler dispatch table を lookup
-4. 残りの payload を buffa decode → event handler invoke
+3. `channel_id` を key に dispatch table (= connection 単位の `DatagramDispatcher`、
+   `channel_id` → mpsc sender) を lookup し、 残りの payload を push
+4. `DatagramChannel::recv_event` が mpsc から pull して codec で decode
 
 性能 hot path:
 
 - varint decode: 1 read + 1-2 branch、 ns オーダー
-- handler dispatch: HashMap lookup or const array index、 ns オーダー
-- buffa decode: zero-copy `*View` 型を使えば allocation ゼロ
+- handler dispatch: HashMap lookup、 ns オーダー
 
 ### 4.4 MTU 超過時の挙動
 
-`SendDatagramError::TooLarge` が caller に返る。 fragment / chunk 不可。 caller は:
+`send_event` が `NetworkError::Quic("send_datagram failed: …")` を返す (= quinn の
+`SendDatagramError::TooLarge` を `conn_quinn.rs` が文字列に包んだもの。 WebTransport 経路は
+`webtransport.rs` が `"wt send_datagram failed: …"` に包む)。 型で TooLarge を判別する手段は
+ない。 fragment / chunk 不可。 caller は:
 
 - payload を分割して複数 datagram に分けて送る (= application-level fragmentation)
 - 大きい payload は stream channel に逃がす
-- buffa zero-copy view を活用して message size を最小化
+- 小さく encode できる codec (= `open_datagram_channel_with::<ProtoCodec>` 等) を選んで
+  message size を最小化
 
 ---
 
@@ -171,7 +179,8 @@ pub struct DatagramChannel<C: Codec = JsonCodec> {
 }
 
 impl<C: Codec> DatagramChannel<C> {
-    /// Event を送信 (= per-connection、 channel direction が許す方向)
+    /// Event を送信 (= per-connection)。 channel の direction (`from=`) は検査しない
+    /// (= その向きに送ってよいかは caller 責務)
     pub async fn send_event<T: Encodable<C>>(&self, event: &T) -> Result<(), NetworkError>;
 
     /// Event を受信
@@ -180,15 +189,16 @@ impl<C: Codec> DatagramChannel<C> {
     /// Channel ID (= schema 由来)
     pub fn channel_id(&self) -> u64;
 
-    /// Channel close
-    pub async fn close(&self) -> Result<(), NetworkError>;
+    /// Channel name (= KDL schema 上の名前、 debug / log 用)
+    pub fn name(&self) -> &str;
 }
 ```
 
 `UnisonChannel<C>` (= stream channel) との **共通点**: codec generic、 `send_event` /
 `recv_event` 持つ。 **相違点**: `request` / `send_response` なし (= datagram は
-request/response 不適合)、 `channel_id` getter あり、 `close` semantics 異なる (= stream
-は FIN、 datagram は handler 登録解除のみ)。
+request/response 不適合)、 `channel_id` getter あり、 `close()` なし (= stream は FIN を
+送るが、 datagram channel は drop すると受信側の mpsc receiver が閉じ、 以後その
+`channel_id` に届いた payload は dispatcher が捨てる)。
 
 ### 5.2 Server-level broadcast
 
@@ -246,7 +256,7 @@ hatch)、 ただし **新規 caller には datagram channel API を推奨**。
 | 観点 | v0.9.0 connection-level | v0.10.0 channel API |
 |------|------------------------|---------------------|
 | Demux | caller が payload header で実装 | library が `channel_id` varint prefix で自動 |
-| 型 safety | raw `Bytes` | buffa-encoded typed `T` |
+| 型 safety | raw `Bytes` | codec-encoded typed `T` (既定 JsonCodec) |
 | Server handler | accept loop 自前 | `register_channel_datagram` で declarative |
 | Broadcast | per-connection iterate | `server.broadcast` 1 行 |
 | Schema | application-level protocol | KDL schema-first |
@@ -272,23 +282,26 @@ loop {
 **After (v0.10.0、 channel API)**:
 
 ```rust
-// KDL schema 経由で DatagramChannel<ProtoCodec> 生成
+// channel_id は KDL の `channel_id=1` と揃える
 
-// Client
-let chan = client.open_datagram_channel("position").await?;
+// Client (= DatagramChannel<JsonCodec>)
+let chan = client.open_datagram_channel("position", 1).await?;
 chan.send_event(&transform).await?;
 
-// Server
-server.register_channel_datagram("position", |chan| async move {
-    loop {
-        let transform: Transform = chan.recv_event().await?;
-        // ...
-    }
-}).await;
+// Server (= handler は DatagramChannel<JsonCodec> 固定、 戻り値は ())
+server
+    .register_channel_datagram("position", 1, |chan| async move {
+        while let Ok(transform) = chan.recv_event::<Transform>().await {
+            // ...
+        }
+    })
+    .await;
 
-// Broadcast (= server 主導 push)
-server.broadcast("position", &transform).await?;
+// Broadcast (= server 主導 push、 codec は型引数で明示)
+server.broadcast::<_, JsonCodec>("position", &transform).await?;
 ```
+
+(`tests/test_medium_datagram_echo.rs` が同じ形で動かしている。)
 
 ---
 
@@ -305,6 +318,7 @@ server.broadcast("position", &transform).await?;
 ## 8. 関連
 
 - [spec/02-unified-channel/SPEC.md](../spec/02-unified-channel/SPEC.md) §4.4 (= KDL syntax)、 §8.5 (= datagram channel narrative)
-- [design/wire-format.md](./wire-format.md) — buffa wire format (= datagram event payload も同じ buffa encoding)
+- [design/wire-format.md](./wire-format.md) — stream 経路の buffa wire format (= datagram event payload は
+  buffa ではなく channel の codec で encode され、 packet を経由しない)
 - [design/architecture.md](./architecture.md) — overall network layer (要 update)
 - creo-memories: `mem_1Cb46rfagUw7Qqc9WthSsP` (= 本 task の memo)

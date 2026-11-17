@@ -71,7 +71,8 @@ sequenceDiagram
 ## Writing a server
 
 ```rust
-use unison::{ProtocolServer, NetworkError};
+use std::sync::Arc;
+use unison::ProtocolServer;
 use unison::network::UnisonChannel;
 use serde_json::json;
 
@@ -87,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         loop {
             match channel.recv().await {
                 Ok(msg) => {
-                    channel.send_response(msg.id, &msg.method, json!({"id": "1"})).await?;
+                    channel.send_response(msg.id, &msg.method, &json!({"id": "1"})).await?;
                 }
                 Err(_) => break,
             }
@@ -96,10 +97,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }).await;
 
     // Spawn in the background with graceful-shutdown support.
-    let handle = server.spawn_listen("[::1]:8080").await?;
+    let handle = Arc::new(server).listener("[::1]:8080").spawn().await?;
     println!("server up at {}", handle.local_addr());
 
-    // Stop it with `handle.shutdown().await?`.
+    // Serve until Ctrl-C, then shut down gracefully.
+    tokio::signal::ctrl_c().await?;
+    handle.shutdown().await?;
     Ok(())
 }
 ```
@@ -112,22 +115,19 @@ use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = ProtocolClient::new_default()?;
+    // Dev only: skips server certificate verification (loopback targets only).
+    let client = ProtocolClient::insecure_localhost()?;
     client.connect("[::1]:8080").await?;
 
     // Open a channel and do a request/response.
     let users = client.open_channel("users").await?;
-    let response = users.request("CreateUser", json!({
+    let response: serde_json::Value = users.request("CreateUser", &json!({
         "name": "Alice",
         "email": "alice@example.com"
     })).await?;
     println!("user created: {}", response);
 
-    // Receive events on another channel.
-    let events = client.open_channel("events").await?;
-    while let Ok(event) = events.recv().await {
-        println!("event: {:?}", event);
-    }
+    users.close().await?;
 
     Ok(())
 }
@@ -154,11 +154,11 @@ Client                              Server
 
 ```rust
 // Request / response.
-let res = channel.request("CreateUser", payload).await?;
-channel.send_response(id, method, payload).await?;
+let res: serde_json::Value = channel.request("CreateUser", &payload).await?;
+channel.send_response(id, method, &payload).await?;
 
 // Event push (one-way).
-channel.send_event("UserCreated", payload).await?;
+channel.send_event("UserCreated", &payload).await?;
 
 // Raw bytes — bypasses buffa/zstd. Useful for audio, etc.
 channel.send_raw(&pcm_data).await?;
@@ -172,14 +172,16 @@ A single byte at the head of each frame distinguishes Protocol frames (`0x00`, b
 ## Connection events
 
 ```rust
+use unison::ConnectionEvent;
+
 let mut events = server.subscribe_connection_events();
 tokio::spawn(async move {
     while let Ok(event) = events.recv().await {
         match event {
-            ConnectionEvent::Connected { remote_addr, context } => {
+            ConnectionEvent::Connected { remote_addr, .. } => {
                 println!("connected: {}", remote_addr);
             }
-            ConnectionEvent::Disconnected { remote_addr } => {
+            ConnectionEvent::Disconnected { remote_addr, .. } => {
                 println!("disconnected: {}", remote_addr);
             }
         }
@@ -217,7 +219,7 @@ protocol "my-service" version="1.0.0" {
 |-------|-------------|
 | [`unison-protocol`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-protocol) | Core library. Published on crates.io as `club-unison`; the Rust crate identifier is `unison`. KDL schema, QUIC, channels, packets. |
 | [`unison-mcp`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-mcp) | MCP bridge (`unison-mcp` binary). Discovers a server's KDL at runtime and synthesizes one MCP tool per `request`, so AI agents can call Unison servers. |
-| [`unison-cli`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-cli) | Developer CLI (`unison` binary): `ping`, `call`, `sniff`, `mock` (stub server from a KDL file), `schema lint`. |
+| [`unison-cli`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-cli) | Developer CLI (`unison` binary): `ping`, `call`, `sniff`, `mock` (stub server from a KDL file), `schema-lint`, `schema-diff`, `schema-check`. |
 
 ## Polyglot clients
 

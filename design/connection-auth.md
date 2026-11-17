@@ -1,7 +1,7 @@
 # design/connection-auth.md — Connection-level Auth Primitive 設計
 
 **バージョン**: 0.2 (設計確定 2026-06-27、 実装完了 2026-06-27)
-**最終更新**: 2026-06-27
+**最終更新**: 2026-11-04
 **ステータス**: 実装済 (= `network/auth.rs` + `enable_auth` + `connect_with_credential`、 E2E test 4件 green)
 **対応仕様**: （未作成 — 必要なら `spec/05-auth/SPEC.md` を mirror）
 **設計 SSOT**: Context Engine `mem_1CcTT4yxguA1KjGJXXHFor` / 実装 handoff `mem_1CcTTLKuuTYGfATSKdSo8J`
@@ -116,6 +116,9 @@ impl ConnectionContext {
     pub async fn principal(&self) -> Option<Principal> { /* read guard clone */ }
 }
 ```
+
+> 上は設計時点 (1.4.0) の形。 1.5.0 で server 起点 stream 用の `conn` field も追加された
+> ([server-initiated-stream.md](./server-initiated-stream.md))。 現在の定義は `network/context.rs`。
 
 **型選択 — `Arc<dyn Any + Send + Sync>` を採用**（§6 で論拠）。`ConnectionContext<P>` と
 ジェネリック化すると `register_channel` の handler 型 `Fn(Arc<ConnectionContext>, ...)` 経由で
@@ -250,7 +253,7 @@ auth はクライアント側に専用 transport を要求しない。**`unison.
     の数値配列 `[104,101,...]` を期待する。
     - **TS**: `Uint8Array` を直接入れると `{"0":104,...}` object 化 → `Array.from(bytes)` で `number[]` に。
     - **Swift**: `Data` を `Codable` に入れると **base64 string** 化 → `[UInt8]` 配列にして送る。
-    - **Ruby**: binding 経由で Rust の `Vec<u8>` に直接渡るので native（String / bytes）でよい。
+    - **Ruby**: API は String を受け、 内部で `String#bytes`（Integer 配列）にして送る。
 - response payload = `{ "ok": boolean }`。`ok == false` → 認証拒否（throw / Err）、principal は立たない。
 
 #### 各言語の API 形（Rust `connect_with_credential` の対応物）
@@ -259,7 +262,7 @@ auth はクライアント側に専用 transport を要求しない。**`unison.
 | Rust | `client.connect_with_credential(url, &[u8]) -> Result<()>` |
 | TypeScript | `connect({ ..., credential: Uint8Array })` + `client.authenticate(credential: Uint8Array)` |
 | Swift | `UnisonClient.connect(to:trust:credential:)` + `Connection.authenticate(_ credential: [UInt8])` |
-| Ruby | `client.connect_with_credential(url, credential)`（pure Ruby で `Client` 再オープン、 `open_channel`+`request` の上に実装。native ext は公開版 club-unison に対しビルドされるため、 未公開 Rust `connect_with_credential` に依存しない） |
+| Ruby | `client.connect_with_credential(url, credential)`（pure Ruby で `Client` 再オープン、 `open_channel`+`request` の上に実装 = `clients/ruby/lib/unison.rb`。 Rust の `connect_with_credential` は 1.4.0 で公開済みだが、 native ext の binding には足さずに済ませている） |
 
 詳細は各 client design doc の auth 節（`design/typescript-client-api.md` / `design/swift-client-api.md`）。
 

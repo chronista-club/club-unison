@@ -1,7 +1,7 @@
 # design/wire-format.md — Wire Format 設計 (v0.9.0 buffa pivot)
 
 **バージョン**: 1.0 (v0.9.0 で buffa pivot 完了)
-**最終更新**: 2026-09-05
+**最終更新**: 2026-11-04
 **ステータス**: Stable (= buffa wire 確定)
 
 ---
@@ -42,8 +42,12 @@ v2.0 で削除)。
 - 先頭 4 byte: header bytes 長 (big-endian u32)
 - header 部: [`proto::PacketHeader`](../crates/unison-protocol/proto/protocol.proto)
   を buffa でエンコードした可変長
-- payload 部: caller が任意の codec (JsonCodec / ProtoCodec / raw) で encode した bytes、
-  圧縮は header の `compressed_length > 0` + `flags::COMPRESSED` で表現
+- payload 部: buffa で encode した [`proto::ProtocolMessage`](../crates/unison-protocol/proto/protocol.proto)。
+  channel の codec (JsonCodec / ProtoCodec) が encode した bytes はこの
+  `ProtocolMessage.payload` に入る (= codec の bytes が packet の payload に直接載るわけ
+  ではない)。 圧縮は header の `compressed_length > 0` + `PacketFlags::COMPRESSED` で表現
+- raw frame (= typed frame の `FRAME_TYPE_RAW`、 `UnisonChannel::send_raw` / `recv_raw`) は
+  packet を通らず、 typed frame の payload に bytes がそのまま載る
 
 旧 v0.8 系の rkyv 56-byte fixed header は v0.9.0 で **完全削除** された。
 
@@ -103,7 +107,8 @@ v0.10.0 で確定した骨子:
 - 1 channel = 1 (virtual) stream のメンタルモデル維持、 datagram channel は `channel_id`
   で識別される virtual stream
 - KDL `channel "X" backend="datagram" channel_id=N` で宣言、 1 channel = 1 backend strict
-- Wire format: `[varint channel_id] [buffa-encoded event payload]`
+- Wire format: `[varint channel_id] [codec-encoded event payload]` (= channel の codec、
+  既定 `JsonCodec`。 `UnisonPacket` / `ProtocolMessage` は経由しない)
 - 型 API: `DatagramChannel<C>` を `UnisonChannel<C>` と別型分離
 - v0.9.0 connection-level API は escape hatch として残存
 

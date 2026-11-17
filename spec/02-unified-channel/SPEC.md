@@ -1,7 +1,7 @@
 # spec/02: Unison Protocol - Unified Channel プロトコル仕様
 
 **バージョン**: 2.3.0 (旧 spec/03 の channel routing / UnisonChannel API / ConnectionContext を統合、 旧構文互換の記述を撤去)
-**最終更新**: 2026-09-05
+**最終更新**: 2026-11-04
 **ステータス**: Stable (v0.9.0 で 2.0.0 確定)、 additive 拡張中 (datagram channel / request 属性)
 
 ---
@@ -13,7 +13,7 @@
 3. [コアメッセージ型](#3-コアメッセージ型)
 4. [KDL スキーマ定義言語](#4-kdl-スキーマ定義言語)
 5. [メッセージフロー](#5-メッセージフロー)
-6. [コード生成](#6-コード生成)
+6. [スキーマの消費者](#6-スキーマの消費者)
 7. [セキュリティ](#7-セキュリティ)
 8. [パフォーマンス](#8-パフォーマンス)
 9. [バージョニングと互換性](#9-バージョニングと互換性)
@@ -65,10 +65,12 @@ graph TB
     US --> QUIC
     US --> WT
     DC --> QUIC
+    DC --> WT
 ```
 
 `UnisonStream` は `UnisonConn` trait (= `accept_bi` / `open_bi` / datagram) の上に乗るため、
-raw QUIC と WebTransport のどちらの接続でも同じ `register_channel` ハンドラーが動く。
+raw QUIC と WebTransport のどちらの接続でも同じ `register_channel` ハンドラーが動く。 datagram channel も
+`UnisonConn` の datagram を使うので、 両 transport で同じ `register_channel_datagram` ハンドラーが動く。
 
 ---
 
@@ -149,7 +151,7 @@ packet header には相関用 field を持たない (= v2.0 で `response_to` �
 
 | 送信側 | id | 意味 |
 |--------|-----|------|
-| Request | > 0 (送信側が生成、 接続内で一意) | 応答を期待するリクエスト |
+| Request | > 0 (送信側が生成、 channel (stream) 内で一意) | 応答を期待するリクエスト |
 | Response | = Request の id | リクエストに対する応答 |
 | Error | = Request の id | リクエストに対するエラー応答 |
 | Event | 0 | 一方向メッセージ（応答不要） |
@@ -241,7 +243,7 @@ channel "<name>" from="<direction>" lifetime="<lifetime>" {
 | `from` | `"either"` | 双方が送信可能 |
 | `lifetime` | `"persistent"` | 接続中ずっと維持される |
 | `lifetime` | `"transient"` | リクエスト単位で開閉される |
-| `backend` | `"stream"` | QUIC bidi stream を使う (= default、 ordered + reliable) |
+| `backend` | `"stream"` | QUIC bidi stream を使う (= default、 ordered + reliable。 受信 queue が溢れたときの扱いは §5.5) |
 | `backend` | `"datagram"` | QUIC datagram を使う (= unordered + unreliable + ≤MTU)、 `channel_id` 必須 |
 | `channel_id` | `1..` | `backend="datagram"` 時の demux 識別子 (= varint encoded prefix)、 author が明示割り当て (= proto3 field number 哲学) |
 
@@ -351,7 +353,7 @@ sequenceDiagram
         S->>S: handler(ConnectionContext, UnisonStream) を spawn
     else handler なし
         S->>C: __channel_ack { id: N, type: Error, payload: {"error":"channel-not-found","channel":"query"} }
-        Note over C: open_channel() は HandlerNotFound で失敗
+        Note over C: open_channel() は NetworkError::Protocol("Channel 'query' open rejected: …") で失敗
     end
 ```
 
@@ -422,12 +424,14 @@ sequenceDiagram
 
 #### チャネルレベルエラー
 
-| エラー | 原因 | 処理 |
-|--------|------|------|
-| `HandlerNotFound` | 未登録チャネル名 | Error メッセージを返却 |
-| `Protocol` | 不正なメッセージ形式 | Error メッセージを返却 |
-| `Timeout` | 応答タイムアウト | pending を Error で解決 |
-| `Connection` | QUIC 接続断 | 全 pending を Error で解決 |
+| 状況 | server の処理 | client に見えるエラー |
+|------|---------------|----------------------|
+| 未登録チャネル名の open | nack (`__channel_ack` の Error) を返して stream を閉じる | `open_channel()` が `NetworkError::Protocol("Channel '…' open rejected: …")` |
+| 不正な open frame (protocol frame でない / decode できない / `__channel:` で始まらない) | log を出して stream を閉じる (応答なし) | — |
+| 応答タイムアウト | — | `request()` が `NetworkError::Timeout` (既定 30s、 `with_request_timeout` で変更)。 pending から外す |
+| 接続断 | — | 待機中の `request()` は `NetworkError::Protocol("Request error: …")` (recv loop が全 pending を Error で解決する) |
+
+`NetworkError::HandlerNotFound` は、 存在しない datagram channel 名で `ProtocolServer::broadcast` を呼んだときにだけ返る。
 
 #### Request エラー応答
 
@@ -441,7 +445,7 @@ sequenceDiagram
 
     S->>C: ProtocolMessage {<br/>  id: 42,<br/>  method: "Query",<br/>  msg_type: Error,<br/>  payload: {code: "NOT_FOUND", message: "..."}<br/>}
 
-    Note over C: pending id=42 を Error で解決
+    Note over C: pending id=42 を Error で解決<br/>→ request() は NetworkError::Protocol("Request error: …")
 ```
 
 ### 5.5 UnisonChannel API
@@ -449,7 +453,13 @@ sequenceDiagram
 `UnisonChannel<C: Codec = JsonCodec>` が request / event 両パターンを 1 型で提供する
 ([channel.rs](../../crates/unison-protocol/src/network/channel.rs))。 内部で recv loop を
 1 本 spawn し、 `Response` / `Error` は `id` で pending の oneshot へ、 `Event` / `Request` は
-`recv()` の queue へ振り分ける。 接続断で loop が終わると残る pending は全て Error で解決される。
+`recv()` の queue へ振り分ける (raw frame は `recv_raw()` の queue へ)。 接続断で loop が終わると
+残る pending は全て Error で解決される。
+
+受信 queue は event 用・raw 用とも 256 件で、 満杯のときに届いた Event / Request / raw frame は
+warn log を出して **捨てる**。 recv loop を consumer の遅さで止めると、 後続の Response まで
+届かなくなるため。 Response は queue を通らず pending へ直接渡るので、 この影響を受けない。
+stream 自体は ordered + reliable だが、 `recv()` / `recv_raw()` を読む側が遅れ続けると取りこぼしが起きる。
 
 ```rust
 impl<C: Codec> UnisonChannel<C> {
@@ -467,7 +477,7 @@ impl<C: Codec> UnisonChannel<C> {
 }
 ```
 
-`recv()` が `NetworkError::Protocol("Channel closed")` を返したら正常終端
+`recv()` / `recv_raw()` が `NetworkError::ChannelEof(_)` を返したら channel の終端
 (`NetworkError::is_normal_close()` で判定できる)。
 
 ### 5.6 ConnectionContext
@@ -478,8 +488,8 @@ impl<C: Codec> UnisonChannel<C> {
 | 項目 | 内容 |
 |------|------|
 | `connection_id: Uuid` | 接続の一意 ID |
-| `identity()` / `set_identity()` | 対向の `ServerIdentity` (client 側で `__identity` 受信後に set) |
-| `principal()` / `set_principal()` | 認証済み主体 ([design/connection-auth.md](../../design/connection-auth.md)) |
+| `identity()` / `set_identity()` | `ServerIdentity`。 server 側は自分の identity (`__identity` 送信時に set)、 client 側は受け取った server の identity (`__identity` 受信後に set) |
+| `principal()` / `set_principal()` | 認証済み主体。 `unison.auth` の verifier が成功したときに set される (§7.1、 [design/connection-auth.md](../../design/connection-auth.md)) |
 | `open_server_stream(name)` | server 発 channel の stream を開く (`from="server"`) |
 | `register_channel` / `get_channel` / `remove_channel` / `channel_names` | この接続で開いた channel の handle 台帳 |
 
@@ -493,9 +503,9 @@ KDL スキーマは SSOT で、 本 crate の中では **runtime** に消費す�
 | 消費者 | 場所 | 何をするか |
 |--------|------|-----------|
 | `SchemaParser` | `parser/` | KDL → `ParsedSchema`。 datagram channel の `channel_id` 必須等の semantic 検証 |
-| `SchemaRegistry` | `network/schema_registry.rs` | request / event の payload を runtime 検証 (§4.1 の型、 `required`)。 schema 外の field は許容 (forward-compat) |
+| `SchemaRegistry` | `network/schema_registry.rs` | request の payload を runtime 検証 (§4.1 の型、 `required`)。 event は検証しない。 呼ぶのは client が送信する前の `DynamicChannel::request` だけ。 schema 外の field は許容 (forward-compat) |
 | Discovery | `network/discovery.rs`、 [spec/04](../04-discovery/SPEC.md) | server が KDL 本文と hash を client に配る |
-| `DynamicProtocol` | `network/dynamic.rs` | 取得した KDL から型なしで channel を開く (= unison-mcp / CLI が使う) |
+| `DynamicProtocol` | `network/dynamic.rs` | 取得した KDL から型なしで channel を開く (= unison-mcp が使う) |
 | `unison-mcp` | `crates/unison-mcp` | request → MCP tool、 `returns` → `output_schema` ([design/kdl-to-json-schema.md](../../design/kdl-to-json-schema.md)) |
 | `club-kdl-codegen` | 別 crate | Rust / TypeScript の型生成 |
 | TS / Swift / Ruby client | `clients/` | wire 互換の client SDK ([design/typescript-client-api.md](../../design/typescript-client-api.md) 等) |
@@ -506,15 +516,18 @@ KDL スキーマは SSOT で、 本 crate の中では **runtime** に消費す�
 
 ### 7.1 認証と認可
 
-- プロトコルレベルの認証は未指定（トランスポートレイヤーの責任）
-- チャネルレベルの認可はハンドラー実装で対応
-- セッション管理はアプリケーション固有トークンで実現
+- 接続単位の認証 (authN) は opt-in の `unison.auth` channel で行う。 server が
+  `ProtocolServer::enable_auth(verifier)` で有効化し、 client は `connect_with_credential` で接続直後に
+  credential を 1 回提示する。 verifier が返した principal はその接続の `ConnectionContext` に立つ (§5.6)
+- 認可 (authZ) は各 channel handler が `ctx.principal()` を見て行う (= protocol は gate しない)
+- credential / principal の中身はアプリケーションが決める (library は解釈しない)。
+  設計は [design/connection-auth.md](../../design/connection-auth.md)
 
 ### 7.2 入力検証
 
-- 必須フィールドの自動検証
-- 全パラメータの型チェック
-- カスタム検証はハンドラー実装で対応
+- `DynamicChannel` ([spec/04](../04-discovery/SPEC.md)) 経由の request は、 送信前に client 側で
+  `required` と基本型 (§4.1) だけを検証する。 配列・map の要素型と custom 型は見ない
+- server 側で受信 payload を検証するのは handler の責務 (protocol は検証しない)
 
 ### 7.3 トランスポートセキュリティ
 
@@ -530,9 +543,12 @@ v0.7.0 以降、 TLS の cert / trust 戦略は **明示選択 API** (`CertSourc
 
 ### 8.1 メッセージサイズ
 
-- JSON ベースのシリアライゼーション
-- 典型的なメッセージオーバーヘッド: 100-200 バイト
-- 2KB 以上のペイロードは zstd で自動圧縮
+- envelope (packet header と `ProtocolMessage`) は buffa (protobuf)、 payload は channel の codec
+  (既定 JsonCodec) でエンコードする (§8.4)
+- 1 メッセージの固定オーバーヘッドはおよそ 30 B + method 名の長さ。 golden fixture
+  `crates/unison-protocol/tests/fixtures/wire/request_frame.hex` は 60 B で、 うち payload 26 B・method 15 B
+  (fixture は header の timestamp を 0 に固定しているので、 実際の送信より約 10 B 短い)
+- エンコード後の `ProtocolMessage` が 2KB 以上なら zstd で圧縮を試みる (§8.4)
 
 ### 8.2 レイテンシー
 
@@ -566,8 +582,8 @@ Buffers)** に切り替えた (= breaking change、 詳細は [`CHANGELOG.md`](.
 - header 部は [`proto::PacketHeader`](../../crates/unison-protocol/proto/protocol.proto)
   を buffa でエンコードした可変長
 - payload 部の長さと圧縮状態は header の `payload_length` / `compressed_length` で表現
-- `compressed_length > 0` かつ `flags::COMPRESSED` 立ちで zstd 圧縮されているとみなす
-  (= 2KB 以上の payload は自動圧縮)
+- `compressed_length > 0` かつ `PacketFlags::COMPRESSED` 立ちで zstd 圧縮されているとみなす
+  (= エンコード後の `ProtocolMessage` が 2KB 以上なら zstd level 1 で圧縮を試み、 小さくなった場合だけ圧縮形を使う)
 
 旧 v0.8 系の rkyv 56-byte fixed header は v0.9.0 で **完全削除** された。
 
@@ -584,7 +600,7 @@ hatch として残存するが、 推奨は KDL schema 経由の datagram channe
 | | Stream channel | Datagram channel |
 |---|---|---|
 | **対応 QUIC primitive** | bidi stream | virtual stream (= channel_id で識別、 connection の共有 datagram path) |
-| **配送保証** | Ordered + Reliable | Unordered + Unreliable + ≤MTU |
+| **配送保証** | Ordered + Reliable (受信 queue 満杯時は §5.5) | Unordered + Unreliable + ≤MTU |
 | **HoL blocking** | Channel 内で blocking 許容 | なし (= UDP-like) |
 | **MessageType 適合** | Request / Response / Event / Error | **Event** のみ (= 1 方向) |
 | **Use case** | RPC、 大規模 stream、 制御フロー | 3DCG transform 大量配信、 heartbeat、 presence |
@@ -611,19 +627,22 @@ channel "position" from="server" lifetime="persistent" backend="datagram" channe
 #### Wire format
 
 ```text
-[varint channel_id] [buffa-encoded event payload]
+[varint channel_id] [codec-encoded event payload]
 ```
 
 - payload 先頭 1-2 byte に varint encoded `channel_id` を埋め込み、 受信側で demux
-- 残りは buffa (protobuf) で encoded された event message
+- 残りは channel の codec で encode した event (既定 JsonCodec。 server 側の
+  `register_channel_datagram` は JsonCodec 固定)。 stream channel と違い `ProtocolMessage` /
+  packet header では包まない
 - 1 datagram = 1 event message、 chunking / fragmentation 不可 (= MTU 超過は send 失敗)
 
-MTU 安全値 **≤1300B** (= IP MTU 1500 - IP/UDP/QUIC header)。 超過すると `SendDatagramError::TooLarge`。
+MTU 安全値 **≤1300B** (= IP MTU 1500 - IP/UDP/QUIC header)。 超過すると送信は失敗し、 caller には
+`NetworkError::Quic` (raw QUIC / WebTransport の send_datagram error を文字列化したもの) が返る。
 
 #### API surface
 
 **Server side**:
-- `register_channel_datagram(name, channel_id, handler)` — datagram channel handler 登録 (= `channel_id` は KDL schema 由来の varint identifier)
+- `register_channel_datagram(name, channel_id, handler)` — datagram channel handler 登録 (= `channel_id` は KDL schema 由来の varint identifier)。 handler は `DatagramChannel<JsonCodec>` を受け取る
 - channel handler 内 `chan.send_event::<T>(event)` で per-connection 送信
 - `server.broadcast(channel_name, event)` で全 connected client へ broadcast
 
@@ -650,14 +669,20 @@ v0.10.0 でも残存 (= channel API の制約に当てはまらない caller の
 | 観点 | connection-level (v0.9.0) | datagram channel (v0.10.0+) |
 |------|---------------------------|------------------------------|
 | Demux | caller が payload header で実装 | library が `channel_id` varint prefix で自動 |
-| 型 safety | raw `Bytes` | buffa-encoded typed `T` |
+| 型 safety | raw `Bytes` | codec で encode した typed `T` (既定 JsonCodec) |
 | Server-side handler | accept loop 自前 | `register_channel_datagram` で declarative |
 | Broadcast | per-connection iterate | `server.broadcast(name, event)` 1 行 |
 
 #### benchmark baseline
 
-`benches/datagram.rs` で `payload {64, 1300} × burst {100, 1000}` の 4 ケース計測。
-`benches/RESULTS.md` 参照。 v0.10.0 で channel API 経由の bench 追加予定 (= demux overhead 計測)。
+`crates/unison-protocol/benches/` に 2 系統ある:
+
+- `datagram.rs` — connection-level の raw datagram。 `payload {64, 1300} × burst {100, 1000}` の 4 ケース
+- `datagram_channel.rs` — 同じ 4 ケースを channel API 経由で計測 (= codec / `channel_id` demux の overhead)。
+  `datagram_channel_sustained.rs` (60Hz / 120Hz の連続送信) と `datagram_channel_max_throughput.rs`
+  (rate 制限なしの上限) も channel API 経由
+
+結果は [benches/RESULTS.md](../../benches/RESULTS.md) にまとめる。
 
 #### v0.11+ 拡張
 
@@ -675,15 +700,18 @@ v0.10.0 でも残存 (= channel API の制約に当てはまらない caller の
 
 ### 9.2 後方互換性
 
-- 旧 `service` / `method` / `send` / `recv` 構文は **認識しない** (parse error)。 移行は
-  [guides/migration.md](../../guides/migration.md)
+- 旧 `service` / `method` / `send` / `recv` 構文は parse error にならず、 **黙って無視される**
+  (parser は名前の一致する子 node だけを拾うため)。 旧構文だけで書いた schema は channel 0 件、
+  あるいは request / event 0 件の channel として読まれる。 移行は [guides/migration.md](../../guides/migration.md)
 - 新しいオプションフィールドの追加: 互換 (受信側は schema 外 field を許容)
 - 新しい `request` / `event` の追加: 互換
 
 ### 9.3 前方互換性
 
 - デシリアライゼーション時に不明フィールドは無視
-- 不明メソッドは `Error` メッセージで応答
+- 不明メソッドへの応答は handler の責務 (protocol が自動で `Error` を返すことはない)。 built-in の
+  `unison.discovery` / `unison.auth` は不明メソッドを log して無視するので、 client は request
+  タイムアウト (既定 30s) まで待つ
 - バージョン不整合ハンドリング
 
 ---
@@ -730,5 +758,5 @@ v0.10.0 でも残存 (= channel API の制約に当てはまらない caller の
 ---
 
 **仕様バージョン**: 2.3.0
-**最終更新**: 2026-09-05
+**最終更新**: 2026-11-04
 **ステータス**: Stable
