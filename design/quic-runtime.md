@@ -100,7 +100,7 @@ stateDiagram-v2
 
 - **Arc\<RwLock\<\>\> による並行保護**: 1つのQUIC接続に対して複数のストリームハンドラが並行動作するため、identity と channels を個別にロック管理する。これにより、チャネル登録がidentity参照をブロックしない。
 - **UUID による接続識別**: `Uuid::new_v4()` で生成される128ビットの一意識別子。接続ログやデバッグ時のトレーサビリティに使用する。
-- **principal / conn は後から足した field**: principal は `unison.auth` handler が `set_principal` で立てる（1.4.0、[connection-auth.md](./connection-auth.md)）。conn は `handle_connection` が server 側でだけ `set_conn` で立て、`open_server_stream` が使う（1.5.0、[server-initiated-stream.md](./server-initiated-stream.md)）。client 側の ctx では None のまま。
+- **principal / conn は後から足した field**: principal は `unison.auth` handler が `set_principal` で立てる（1.4.0、[connection-auth.md](./connection-auth.md)）。conn は `handle_connection` が server 側でだけ `set_conn` で立て、`open_server_stream`（1.5.0、[server-initiated-stream.md](./server-initiated-stream.md)）と `remote_address`（2.3.0。接続の相手のアドレスを、呼んだ時点の値で返す）が使う。client 側の ctx では None のまま。
 
 ## 3. Identity Handshake
 

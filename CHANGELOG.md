@@ -6,6 +6,13 @@
 このプロジェクトは [セマンティックバージョニング](https://semver.org/lang/ja/) に準拠しています。
 ## [Unreleased]
 
+### Added
+
+- `ConnectionContext::remote_address()` — channel handler が、 受け取った ctx から
+  その接続の相手の `SocketAddr` を引ける。 「loopback からの接続にだけ答える」 のような
+  判定を、 listener を分けずに handler の中で書ける。 server 側の ctx のみ値を返し、
+  client 側は `None`。 返すのは呼んだ時点のアドレス (connection migration で変わりうる)。
+
 ## [2.2.1] - 2026-11-04 — 圧縮 payload の展開上限と依存の advisory 対応
 
 > 2026-10-21 の security-audit と依存の照合で見つかった問題の修正。公開 API と
