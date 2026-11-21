@@ -60,7 +60,6 @@ bytes.workspace = true
 zstd.workspace = true
 
 # Utilities
-chrono.workspace = true
 uuid.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
