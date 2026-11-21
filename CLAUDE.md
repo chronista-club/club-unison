@@ -34,7 +34,7 @@ channel "name" from="client" lifetime="persistent" {
 }
 ```
 
-旧 `service` / `method` / `send` / `recv` 構文は非推奨。
+知らない名前の node（旧 `service` / `method` / `send` / `recv` 構文、タイプミス）は、schema を書く側（`schema-lint`、server の読み込み）で parse error になる。discovery で届いた schema を読む側は読み飛ばす。
 
 ## テスト
 

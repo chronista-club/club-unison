@@ -12,7 +12,7 @@ const CREO_EXCERPT: &str = include_str!("fixtures/contracts/creo-ios-1.0.1-b11-e
 fn creo() -> TypeIndex {
     TypeIndex::new(
         &SchemaParser::new()
-            .parse(CREO_EXCERPT)
+            .parse_contract(CREO_EXCERPT)
             .expect("fixture parses"),
     )
 }

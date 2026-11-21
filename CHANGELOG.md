@@ -54,6 +54,32 @@
   同じ上限。 これまでは無制限に溜めていた)。
 - Swift client: `ChannelTransport` に `onClosed(_:)` を追加 (既定の実装あり)。 独自の
   transport は、 これを実装すると相手からの切断を `connectionEvents` に流せる。
+- **KDL schema の知らない node を parse error にする**。 これまで `SchemaParser` は、
+  その位置に書けない名前の node (= 旧 `service` / `method` / `send` / `recv` 構文、
+  `requst` のようなタイプミス) を黙って捨てていたため、 `schema-lint` が ok を返す
+  「空の channel」ができていた。 対象は schema を書く側: `schema-lint` / `mock` と、
+  server が自分の schema を読み込むとき (`enable_discovery` など)。 エラーは `unknown node "send" in protocol "x" > channel
+  "users" (allowed: request, event)` の形で場所を示す。
+  **既存の schema に余分な node があると読み込めなくなる** (`/-` でコメントアウトした
+  node は対象外)。
+- discovery で相手の server から届いた schema を読む側 (`DynamicProtocol` /
+  `SchemaRegistry::from_kdl`、 MCP bridge) は、 これまでどおり知らない node を読み飛ばす
+  (`SchemaParser::parse_lenient` を追加)。 新しい版の語彙を使う server に、 古い client が
+  繋げなくならないようにするため。
+- `SchemaParser::parse_contract` を追加。 `schema-check` / `schema-diff` はこれで約束を
+  読み、 top level にある他の方言の node (例: Creo の REST の `route`) だけを読み飛ばす。
+  Unison の node の中は `parse` と同じく厳密。
+- 依存を更新: club-kdl 0.17、 tokio 1.54、 rmcp 3.8、 uuid 1.29 ほか (#126)。 開発用の
+  toolchain を `.mise.toml` で rust 1.99.1 に指定 (MSRV 1.95 は据え置き)。
+- Ruby native extension を `club-unison 2.2.1` に上げ、 依存の floor も 2.2.1 に (#127)。
+  CI で Ruby 側の lockfile も `cargo deny` で照合する。
+- TypeScript client: `engines` を Node 26 以上に、 dev 依存を vitest 5 に (#129)。
+
+### Docs
+
+- spec / design / guides をコードと照合して同期 (#130)。 コンパイルできないコード例、
+  実装と違う挙動の記述、 古い実装の説明 (`design/quic-runtime.md` §4〜§6、
+  `design/test-strategy.md`) を直した。
 
 ## [2.2.1] - 2026-11-04 — 圧縮 payload の展開上限と依存の advisory 対応
 

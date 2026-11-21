@@ -73,7 +73,7 @@ protocol "quickstart" version="1.0.0" {
 cargo run -p unison-cli -- schema-lint schemas/quickstart.kdl
 ```
 
-`schema-lint` は KDL syntax error に加え、datagram の `channel_id` 衝突 /
+`schema-lint` は KDL syntax error と知らない名前の node（タイプミスや旧構文）に加え、datagram の `channel_id` 衝突 /
 channel 名重複 / request・event 名の重複などの不変条件もチェックする。
 
 スキーマを変えるときは、配布済みの client が前提にしている旧版と比べて、壊れる変更が

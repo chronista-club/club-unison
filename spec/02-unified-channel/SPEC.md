@@ -701,9 +701,16 @@ v0.10.0 でも残存 (= channel API の制約に当てはまらない caller の
 
 ### 9.2 後方互換性
 
-- 旧 `service` / `method` / `send` / `recv` 構文は parse error にならず、 **黙って無視される**
-  (parser は名前の一致する子 node だけを拾うため)。 旧構文だけで書いた schema は channel 0 件、
-  あるいは request / event 0 件の channel として読まれる。 移行は [guides/migration.md](../../guides/migration.md)
+- schema は **その位置に書ける node だけ** で書く。 知らない名前の node (= 旧 `service` /
+  `method` / `send` / `recv` 構文、 タイプミス) は parse error になる (2.3.0 から。 それ以前は
+  黙って無視され、 空の channel として読まれていた)。 移行は [guides/migration.md](../../guides/migration.md)
+- 厳密に見るのは **schema を書く側** だけ (`schema-lint`、 server が自分の schema を読み込む
+  とき)。 **受け取る側** (discovery で server から届いた schema を読む client / MCP bridge) は、
+  知らない node をどの位置でも読み飛ばす (`SchemaParser::parse_lenient`)。 新しい版の語彙を
+  使う server に、 古い client が繋げなくならないようにするため
+- `schema-check` / `schema-diff` は他の方言の約束 (例: Creo の REST の `route`) を読むため、
+  top level の知らない node だけを読み飛ばす (`SchemaParser::parse_contract`)。 Unison の
+  node の中は厳密
 - 新しいオプションフィールドの追加: 互換 (受信側は schema 外 field を許容)
 - 新しい `request` / `event` の追加: 互換
 
