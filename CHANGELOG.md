@@ -6,6 +6,13 @@
 このプロジェクトは [セマンティックバージョニング](https://semver.org/lang/ja/) に準拠しています。
 ## [Unreleased]
 
+### Changed
+
+- `chrono` への依存を外す。 全バージョンが unmaintained と認定された
+  (RUSTSEC-2026-0543)。 使っていたのは bench の 1 行だけだった。 unison-mcp には rmcp
+  経由で残る (rmcp 側の依存で、 無効にできない) ので、 `deny.toml` で理由を付けて
+  照合の対象から外す。
+
 ### Added
 
 - `ConnectionContext::remote_address()` — channel handler が、 受け取った ctx から

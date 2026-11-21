@@ -51,7 +51,13 @@ feature-depth = 1
 # More documentation for the advisories section can be found here:
 # https://embarkstudios.github.io/cargo-deny/checks/advisories/cfg.html
 [advisories]
-ignore = []
+ignore = [
+    # chrono は全バージョンが unmaintained 認定 (2026-11)。 club-unison 本体は依存を
+    # 外した。 残るのは unison-mcp が使う rmcp の依存 (target 依存で無効にできない)。
+    # rmcp が chrono を外したら、 この行を消す。 Ruby native extension の lockfile は、
+    # chrono を外した club-unison に pin を上げるまで、 この行で通る。
+    { id = "RUSTSEC-2026-0543", reason = "unmaintained; pulled in only by rmcp (unison-mcp). club-unison itself no longer depends on chrono" },
+]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.
 # Setting this to true can be helpful if you have special authentication requirements that cargo-deny does not support.
