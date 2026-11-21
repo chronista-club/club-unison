@@ -95,7 +95,7 @@ fn sanitize_description(s: &str) -> String {
 /// - description: KDL `request "X" description="..."` があればその文字列を採用、
 ///   無ければ formulaic な default (= 「Invoke the X request on the Y channel」) を生成
 /// - input_schema: `request.fields` を JSON Schema object に変換
-/// - output_schema: KDL `returns` block があれば同じ converter で合成
+/// - output_schema: KDL `returns` block があれば [`fields_to_output_schema`] で合成
 ///   (= tool が入出力とも typed になり、 client は `structuredContent` を検証できる)
 /// - annotations: `open_world(true)` を base に (= bridge は外部 Unison server と
 ///   対話する、 static tools と同方針)、 KDL の safety hint (`readonly` /
@@ -125,7 +125,7 @@ pub fn synthesize_tool(channel_name: &str, request: &ChannelRequest) -> Tool {
     )
     .with_title(title);
     if let Some(returns) = &request.returns {
-        tool = tool.with_raw_output_schema(Arc::new(fields_to_object_schema(&returns.fields)));
+        tool = tool.with_raw_output_schema(Arc::new(fields_to_output_schema(&returns.fields)));
     }
     let mut annotations = ToolAnnotations::new().open_world(true);
     if let Some(readonly) = request.readonly {
@@ -156,6 +156,20 @@ const MAX_FIELD_NAME_LEN: usize = 128;
 /// [`MAX_SCHEMA_FIELDS`] で cap し、 hostile な field 名は skip、 description は
 /// [`sanitize_description`] を通す (= tool 名 / description と同じ防御方針)。
 pub fn fields_to_object_schema(fields: &[Field]) -> JsonObject {
+    object_schema(fields, false)
+}
+
+/// `returns` の `Field` 群から、 `Tool.output_schema` 用の JSON Schema object を組み立てる。
+///
+/// [`fields_to_object_schema`] との違いは 1 点: `required` でない field に null を許す
+/// (`{"type": ["string", "null"]}`)。 server が任意の field を null で返すのは普通の
+/// こと (Rust の `Option` は null になる) で、 これを許さないと MCP client の検証が
+/// 返事ごと落とし、 中身が agent に届かなくなる。
+pub fn fields_to_output_schema(fields: &[Field]) -> JsonObject {
+    object_schema(fields, true)
+}
+
+fn object_schema(fields: &[Field], optional_may_be_null: bool) -> JsonObject {
     let mut properties = Map::new();
     let mut required = Vec::new();
     if fields.len() > MAX_SCHEMA_FIELDS {
@@ -175,6 +189,13 @@ pub fn fields_to_object_schema(fields: &[Field]) -> JsonObject {
             continue;
         }
         let mut field_schema = field_type_to_schema(&f.field_type());
+        if optional_may_be_null
+            && !f.required
+            && let Some(ty) = field_schema.get("type").cloned()
+        {
+            // 型の制約が無い field (`json` / custom) は、 もともと null も通る。
+            field_schema.insert("type".to_string(), json!([ty, "null"]));
+        }
         if let Some(desc) = f.description.as_deref() {
             field_schema.insert(
                 "description".to_string(),
@@ -248,9 +269,210 @@ pub fn field_type_to_schema(ft: &FieldType) -> JsonObject {
     obj
 }
 
+/// `value` が `schema` (= この module が組み立てる JSON Schema の部分集合) に合うかを見る。
+/// 合わなければ、 最初に見つかった違いを `$.path: 理由` の形で返す。
+///
+/// 見るのは、 [`object_schema`] / [`field_type_to_schema`] が出す keyword だけ:
+/// `type` (文字列 or 配列) / `properties` / `required` / `items` / `additionalProperties`。
+/// MCP client は tool の output schema で `structuredContent` を検証し、 合わなければ
+/// 返事ごと落とす。 bridge が同じ schema で先に確かめることで、 合わない返事を
+/// `structuredContent` に載せずに済む (= 中身を text で agent に届けられる)。
+pub fn schema_violation(value: &Value, schema: &JsonObject) -> Option<String> {
+    violation_at(value, schema, "$")
+}
+
+fn violation_at(value: &Value, schema: &JsonObject, path: &str) -> Option<String> {
+    if let Some(expected) = schema.get("type") {
+        let allowed: Vec<&str> = match expected {
+            Value::String(t) => vec![t.as_str()],
+            Value::Array(ts) => ts.iter().filter_map(Value::as_str).collect(),
+            _ => Vec::new(),
+        };
+        if !allowed.is_empty() && !allowed.iter().any(|t| matches_json_type(value, t)) {
+            return Some(format!(
+                "{path}: expected {}, got {}",
+                allowed.join(" or "),
+                describe(value)
+            ));
+        }
+    }
+
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::Array(required)) = schema.get("required") {
+                for name in required.iter().filter_map(Value::as_str) {
+                    if !map.contains_key(name) {
+                        return Some(format!("{path}.{name}: required field is missing"));
+                    }
+                }
+            }
+            let properties = schema.get("properties").and_then(Value::as_object);
+            let additional = schema
+                .get("additionalProperties")
+                .and_then(Value::as_object);
+            for (key, child) in map {
+                let child_schema = properties
+                    .and_then(|p| p.get(key))
+                    .and_then(Value::as_object)
+                    .or(additional);
+                if let Some(child_schema) = child_schema
+                    && let Some(found) = violation_at(child, child_schema, &format!("{path}.{key}"))
+                {
+                    return Some(found);
+                }
+            }
+        }
+        Value::Array(items) => {
+            if let Some(item_schema) = schema.get("items").and_then(Value::as_object) {
+                for (index, item) in items.iter().enumerate() {
+                    if let Some(found) =
+                        violation_at(item, item_schema, &format!("{path}[{index}]"))
+                    {
+                        return Some(found);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
+/// JSON Schema の `type` との一致。 `integer` は小数部が 0 の number も含む。
+fn matches_json_type(value: &Value, ty: &str) -> bool {
+    match ty {
+        "null" => value.is_null(),
+        "string" => value.is_string(),
+        "boolean" => value.is_boolean(),
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "number" => value.is_number(),
+        "integer" => match value {
+            Value::Number(n) => {
+                n.is_i64() || n.is_u64() || n.as_f64().is_some_and(|f| f.fract() == 0.0)
+            }
+            _ => false,
+        },
+        _ => true,
+    }
+}
+
+fn describe(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(_) => "boolean".to_string(),
+        Value::Number(n) => format!("number {n}"),
+        Value::String(_) => "string".to_string(),
+        Value::Array(_) => "array".to_string(),
+        Value::Object(_) => "object".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn returns_fields(kdl_fields: &str) -> Vec<Field> {
+        let kdl = format!(
+            r#"protocol "t" version="1.0.0" {{
+    channel "c" from="client" lifetime="persistent" {{
+        request "R" {{
+            returns "Out" {{
+{kdl_fields}
+            }}
+        }}
+    }}
+}}"#
+        );
+        let parsed = unison::parser::SchemaParser::new().parse(&kdl).unwrap();
+        parsed.protocol.unwrap().channels[0].requests[0]
+            .returns
+            .clone()
+            .unwrap()
+            .fields
+    }
+
+    #[test]
+    fn output_schema_lets_optional_fields_be_null() {
+        let fields = returns_fields(
+            r#"field "status" type="string" required=#true
+               field "lane" type="string"
+               field "meta" type="json""#,
+        );
+        let schema = Value::Object(fields_to_output_schema(&fields));
+        assert_eq!(schema["properties"]["status"]["type"], json!("string"));
+        assert_eq!(
+            schema["properties"]["lane"]["type"],
+            json!(["string", "null"])
+        );
+        // 型の制約が無い field はそのまま (= もともと何でも通る)
+        assert!(schema["properties"]["meta"].get("type").is_none());
+        // input 側は変えない
+        let input = Value::Object(fields_to_object_schema(&fields));
+        assert_eq!(input["properties"]["lane"]["type"], json!("string"));
+    }
+
+    #[test]
+    fn schema_violation_accepts_conforming_values() {
+        let fields = returns_fields(
+            r#"field "status" type="string" required=#true
+               field "lane" type="string"
+               field "count" type="int"
+               field "tags" type="array" items="string"
+               field "by_name" type="map" values="int"
+               field "meta" type="json""#,
+        );
+        let schema = fields_to_output_schema(&fields);
+        for value in [
+            json!({ "status": "ok" }),
+            json!({ "status": "ok", "lane": null, "count": null }),
+            json!({ "status": "ok", "count": 3, "tags": ["a", "b"], "by_name": { "x": 1 } }),
+            json!({ "status": "ok", "count": 3.0, "meta": [1, "two", null], "extra": true }),
+        ] {
+            assert_eq!(schema_violation(&value, &schema), None, "{value}");
+        }
+    }
+
+    #[test]
+    fn schema_violation_names_the_first_mismatch() {
+        let fields = returns_fields(
+            r#"field "status" type="string" required=#true
+               field "count" type="int"
+               field "tags" type="array" items="string"
+               field "by_name" type="map" values="int""#,
+        );
+        let schema = fields_to_output_schema(&fields);
+        let cases = [
+            (
+                json!({ "error": "refused" }),
+                "$.status: required field is missing",
+            ),
+            (
+                json!({ "status": null }),
+                "$.status: expected string, got null",
+            ),
+            (
+                json!({ "status": "ok", "count": 1.5 }),
+                "$.count: expected integer or null, got number 1.5",
+            ),
+            (
+                json!({ "status": "ok", "tags": ["a", 2] }),
+                "$.tags[1]: expected string, got number 2",
+            ),
+            (
+                json!({ "status": "ok", "by_name": { "x": "one" } }),
+                "$.by_name.x: expected integer, got string",
+            ),
+            (json!("not an object"), "$: expected object, got string"),
+        ];
+        for (value, expected) in cases {
+            assert_eq!(
+                schema_violation(&value, &schema).as_deref(),
+                Some(expected),
+                "{value}"
+            );
+        }
+    }
 
     #[test]
     fn synth_tool_name_simple_channel() {
@@ -666,7 +888,8 @@ protocol "x" version="0.1.0" {
                 .and_then(Value::as_object)
                 .unwrap()
                 .get("type"),
-            Some(&json!("integer"))
+            // 任意の field は null でも返ってくるので、 output schema では null を許す
+            Some(&json!(["integer", "null"]))
         );
         let required = out.get("required").and_then(Value::as_array).unwrap();
         assert_eq!(required, &vec![json!("id")]);

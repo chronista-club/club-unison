@@ -428,6 +428,7 @@ sequenceDiagram
 |------|---------------|----------------------|
 | 未登録チャネル名の open | nack (`__channel_ack` の Error) を返して stream を閉じる | `open_channel()` が `NetworkError::Protocol("Channel '…' open rejected: …")` |
 | 不正な open frame (protocol frame でない / decode できない / `__channel:` で始まらない) | log を出して stream を閉じる (応答なし) | — |
+| handler が request を断る | `send_error(request_id, method, &error)` で error frame を返す (成功の Response に失敗を詰めない) | `request()` が `NetworkError::Protocol("Request error: …")` (文面に `error` の中身が入る) |
 | 応答タイムアウト | — | `request()` が `NetworkError::Timeout` (既定 30s、 `with_request_timeout` で変更)。 pending から外す |
 | 接続断 | — | 待機中の `request()` は `NetworkError::Protocol("Request error: …")` (recv loop が全 pending を Error で解決する) |
 
@@ -470,6 +471,8 @@ impl<C: Codec> UnisonChannel<C> {
     pub async fn send_event<T: Encodable<C>>(&self, method: &str, ev: &T) -> Result<(), NetworkError>;
     pub async fn send_response<T: Encodable<C>>(&self, request_id: u64, method: &str, resp: &T)
         -> Result<(), NetworkError>;                                // handler 側が Request に応える
+    pub async fn send_error<T: Serialize>(&self, request_id: u64, method: &str, error: &T)
+        -> Result<(), NetworkError>;                                // handler 側が Request を断る (error frame)
     pub async fn recv(&self) -> Result<ProtocolMessage, NetworkError>; // Event / Request を受ける
     pub async fn send_raw(&self, data: &[u8]) -> Result<(), NetworkError>; // raw frame (0x01)、 codec / 圧縮なし
     pub async fn recv_raw(&self) -> Result<Vec<u8>, NetworkError>;

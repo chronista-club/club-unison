@@ -20,6 +20,7 @@
 
 use std::borrow::Cow;
 use std::sync::Arc;
+use std::time::Duration;
 
 use rmcp::{
     ErrorData as McpError, Peer, RoleServer, ServerHandler,
@@ -289,9 +290,13 @@ struct EndpointAnswer {
 rmcp::elicit_safe!(EndpointAnswer);
 
 /// client に endpoint をその場で質問する (= MCP elicitation)。
-/// client が elicitation 非対応 / 拒否 / cancel / 失敗は None を返し、
-/// 呼び出し側は従来どおり invalid_request エラーへ fallback する。
-async fn elicit_endpoint(peer: Option<&Peer<RoleServer>>) -> Option<String> {
+/// client が elicitation 非対応 / 拒否 / cancel / 失敗 / `timeout` 以内に答えが無い場合は
+/// None を返し、 呼び出し側は invalid_request エラーへ fallback する。
+///
+/// 期限が要る理由: elicitation の capability を出していても、 答える人がいない client が
+/// ある (agent が動かす session で、 問い返しが画面に出ない場合)。 期限が無いと tool の
+/// 呼び出しが戻らず、 agent は「endpoint を渡す」という直し方に辿り着けない。
+async fn elicit_endpoint(peer: Option<&Peer<RoleServer>>, timeout: Duration) -> Option<String> {
     let peer = peer?;
     let supports = peer
         .peer_info()
@@ -300,8 +305,9 @@ async fn elicit_endpoint(peer: Option<&Peer<RoleServer>>) -> Option<String> {
         return None;
     }
     match peer
-        .elicit::<EndpointAnswer>(
+        .elicit_with_timeout::<EndpointAnswer>(
             "No Unison endpoint is configured. Enter the server endpoint URL (e.g. quic://[::1]:7878).",
+            Some(timeout),
         )
         .await
     {
@@ -313,8 +319,8 @@ async fn elicit_endpoint(peer: Option<&Peer<RoleServer>>) -> Option<String> {
         // (= Ok(None) は API 型上の defensive arm、 現実装では到達しない)
         Ok(None) => None,
         Err(e) => {
-            // decline / cancel (= ユーザーの意思) もここ。 そのままエラー路線へ
-            tracing::debug!(error = %e, "endpoint elicitation declined/failed; falling back to error");
+            // decline / cancel (= ユーザーの意思) と、 期限切れもここ。 そのままエラー路線へ
+            tracing::debug!(error = %e, "endpoint elicitation declined/failed/timed out; falling back to error");
             None
         }
     }
@@ -334,14 +340,16 @@ async fn connect_client(
 
     let endpoint: String = match bridge.resolve_endpoint(endpoint_arg) {
         Some(e) => e.to_string(),
-        None => elicit_endpoint(peer).await.ok_or_else(|| {
-            McpError::invalid_request(
-                "no endpoint: pass the `endpoint` argument (e.g. quic://[::1]:7878) \
+        None => elicit_endpoint(peer, bridge.elicitation_timeout())
+            .await
+            .ok_or_else(|| {
+                McpError::invalid_request(
+                    "no endpoint: pass the `endpoint` argument (e.g. quic://[::1]:7878) \
                  or start unison-mcp with `--config` providing a default endpoint"
-                    .to_string(),
-                None,
-            )
-        })?,
+                        .to_string(),
+                    None,
+                )
+            })?,
     };
     let trust = bridge.resolve_trust(trust_arg, &endpoint);
 
@@ -397,19 +405,17 @@ async fn handle_call(
         )
     })?;
 
-    let response: serde_json::Value =
-        channel
-            .request(&args.method, &args.payload)
-            .await
-            .map_err(|e| {
-                McpError::internal_error(
-                    format!(
-                        "request `{}` on channel `{}` failed: {e}",
-                        args.method, args.channel_name
-                    ),
-                    None,
-                )
-            })?;
+    // request は送ったが成功の返事が来なかった (= handler が error frame で断った /
+    // timeout / 接続断)。 tool の実行の失敗なので、 tool の結果 (isError) で理由を返す。
+    let response: serde_json::Value = match channel.request(&args.method, &args.payload).await {
+        Ok(response) => response,
+        Err(e) => {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "request `{}` on channel `{}` failed: {e}",
+                args.method, args.channel_name
+            ))]));
+        }
+    };
 
     // escape hatch は output_schema を宣言しないので、 channel/method 込みの
     // wrapper object を structured で返す (= 常に object になる)。
@@ -541,20 +547,22 @@ async fn handle_synthesized(
         )
     })?;
 
-    let response = chan.request(&method, arguments).await.map_err(|e| {
-        // DynamicError には Network / Validation / Registry / Serde がある。
-        // Validation は invalid_request、 それ以外は internal_error にマップ。
-        use unison::network::DynamicError;
-        match e {
-            DynamicError::Validation(v) => {
-                McpError::invalid_request(format!("validation: {v}"), None)
-            }
-            other => McpError::internal_error(format!("request failed: {other}"), None),
+    let response = match chan.request(&method, arguments).await {
+        Ok(response) => response,
+        // 入力が schema に合わない: server に届く前に、 直し方が分かる文面で返す。
+        Err(unison::network::DynamicError::Validation(v)) => {
+            return Err(McpError::invalid_request(format!("validation: {v}"), None));
         }
-    })?;
+        // request は送ったが成功の返事が来なかった (= handler が error frame で断った /
+        // timeout / 接続断)。 tool の実行の失敗なので、 protocol の error ではなく
+        // tool の結果 (isError) として理由を返す (= agent が読んで次の手を決められる)。
+        Err(other) => {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "request `{method}` on channel `{channel_name}` failed: {other}"
+            ))]));
+        }
+    };
 
-    // structured_content は response そのもの (= KDL `returns` から合成した
-    // output_schema と形が一致する)。 channel/method は tool 名が既に示している。
     // returns 未定義 channel の非 object response のみ wrapper で object 化する
     // (= MCP spec: structuredContent は object)。
     let structured = if response.is_object() {
@@ -562,6 +570,26 @@ async fn handle_synthesized(
     } else {
         serde_json::json!({ "response": response })
     };
+
+    // 返事が配った output schema (= KDL `returns`) の形と違う場合は、 structuredContent に
+    // 載せない。 載せると MCP client の検証が返事ごと落とし、 agent には検証の文句だけが
+    // 届いて中身が消える。 中身は text でそのまま返す (output schema を持つ tool は
+    // isError でないと structuredContent を省けないので、 isError にする)。
+    let output_schema = disc
+        .proto
+        .registry()
+        .request(&channel_name, &method)
+        .and_then(|request| request.returns.as_ref())
+        .map(|returns| mapping::fields_to_output_schema(&returns.fields));
+    if let Some(schema) = output_schema
+        && let Some(violation) = mapping::schema_violation(&structured, &schema)
+    {
+        return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+            "The server's response does not match the declared output schema ({violation}). \
+             Raw response: {structured}"
+        ))]));
+    }
+
     Ok(CallToolResult::structured(structured))
 }
 
@@ -586,8 +614,13 @@ impl ServerHandler for UnisonMcp {
              summarizes a server's schema and — against the configured default endpoint — \
              refreshes the synthesized tool set (tools/list_changed on schema change); \
              `unison_call` is an untyped escape hatch for channels without a synthesized \
-             tool. All results are structuredContent with a text mirror. If tool calls fail \
-             after a server restart, run `unison_discover` first to reconnect.",
+             tool. If no synthesized tools are listed, no default endpoint is configured: \
+             pass `endpoint` (e.g. quic://[::1]:7878) to the static tools. Successful \
+             results are structuredContent with a text mirror; a request the server \
+             refused, or a response that does not match the declared output schema, comes \
+             back as an error result whose text carries the server's reason or raw \
+             response. If tool calls fail after a server restart, run `unison_discover` \
+             first to reconnect.",
         )
     }
 

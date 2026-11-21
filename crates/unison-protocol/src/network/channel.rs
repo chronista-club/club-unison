@@ -233,6 +233,32 @@ impl<C: Codec> UnisonChannel<C> {
         self.stream.send_frame(&msg).await
     }
 
+    /// Request を断る（サーバー側パターン）
+    ///
+    /// `recv()` で受け取った Request を処理できないとき、 その `id` を指定して error
+    /// frame を返す。 相手の `request()` は成功の値ではなく
+    /// [`NetworkError::Protocol`]（文面に `error` の中身が入る）を受け取る。
+    ///
+    /// 失敗を成功の Response に詰めて返す（例: `{"error": "..."}`）と、 受け取る側は
+    /// 成功の形として decode / 検証しようとして、 断られた理由を取りこぼす。 失敗は
+    /// こちらで返す。 `error` は codec によらず JSON で運ぶ（プロトコル内部の約束）。
+    pub async fn send_error<T: serde::Serialize>(
+        &self,
+        request_id: u64,
+        method: &str,
+        error: &T,
+    ) -> Result<(), NetworkError> {
+        let payload = serde_json::to_value(error)
+            .map_err(|e| NetworkError::Protocol(format!("error payload is not JSON: {e}")))?;
+        let msg = ProtocolMessage::new_with_json(
+            request_id,
+            method.to_string(),
+            MessageType::Error,
+            payload,
+        )?;
+        self.stream.send_frame(&msg).await
+    }
+
     /// Raw bytes 送信（buffa/zstd をバイパス、最小オーバーヘッド）
     ///
     /// オーディオストリーミング等のバイナリデータに使用。

@@ -16,7 +16,8 @@ MCP (Model Context Protocol) bridge for the Unison Protocol — discovers a serv
 | `structuredContent` results (= 全 tool、 text は互換 mirror) | ✅ |
 | Tool annotations + title (= read-only/idempotent hint、 `channel.method` 表示名) | ✅ |
 | Live re-discovery (= `unison_discover` が default endpoint の tool set を refresh、 hash 変化で `tools/list_changed`) | ✅ |
-| Endpoint elicitation (= endpoint 未設定時、 対応 client へその場で質問) | ✅ |
+| Endpoint elicitation (= endpoint 未設定時、 対応 client へその場で質問。 30 秒で error に落ちる) | ✅ |
+| 断られた request / 形の違う返事を、 理由と中身ごと agent に返す (`isError`) | ✅ |
 | MCP E2E demo (= Claude Code から実機 round-trip) | ✅ (DEMO.md 参照) |
 
 ## Install
@@ -63,10 +64,26 @@ See [`examples/unison.json`](examples/unison.json):
 
 ## Tools
 
-全 tool の結果は `structuredContent`（= 機械可読 JSON、 text content は互換 mirror）で返る。
+成功した結果は `structuredContent`（= 機械可読 JSON、 text content は互換 mirror）で返る。
 synthesized tools は KDL `returns` block から `output_schema` を宣言するので、 client 側で
-結果の型検証が可能。 endpoint が config にも tool arg にも無い場合、 elicitation 対応
-client にはその場で接続先を質問する（非対応 client は従来どおりエラー）。
+結果の型検証が可能。
+
+**server の返事は、 agent から隠さない**:
+
+- server の handler が request を断った（`UnisonChannel::send_error`）、 timeout、 接続断は、
+  tool の結果（`isError: true`）として返る。 text に理由が入る。
+- 返事が `returns` の形と違う場合（例: 成功の frame に `{"error": "..."}` を詰めて返す
+  server）も、 `isError: true` の結果として、 どこが違うかと**返事の中身そのもの**を text で返す。
+  `structuredContent` には載せない（載せると MCP client の output schema 検証が返事ごと
+  落とし、 中身が agent に届かなくなる）。
+- `output_schema` は、 `required` でない field に null を許す（Rust の `Option` は null に
+  なるため）。
+- 入力が schema に合わない場合だけは、 server に送る前に `invalid_request` で返す（どの
+  field が違うかが文面に入る）。
+
+endpoint が config にも tool arg にも無い場合、 elicitation 対応 client にはその場で接続先を
+質問する。 30 秒以内に答えが無ければ（= 答える人がいない session）、 非対応 client と同じく
+「`endpoint` を渡すか `--config` を」という error に落ちる。
 
 ### `unison_ping`
 

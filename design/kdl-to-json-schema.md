@@ -39,8 +39,11 @@ KDL は Unison の SSOT として channel/request/event の型を語る。 こ�
 ## 3. Request / Returns schema 構築 (= 複数 field の組み合わせ)
 
 `fields_to_object_schema(fields: &[Field]) -> JsonObject` の出力
-(= `request.fields` → `Tool.input_schema`、 `returns.fields` → `Tool.output_schema` の両方に同一関数を適用。
-型対応・required・additionalProperties の挙動が入出力で完全一致する):
+(= `request.fields` → `Tool.input_schema`。 `returns.fields` → `Tool.output_schema` は
+`fields_to_output_schema` で、 違いは 1 点だけ: `required` でない field に null を許す
+(`{"type": ["string", "null"]}`)。 server が任意の field を null で返すのは普通のこと
+(Rust の `Option`) で、 許さないと MCP client の検証が返事ごと落とす。 型対応・required・
+additionalProperties の挙動は入出力で一致する):
 
 ```json
 {
