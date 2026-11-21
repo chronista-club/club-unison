@@ -491,6 +491,7 @@ impl<C: Codec> UnisonChannel<C> {
 | `identity()` / `set_identity()` | `ServerIdentity`。 server 側は自分の identity (`__identity` 送信時に set)、 client 側は受け取った server の identity (`__identity` 受信後に set) |
 | `principal()` / `set_principal()` | 認証済み主体。 `unison.auth` の verifier が成功したときに set される (§7.1、 [design/connection-auth.md](../../design/connection-auth.md)) |
 | `open_server_stream(name)` | server 発 channel の stream を開く (`from="server"`) |
+| `remote_address()` | 接続の相手のアドレス (server 側の ctx のみ。 client 側は `None`)。 handler が相手を見て断る判定や log に使う。 呼んだ時点の値 (connection migration で変わりうる) |
 | `register_channel` / `get_channel` / `remove_channel` / `channel_names` | この接続で開いた channel の handle 台帳 |
 
 ---
