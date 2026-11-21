@@ -387,7 +387,7 @@ const KNOWN_TOP_LEVEL: &[&str] = &["protocol", "import", "message", "enum", "typ
 impl Contract {
     fn parse(src: &str) -> Result<Self> {
         let schema = SchemaParser::new()
-            .parse(src)
+            .parse_contract(src)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         let doc: kdl::KdlDocument = src.parse().context("KDL syntax error")?;
 

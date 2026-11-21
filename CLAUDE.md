@@ -34,9 +34,12 @@ channel "name" from="client" lifetime="persistent" {
 }
 ```
 
-旧 `service` / `method` / `send` / `recv` 構文は非推奨。
+知らない名前の node（旧 `service` / `method` / `send` / `recv` 構文、タイプミス）は、schema を書く側（`schema-lint`、server の読み込み）で parse error になる。discovery で届いた schema を読む側は読み飛ばす。
 
 ## テスト
+
+開発用の Rust toolchain は `.mise.toml` で指定する（`mise install`）。MSRV は
+`Cargo.toml` の `rust-version`（1.95）で、CI の `MSRV` job が別に守る。
 
 ```bash
 # 標準テスト実行 (lib unit + Small の integration test)

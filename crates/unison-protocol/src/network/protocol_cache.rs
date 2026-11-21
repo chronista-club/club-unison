@@ -135,7 +135,9 @@ protocol "demo" version="1.2.3" {
     /// 同じ KDL からは決定的に同じ hash が出る (= cache validation 用に必須)
     #[test]
     fn cache_hash_is_deterministic() {
-        let kdl = r#"protocol "x" version="0.1.0" { namespace "a" channel "c" from="client" lifetime="persistent" { request "R" { returns "X" {} } } }"#;
+        // 1 行に書くときはノードを `;` で区切る (= 区切らないと `channel …` が
+        // `namespace` の引数と子ノードとして読まれる)。
+        let kdl = r#"protocol "x" version="0.1.0" { namespace "a"; channel "c" from="client" lifetime="persistent" { request "R" { returns "X" {} } } }"#;
         let a = ProtocolCache::new(kdl).unwrap();
         let b = ProtocolCache::new(kdl).unwrap();
         assert_eq!(a.hash, b.hash);

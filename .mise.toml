@@ -1,0 +1,3 @@
+# 開発用の toolchain。MSRV は workspace の `rust-version` (1.95) で別に守る。
+[tools]
+rust = "1.99.1"

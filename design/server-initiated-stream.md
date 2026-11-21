@@ -35,23 +35,25 @@ QUIC の idiom「用途ごとに stream を分ける（= 独立 HoL 境界）」
 
 ---
 
-## 2. 何が欠けているか（現状 1.4.0）
+## 2. 何が欠けているか（1.4.0 時点）
 
-- **`ChannelDirection::ServerToClient` は型にも KDL（`from="server"`）にも既出**だが、`build_identity()`（`network/server.rs:208`）が常に `Bidirectional` をハードコードし runtime で無視している。
-- server→client の唯一の経路 = **client が開いた persistent channel 上で `UnisonChannel::send_event`**。これは `dispatch.rs`「server→client 通信は client が開いた channel 上で行う」どおりだが、**意図的に best-effort**: client 側 `UnisonChannel` の recv ループが event を `try_send`・buffer 256・full で **drop + warn**（`channel.rs:74-85` の `try_deliver`）。
+> 本節と §3 は設計時点 (1.4.0) のコードの記述。 関数名は 1.4.0 のもので、 現在の名前が違う場合は括弧で添える。
+
+- **`ChannelDirection::ServerToClient` は型にも KDL（`from="server"`）にも既出**だが、`build_identity()`（`server.rs::build_identity`）が常に `Bidirectional` をハードコードし runtime で無視している。
+- server→client の唯一の経路 = **client が開いた persistent channel 上で `UnisonChannel::send_event`**。これは `dispatch.rs`「server→client 通信は client が開いた channel 上で行う」どおりだが、**意図的に best-effort**: client 側 `UnisonChannel` の recv ループが event を `try_send`・buffer 256・full で **drop + warn**（`channel.rs` の recv ループ内 `try_deliver`）。
 - 帰結: **reliable な server-initiated 配送が無い**。
 
 relay のように「server 起点で取りこぼせない stream」を運ぶ用途には best-effort event では不十分（backpressure 下で drop → 上位の再送 churn）。
 
 ---
 
-## 3. 既にある材料
+## 3. 既にある材料（1.4.0 時点）
 
-- **`UnisonConn::open_bi() -> BiStream`**（`conn.rs`）は **server からも stream を開ける**。現に identity 送信が `connection.open_bi()` で server-initiated stream を 1 本開いている（`dispatch.rs:133`）。
+- **`UnisonConn::open_bi() -> BiStream`**（`conn.rs`）は **server からも stream を開ける**。現に identity 送信が `connection.open_bi()` で server-initiated stream を 1 本開いている（`dispatch.rs::handle_connection`。 現在は `send_identity` に分離）。
   → **「server が stream を開く動詞」は新設不要**。
-- **server 側 channel handler は既に raw `UnisonStream` を直接 read している**（`dispatch.rs:222-229` で `UnisonStream::from_streams` を作って `handler(ctx, stream)`、discovery handler も同様）。
+- **server 側 channel handler は既に raw `UnisonStream` を直接 read している**（`dispatch.rs::handle_connection` の `__channel:` routing で `UnisonStream::from_streams` を作って `handler(ctx, stream)`、discovery handler も同様。 現在は `handle_incoming_stream` に分離）。
   → これが**対称化の土台**。reliable な受信の「正解の形」は既に server 側に実在する（§4）。
-- client 側 `client_accept_bi_loop`（`dispatch.rs:27`）は server-initiated bi stream を `accept_bi()` で受けているが、**先頭 frame の method が `__identity` 以外は drop** している。
+- client 側 `client_accept_bi_loop`（`dispatch.rs::client_accept_bi_loop`）は server-initiated bi stream を `accept_bi()` で受けているが、**先頭 frame の method が `__identity` 以外は drop** している。
   → routing を一般化すれば、宣言済みの server-push channel に配れる。
 
 ---
@@ -83,8 +85,10 @@ client が **server-push channel handler を登録**できるようにし、hand
 
 ```rust
 // ProtocolClient
-pub async fn register_server_channel<F>(&self, channel: &str, handler: F)
-where F: Fn(UnisonStream) -> BoxFuture<'static, Result<()>> + Send + Sync + 'static;
+pub async fn register_server_channel<F, Fut>(&self, channel: &str, handler: F)
+where
+    F: Fn(UnisonStream) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<(), NetworkError>> + Send + 'static;
 ```
 
 `client_accept_bi_loop` が先頭 frame の method で振り分ける（`__identity` は従来どおり専用 oneshot、それ以外は registry を引いて handler へ `UnisonStream` を渡す、未登録なら従来どおり drop+warn）。
@@ -130,11 +134,11 @@ where F: Fn(UnisonStream) -> BoxFuture<'static, Result<()>> + Send + Sync + 'sta
 
 ## 8. 既知の制約 / 実装時の落とし穴
 
-- **client 受信経路は raw QUIC 専用**。`client_accept_bi_loop`（`dispatch.rs:27`、起動 `quic.rs:376`）は `quinn::Connection` 直で、`Arc<dyn UnisonConn>` を貫通していない。→ **WebTransport（ブラウザ）client は server-initiated channel を受けられない**（native/quinn client は OK）。`UnisonStream::from_streams` に渡す `Arc<dyn UnisonConn>` は `Arc::new(connection.clone())` で作れる（既に `client.rs:212` で使う pattern）。透過の完全化は別 issue。
-- **server-initiated stream に nack（配送失敗シグナル）が無い**。client-opened channel は open_ack/nack を持つ（`dispatch.rs:206` / `client.rs:190`）が、server-initiated は宣言 frame を書いて流すだけ。client が handler 未登録なら drop + warn で、**server は失敗を知れない**（silent blackhole）。relay は「downstream が handler を登録済み」を前提に運用する。明示 ack が必要になったら別途。
-- **`client_accept_bi_loop` は現状 1 frame 読んで task 終了 + `_send_stream` を破棄**（`dispatch.rs:33`）。identity は 1 frame で正だが、persistent server channel 化には **send_stream を保持**して `UnisonStream::from_streams` に渡し、handler に**継続 read**させる必要。
-- **`ConnectionContext` の `#[derive(Debug)]`**: `UnisonConn` は Debug 非実装（`conn.rs:71`）なので、conn field を持たせると derive が壊れる → **手書き Debug**（conn を skip）へ。
-- **`conn` は `Option` + `set_conn`**: ctx 生成は 3 つの server ingress に散る（`webtransport.rs:314` / `quic.rs:638,672`）が、全て `handle_connection` に収束するので、そこで `set_conn` 1 行で足りる（call-site ripple ゼロ）。client ctx（`client.rs:98,117`）は conn=None のままで `open_server_stream` が error → 正しい誤用検知。
+- **client 受信経路は raw QUIC 専用**。`client_accept_bi_loop`（`dispatch.rs::client_accept_bi_loop`。 `QuicClient` が接続確立時に spawn する。 1.4.0 当時は `QuicClient::connect`、 現在は `quic.rs::adopt_connection`）は `quinn::Connection` 直で、`Arc<dyn UnisonConn>` を貫通していない。→ **WebTransport（ブラウザ）client は server-initiated channel を受けられない**（native/quinn client は OK）。`UnisonStream::from_streams` に渡す `Arc<dyn UnisonConn>` は `Arc::new(connection.clone())` で作れる（1.4.0 当時の `client.rs::open_channel` と同じ pattern。 現在の `from_streams` は connection を引数に取らない）。透過の完全化は別 issue。
+- **server-initiated stream に nack（配送失敗シグナル）が無い**。client-opened channel は open_ack/nack を持つ（server 側 `dispatch.rs` の `write_channel_ack` / client 側 `client.rs::open_channel` の `read_channel_ack`）が、server-initiated は宣言 frame を書いて流すだけ。client が handler 未登録なら drop + warn で、**server は失敗を知れない**（silent blackhole）。relay は「downstream が handler を登録済み」を前提に運用する。明示 ack が必要になったら別途。
+- **（1.4.0 時点）`client_accept_bi_loop` は 1 frame 読んで task 終了 + `_send_stream` を破棄**していた。identity は 1 frame で正だが、persistent server channel 化には **send_stream を保持**して `UnisonStream::from_streams` に渡し、handler に**継続 read**させる必要。→ **1.5.0 で解消**: server-initiated channel の分岐は send_stream を保持して `UnisonStream::from_streams` に渡し、handler が同じ stream を読み続ける（`dispatch.rs::client_accept_bi_loop`）。
+- **`ConnectionContext` の `#[derive(Debug)]`**: `UnisonConn` は Debug 非実装（`conn.rs` の `UnisonConn` trait）なので、conn field を持たせると derive が壊れる → **手書き Debug**（conn を skip）へ。
+- **`conn` は `Option` + `set_conn`**: ctx 生成は 3 つの server ingress に散る（1.4.0 当時の `webtransport.rs::accept_session` / `QuicServer::start` / `QuicServer::start_with_shutdown`）が、全て `handle_connection` に収束するので、そこで `set_conn` 1 行で足りる（call-site ripple ゼロ）。client ctx（1.4.0 当時の `ProtocolClient::new` / `new_default`）は conn=None のままで `open_server_stream` が error → 正しい誤用検知。
 
 ---
 
@@ -152,9 +156,9 @@ where F: Fn(UnisonStream) -> BoxFuture<'static, Result<()>> + Send + Sync + 'sta
 
 1. ✅ **`network/context.rs`** — `ConnectionContext` に `conn: Arc<RwLock<Option<Arc<dyn UnisonConn>>>>`（init None）+ `set_conn(conn)` + `open_server_stream(channel) -> Result<UnisonStream>`。`open_server_stream` = `conn.open_bi()` →（宣言 frame を `write_typed_frame` で 1 本書く、`__identity` 送信と同形 = `dispatch.rs::handle_connection` 参照、**`finish()` しない**）→ `UnisonStream::from_streams`。conn が None なら error（client 誤用）。`#[derive(Debug)]` → conn を skip した**手書き Debug**へ。
 2. ✅ **`network/dispatch.rs`** — `handle_connection` 冒頭で `ctx.set_conn(Arc::clone(&connection)).await`（**server 側のみ・1 行**）。`client_accept_bi_loop` を一般化: 先頭 frame の method が `__identity` → 従来 oneshot、それ以外 → client 側 server-channel registry を引いて handler へ **`UnisonStream` を渡す**（**send_stream を保持**し、`Arc::new(connection.clone())` で `Arc<dyn UnisonConn>` を作って `from_streams`）、**未登録なら drop+warn**（無回帰）。
-3. ✅ **`network/client.rs`** — `ProtocolClient` に server-channel handler registry（`Arc<RwLock<HashMap<String, Handler>>>`、`Handler = Fn(UnisonStream) -> BoxFuture<...>`）+ `register_server_channel(channel, handler)`。`client_accept_bi_loop` 起動箇所（`quic.rs:376`）へ registry を渡す。
+3. ✅ **`network/client.rs`** — `ProtocolClient` に server-channel handler registry（`Arc<RwLock<HashMap<String, Handler>>>`、`Handler = Fn(UnisonStream) -> BoxFuture<...>`）+ `register_server_channel(channel, handler)`。`client_accept_bi_loop` 起動箇所（1.4.0 当時の `QuicClient::connect`）へ registry を渡す。
 4. ⏸ **`network/identity.rs` / `server.rs`** — `build_identity()` が `from="server"` を honor して `ChannelDirection::ServerToClient` を返す（**二次的・本リリース見送り**、direction の read 元整備が前提。`register_channel` に direction 引数が無く advertise 元が無いため。schema↔runtime 齟齬は残置だが relay 機能には影響なし）。
-5. ✅ **tests** —（`tests/test_server_initiated_stream.rs`）
+5. ✅ **tests** —（`tests/test_medium_server_initiated_stream.rs`）
    - server が `open_server_stream("x")` → client の `register_server_channel("x", ...)` handler が **reliable に受信**（取りこぼし無し round-trip）。
    - **backpressure**: handler が読まないと送信側 write が throttle され、**drop が起きない**（unbounded 成長もしない）。
    - 後方互換: handler 未登録 client は従来 drop+warn。

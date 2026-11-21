@@ -15,7 +15,8 @@
 //!
 //! - Unordered + Unreliable (= QUIC datagram の semantics に従う)
 //! - 1 datagram = 1 event message、 chunking / fragmentation 不可
-//! - MTU 超過は `SendDatagramError::TooLarge`、 caller が分割責任
+//! - MTU 超過は `NetworkError::Quic("send_datagram failed: …")` (quinn の TooLarge を
+//!   文字列に包んだもの)、 caller が分割責任
 //!
 //! 詳細は `design/datagram-channel.md` および `spec/02-unified-channel/SPEC.md` §8.5 参照。
 

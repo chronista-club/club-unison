@@ -502,3 +502,223 @@ protocol "t" version="1.0.0" {
     assert!(matches!(fields[1].field_type(), FieldType::Map(k, v)
             if matches!(*k, FieldType::String) && matches!(*v, FieldType::Json)),);
 }
+
+// ---- 知らないノード ----
+// club-kdl の derive は名前の一致する子ノードだけを拾い、 残りを黙って捨てる。
+// 旧構文 (service / send / recv) やタイプミスが「空の channel」として読まれないよう、
+// SchemaParser はその位置に書けない名前のノードを弾く。
+
+fn parse_err(src: &str) -> String {
+    SchemaParser::new()
+        .parse(src)
+        .expect_err("知らないノードは弾くべき")
+        .to_string()
+}
+
+#[test]
+fn rejects_unknown_node_in_channel() {
+    let err = parse_err(
+        r#"
+protocol "x" version="1.0.0" {
+    channel "users" from="client" lifetime="persistent" {
+        send "CreateUser" {
+            field "name" type="string"
+        }
+    }
+}
+"#,
+    );
+    assert!(err.contains(r#"unknown node "send""#), "{err}");
+    assert!(err.contains(r#"protocol "x" > channel "users""#), "{err}");
+    assert!(err.contains("allowed: request, event"), "{err}");
+}
+
+#[test]
+fn rejects_unknown_top_level_node() {
+    let err = parse_err(
+        r#"
+service "Old" {
+    method "Ping" {}
+}
+"#,
+    );
+    assert!(err.contains(r#"unknown node "service""#), "{err}");
+    assert!(err.contains("top level"), "{err}");
+}
+
+#[test]
+fn rejects_misspelled_node() {
+    let err = parse_err(
+        r#"
+protocol "x" version="1.0.0" {
+    channel "users" from="client" lifetime="persistent" {
+        requst "Get" {
+            field "id" type="string"
+        }
+    }
+}
+"#,
+    );
+    assert!(err.contains(r#"unknown node "requst""#), "{err}");
+}
+
+#[test]
+fn rejects_unknown_node_deep_in_returns() {
+    let err = parse_err(
+        r#"
+protocol "x" version="1.0.0" {
+    channel "users" from="client" lifetime="persistent" {
+        request "Get" {
+            field "id" type="string"
+            returns "User" {
+                field "name" type="string"
+                extra "x"
+            }
+        }
+    }
+}
+"#,
+    );
+    assert!(err.contains(r#"unknown node "extra""#), "{err}");
+    assert!(
+        err.contains(r#"channel "users" > request "Get" > returns "User""#),
+        "{err}"
+    );
+    assert!(err.contains("allowed: field"), "{err}");
+}
+
+#[test]
+fn rejects_child_nodes_under_field() {
+    let err = parse_err(
+        r#"
+protocol "x" version="1.0.0" {
+    channel "users" from="client" lifetime="persistent" {
+        request "Get" {
+            field "id" type="string" {
+                note "x"
+            }
+        }
+    }
+}
+"#,
+    );
+    assert!(err.contains(r#"unknown node "note""#), "{err}");
+    assert!(err.contains(r#"> field "id""#), "{err}");
+}
+
+#[test]
+fn slashdash_commented_nodes_are_not_unknown() {
+    let schema = SchemaParser::new()
+        .parse(
+            r#"
+protocol "x" version="1.0.0" {
+    channel "users" from="client" lifetime="persistent" {
+        /- send "Old" {
+            field "name" type="string"
+        }
+        request "Get" {}
+    }
+}
+"#,
+        )
+        .expect("/- でコメントアウトしたノードは KDL 上ノードではない");
+    assert_eq!(schema.protocol.unwrap().channels[0].requests.len(), 1);
+}
+
+// ---- 他の方言の約束 (parse_contract) ----
+// schema-check / schema-diff は、 Unison の語彙に無い node (例: Creo の REST の `route`) を
+// top level に持つ約束も読む。 読み飛ばすのは top level の知らない node だけで、
+// Unison の node の中は parse と同じく厳密に見る。
+
+const FOREIGN_CONTRACT: &str = r#"
+message "User" {
+    field "id" type="string" required=#true
+}
+
+route "GET" "/api/users" response="User" {
+    query "page" type="int"
+}
+"#;
+
+#[test]
+fn parse_rejects_foreign_top_level_node() {
+    let err = parse_err(FOREIGN_CONTRACT);
+    assert!(err.contains(r#"unknown node "route""#), "{err}");
+}
+
+#[test]
+fn parse_contract_skips_foreign_top_level_nodes() {
+    let schema = SchemaParser::new()
+        .parse_contract(FOREIGN_CONTRACT)
+        .expect("top level の知らない node は読み飛ばす");
+    assert_eq!(schema.messages.len(), 1);
+    assert_eq!(schema.messages[0].name, "User");
+}
+
+#[test]
+fn parse_contract_is_still_strict_inside_unison_nodes() {
+    let err = SchemaParser::new()
+        .parse_contract(
+            r#"
+message "User" {
+    field "id" type="string"
+    feild "name" type="string"
+}
+"#,
+        )
+        .expect_err("Unison の node の中の知らない node は弾く")
+        .to_string();
+    assert!(err.contains(r#"unknown node "feild""#), "{err}");
+    assert!(err.contains(r#"message "User""#), "{err}");
+}
+
+// ---- 受け取った schema (parse_lenient) ----
+// discovery で相手の server から届いた schema は、 この版が知らない node をどの位置でも
+// 読み飛ばす (= 新しい版の server に、 古い client が繋げなくならないように)。
+
+#[test]
+fn parse_lenient_skips_unknown_nodes_at_any_depth() {
+    let schema = SchemaParser::new()
+        .parse_lenient(
+            r#"
+protocol "x" version="1.0.0" {
+    capability "streams"
+    channel "users" from="client" lifetime="persistent" {
+        stream "Upload" {}
+        request "Get" {
+            field "id" type="string" {
+                note "x"
+            }
+        }
+    }
+}
+extension "y" {}
+"#,
+        )
+        .expect("知らない node は読み飛ばす");
+    let protocol = schema.protocol.unwrap();
+    assert_eq!(protocol.channels[0].requests.len(), 1);
+    assert_eq!(protocol.channels[0].requests[0].fields.len(), 1);
+}
+
+#[test]
+fn parse_lenient_still_rejects_broken_kdl_and_invalid_channels() {
+    let parser = SchemaParser::new();
+    assert!(parser.parse_lenient("not valid kdl }{").is_err());
+    // semantic な検証 (datagram channel の channel_id 必須) は緩めない
+    let err = parser
+        .parse_lenient(
+            r#"
+protocol "x" version="1.0.0" {
+    channel "pos" from="server" lifetime="persistent" backend="datagram" {
+        event "Tick" {}
+    }
+}
+"#,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, unison::parser::ParseError::Validation(_)),
+        "{err}"
+    );
+}

@@ -56,7 +56,7 @@ pub fn run(args: SchemaCheckArgs) -> Result<()> {
     let src = std::fs::read_to_string(&args.contract)
         .with_context(|| format!("failed to read {}", args.contract.display()))?;
     let schema = SchemaParser::new()
-        .parse(&src)
+        .parse_contract(&src)
         .map_err(|e| anyhow::anyhow!("{}: {e}", args.contract.display()))?;
     let index = TypeIndex::new(&schema);
 

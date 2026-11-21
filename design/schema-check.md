@@ -16,6 +16,8 @@ Creo の CI は各 route の実際の応答を作り、この CLI に渡すだ�
 
 ## Architecture
 
+約束は `SchemaParser::parse_contract` で読む。top level にある他の方言の node（Creo の `route` など）は読み飛ばし、Unison の node（`message` / `enum` など）の中は厳密に見る（知らない node は parse error）。
+
 判定は **client が応答として decode するときに失敗する条件** を誤りにする。
 
 | 約束 | 通す JSON | 誤り |

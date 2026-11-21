@@ -41,8 +41,9 @@ pub struct ConnectionContext {
     /// 認証済み client principal（未認証なら None）。
     ///
     /// `unison.auth` handler が verifier の結果を [`set_principal`](Self::set_principal) で
-    /// 立て、 worlds/wire/datagram 等 **同一 connection の全 channel handler** が
-    /// [`principal`](Self::principal) で読んで authZ gate に使う。
+    /// 立て、 worlds/wire 等 **同一 connection の stream channel handler** が
+    /// [`principal`](Self::principal) で読んで authZ gate に使う (datagram channel
+    /// handler は ctx を受け取らない。 design/connection-auth.md §7)。
     principal: Arc<RwLock<Option<Principal>>>,
     /// server 起点で stream を開くための connection（server 側のみ set される）。
     ///
@@ -106,6 +107,24 @@ impl ConnectionContext {
     pub async fn set_conn(&self, conn: Arc<dyn UnisonConn>) {
         let mut guard = self.conn.write().await;
         *guard = Some(conn);
+    }
+
+    /// この接続の相手のアドレスを取得する。
+    ///
+    /// server 側の ctx (= channel handler が受け取るもの) では接続の相手、 つまり
+    /// client のアドレスを返す。 client 側の ctx は conn を持たないので `None`。
+    ///
+    /// handler の中で 「loopback からの接続にだけ答える」 のように相手を見て断る判定や、
+    /// どの端末がどの channel を開いたかの log に使う。
+    ///
+    /// 返すのは **呼んだ時点** のアドレス。 QUIC の connection migration (例: Wi-Fi →
+    /// 携帯回線) で接続の途中に変わりうるので、 判定に使う値は使う直前に引く。
+    pub async fn remote_address(&self) -> Option<std::net::SocketAddr> {
+        self.conn
+            .read()
+            .await
+            .as_ref()
+            .map(|conn| conn.remote_address())
     }
 
     /// server 起点で reliable な双方向 stream を開く（`ServerToClient`）。
@@ -203,6 +222,17 @@ mod tests {
         assert!(ctx.identity().await.is_none());
         assert!(ctx.channel_names().await.is_empty());
         assert!(ctx.principal().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn remote_address_is_none_until_conn_is_set() {
+        let ctx = ConnectionContext::new();
+        assert_eq!(ctx.remote_address().await, None);
+
+        let peer: std::net::SocketAddr = "[::1]:54321".parse().unwrap();
+        ctx.set_conn(Arc::new(crate::network::test_support::MockConn::new(peer)))
+            .await;
+        assert_eq!(ctx.remote_address().await, Some(peer));
     }
 
     #[tokio::test]

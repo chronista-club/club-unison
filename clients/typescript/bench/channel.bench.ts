@@ -11,7 +11,7 @@
  * SDK 側の frame encode/decode + codec + recv loop dispatch である点に注意。
  */
 
-import { bench, describe } from "vitest";
+import { describe, test } from "vitest";
 import { DatagramChannelImpl } from "../src/channel/datagram_channel.js";
 import { DatagramDispatcher } from "../src/channel/dispatcher.js";
 import type {
@@ -63,8 +63,10 @@ const stub = new StreamServerStub(accepted.value, (_method, payload) => payload)
 const channel = new UnisonChannelImpl(ControlMeta, clientStream, codec);
 
 describe("UnisonChannel.request", () => {
-  bench("round-trip (echo, mock transport)", async () => {
-    await channel.request("Echo", reqPayload);
+  test("UnisonChannel.request", async ({ bench }) => {
+    await bench("round-trip (echo, mock transport)", async () => {
+      await channel.request("Echo", reqPayload);
+    }).run();
   });
 });
 
@@ -85,8 +87,10 @@ function sendDatagram(payload: ChannelPayload): Promise<void> {
 }
 
 describe("DatagramChannel event delivery", () => {
-  bench("send → demux → decode → deliver one event", async () => {
-    await sendDatagram({ name: "cpu", value: 42 });
-    await dgEvents.next();
+  test("DatagramChannel event delivery", async ({ bench }) => {
+    await bench("send → demux → decode → deliver one event", async () => {
+      await sendDatagram({ name: "cpu", value: 42 });
+      await dgEvents.next();
+    }).run();
   });
 });

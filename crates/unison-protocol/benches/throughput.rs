@@ -258,7 +258,8 @@ fn bench_burst_throughput(c: &mut Criterion) {
                             "burst",
                             &json!({
                                 "id": i,
-                                "timestamp": chrono::Utc::now().to_rfc3339()
+                                // payload の大きさを揃えるための詰め物 (= RFC 3339 の形の固定値)。
+                                "timestamp": "2026-01-01T00:00:00.000000000+00:00"
                             }),
                         )
                         .await;

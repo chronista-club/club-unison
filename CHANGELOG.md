@@ -6,6 +6,116 @@
 このプロジェクトは [セマンティックバージョニング](https://semver.org/lang/ja/) に準拠しています。
 ## [Unreleased]
 
+## [2.3.0] - 2026-11-21 — 待ちが必ず戻る Swift client、 agent に返事が届く unison-mcp、 schema の厳格化
+
+> 利用側 (lnx / Vantage Point) からの報告と、 2026-10 の security-audit の残りをまとめて
+> 直した版。 wire bytes は変わらない。 Rust の公開 API は追加だけ。
+>
+> **上げる前に知っておくこと** (挙動が変わる点):
+>
+> - **自分で書いた KDL schema に、 知らない名前の node があると読み込めなくなる**
+>   (旧 `service` / `send` / `recv` 構文、 タイプミス)。 上げる前に `unison schema-lint` を通す。
+>   discovery で相手から届いた schema を読む側は、 これまでどおり読み飛ばす。
+> - **Swift client の待ちに既定の期限が付く** (`request` 30 秒、 `openChannel` /
+>   `serverIdentity` 5 秒)。 30 秒を超える request は `timeout:` を指定する。 `connect` の
+>   期限切れは `UnisonError.timeout` になる。
+> - **unison-mcp**: 断られた request などが、 JSON-RPC の error ではなく `isError: true` の
+>   結果で返る。 output schema は任意の field に null を許す。
+> - **TypeScript client** は Node 26 以上。
+
+### Added
+
+- `UnisonChannel::send_error()` — handler が request を断るための API。 error frame
+  (`MessageType::Error`) を返し、 相手の `request()` は `NetworkError::Protocol` (文面に
+  理由が入る) で戻る。 受け取る側 (Rust / TS / Swift / MCP bridge) は以前から error frame に
+  対応していたが、 送る口が無かったため、 失敗を成功の Response に詰めて返すしかなかった (#135)。
+- `ConnectionContext::remote_address()` — channel handler が、 受け取った ctx から
+  その接続の相手の `SocketAddr` を引ける。 「loopback からの接続にだけ答える」 のような
+  判定を、 listener を分けずに handler の中で書ける。 server 側の ctx のみ値を返し、
+  client 側は `None`。 返すのは呼んだ時点のアドレス (connection migration で変わりうる) (#133)。
+- `SchemaParser::parse_contract` / `parse_lenient` — schema を読む場面ごとの入口 (#131)。
+  - `parse`: 自分が書いた schema。 知らない node を弾く。
+  - `parse_contract`: 他の方言の node を top level に持つ約束 (例: Creo の REST の `route`)。
+    top level だけ読み飛ばす。 `schema-check` / `schema-diff` が使う。
+  - `parse_lenient`: 相手から受け取った schema。 どの位置の知らない node も読み飛ばす。
+    `SchemaRegistry::from_kdl` (= `DynamicProtocol` / MCP bridge) が使う。
+- Swift client: `ChannelTransport` に `onClosed(_:)` (既定の実装あり)。 独自の transport は、
+  これを実装すると相手からの切断を `connectionEvents` に流せる (#132)。
+
+### Changed
+
+- **KDL schema の知らない node を parse error にする** (#131)。 これまで `SchemaParser` は、
+  その位置に書けない名前の node (= 旧 `service` / `method` / `send` / `recv` 構文、
+  `requst` のようなタイプミス) を黙って捨てていたため、 `schema-lint` が ok を返す
+  「空の channel」ができていた。 対象は schema を書く側: `schema-lint` / `mock` と、
+  server が自分の schema を読み込むとき (`enable_discovery` など)。 エラーは
+  `unknown node "send" in protocol "x" > channel "users" (allowed: request, event)` の形で
+  場所を示す。 `/-` でコメントアウトした node は対象外。 discovery で相手の server から
+  届いた schema を読む側は、 これまでどおり知らない node を読み飛ばす (= 新しい版の語彙を
+  使う server に、 古い client が繋げなくならないように)。
+- **Swift client: 待ちに既定の期限が付く** (#132)。 `request` は 30 秒 (= Rust
+  `UnisonChannel` と同じ)、 `openChannel` と `serverIdentity` は 5 秒で `UnisonError.timeout`
+  を投げる。 これまでは無期限に待っていた。 `timeout:` 引数で変えられ、 `nil` で期限なし。
+  `connect` の 10 秒の期限切れも、 `UnisonError.transport("QUIC connect timeout")` ではなく
+  `UnisonError.timeout` を投げる。
+- Swift client: 読まれていない event は 256 件まで溜め、 超えた分は捨てる (= Rust と同じ
+  上限。 これまでは無制限に溜めていた) (#132)。
+- unison-mcp: handler が断った request / timeout / 接続断は、 JSON-RPC の error ではなく
+  tool の結果 (`isError: true`) として理由を text で返す。 `output_schema` は、 `required`
+  でない field に null を許す (`{"type": ["string", "null"]}`) (#135)。
+- `chrono` への依存を外す (#134)。 全バージョンが unmaintained と認定された
+  (RUSTSEC-2026-0543)。 使っていたのは bench の 1 行だけだった。 unison-mcp には rmcp
+  経由で残る (rmcp 側の依存で、 無効にできない) ので、 `deny.toml` で理由を付けて
+  照合の対象から外す。
+- 依存を更新: club-kdl 0.17、 tokio 1.54、 rmcp 3.8、 uuid 1.29 ほか (#126)。 開発用の
+  toolchain を `.mise.toml` で rust 1.99.1 に指定 (MSRV 1.95 は据え置き)。
+- Ruby native extension を `club-unison 2.2.1` に上げ、 依存の floor も 2.2.1 に (#127)。
+  CI で Ruby 側の lockfile も `cargo deny` で照合する。
+- TypeScript client: `engines` を Node 26 以上に、 dev 依存を vitest 5 に (#129)。
+
+### Fixed
+
+- **Swift client: `disconnect()` しても UDP socket が残る** (#132)。 Network.framework は、
+  cancel されない stream (`NWConnection`) が 1 本でも残ると QUIC 接続と socket を
+  生かし続ける。 server が接続直後に開く identity stream (受け取り手がいないまま
+  残る) と、 閉じ忘れた channel の stream を、 `disconnect()` で全部閉じるようにした。
+  `disconnect()` / `close()` を呼ばずに `Connection` / `StreamChannel` を手放した場合、
+  open に失敗した stream、 読み終えた identity stream、 接続に失敗した group も閉じる。
+  (lnx creare で、 つなぎ直すたびに 1 本ずつ溜まり、 一晩で 1,497 本になっていた。)
+- **Swift client: 待ちが Task の cancel に応じない** (#132)。 `connect` / `openChannel` /
+  `request` / `serverIdentity` は、 cancel されたら `CancellationError` で戻る。 これまでは
+  `withThrowingTaskGroup` で期限と競わせても、 期限で戻れなかった。
+- **Swift client: 受信が終わった channel への request が永久に返らない** (#132)。 server が
+  stream を閉じた / 壊れた frame を受けたあとの request は、 待たずに失敗する。
+- **Swift client: 相手からの切断で `.disconnected` が出ない** (#132)。 `connectionEvents` は、
+  server が接続を閉じた場合や経路が失敗した場合にも `.disconnected(reason:)` を流す。
+  server が接続を閉じてから終われば即時、 黙って消えた場合 (crash / kill) は QUIC の
+  idle timeout (最大 30 秒) で検知する。
+- **Swift client: `events` を途中でやめると、 以降の event が全部消える** (#132)。 `break`
+  しても channel は開いたままで、 もう一度回せば続きから読める。
+- Swift client: `serverIdentity()` を同時に呼ぶと片方が永久に返らない (#132)。 identity の
+  読み込みを接続で 1 本にまとめ、 同時に呼んだ全員が同じ値を受け取る。 2 回目以降は
+  読めた値を返す。
+- **unison-mcp: 返事が `returns` の形と違うと、 中身が agent に届かない** (#135)。
+  `isError: true` の結果として、 違う箇所と返事の中身を text で返す。 これまでは
+  `structuredContent` に載せていたため、 MCP client の output schema 検証が返事ごと落とし、
+  agent には検証の文句だけが届いていた。
+- **unison-mcp: endpoint 未設定で tool を呼ぶと、 返らないことがあった** (#135)。 接続先の
+  問い返し (MCP elicitation) に期限 (30 秒) を付けた。 答える人がいない session では、
+  期限のあと 「`endpoint` を渡すか `--config` を」 という error に落ちる。
+
+### Docs
+
+- spec / design / guides をコードと照合して同期 (#130)。 コンパイルできないコード例、
+  実装と違う挙動の記述、 古い実装の説明 (`design/quic-runtime.md` §4〜§6、
+  `design/test-strategy.md`) を直した。
+
+### Validation
+
+- Swift client は macOS 27.2 の実 QUIC (quinn 相手) で確認: 接続と切断を繰り返して UDP
+  socket が増えないこと、 接続待ちの cancel、 server を止めたときの `.disconnected`
+  (`LifecycleLiveTests`)。 **iOS 実機では未確認**。
+
 ## [2.2.1] - 2026-11-04 — 圧縮 payload の展開上限と依存の advisory 対応
 
 > 2026-10-21 の security-audit と依存の照合で見つかった問題の修正。公開 API と

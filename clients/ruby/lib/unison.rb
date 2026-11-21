@@ -20,9 +20,9 @@ require "unison_client/unison_client"
 #
 # Connection-level auth (= v1.4.0) は native ext を変更せず **pure Ruby** で実装する。
 # auth は `unison.auth` channel を open して `Authenticate` request を送るだけなので、
-# 既存の `connect` / `open_channel` / `Channel#request` の上に積める。native ext は
-# `club-unison` の公開版に対してビルドされるため、Rust 側 `connect_with_credential`
-# (= 未公開 1.4.0) に依存しないこの形が decoupled で都合がよい。
+# 既存の `connect` / `open_channel` / `Channel#request` の上に積める。Rust 側の
+# `connect_with_credential` (1.4.0 で公開) を native ext の binding に足さずに済む
+# この形が decoupled で都合がよい。
 # 設計: design/connection-auth.md §5.8。
 module Unison
   # reserved auth channel 名 (= Rust `network::auth::AUTH_CHANNEL_NAME`)。

@@ -1,7 +1,7 @@
 import Foundation
 import SwiftProtobuf
 
-/// Channel stream の wire frame。 Rust `quic.rs` の `read_typed_frame` /
+/// Channel stream の wire frame。 Rust `network/frame.rs` の `read_typed_frame` /
 /// `write_typed_frame` と byte 一致する layout:
 ///
 /// ```text

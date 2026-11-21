@@ -1,7 +1,7 @@
 # spec/01: Unison Protocol - コアコンセプト仕様
 
 **バージョン**: 0.3.0-draft
-**最終更新**: 2026-02-16
+**最終更新**: 2026-11-04
 **ステータス**: Draft
 
 ---
@@ -12,8 +12,8 @@
 2. [設計思想 - Everything is a Channel](#2-設計思想---everything-is-a-channel)
 3. [通信モデル - 1 Channel = 1 QUIC Stream](#3-通信モデル---1-channel--1-quic-stream)
 4. [UnisonChannel](#4-unisonchannelチャネル統合型)
-5. [Identity - ServerIdentity によるノード認証](#5-identity---serveridentityによるノード認証)
-6. [QUIC 通信](#6-quic通信)
+5. [Identity - ServerIdentity によるノード認証](#5-identity---serveridentity-によるノード認証)
+6. [QUIC 通信](#6-quic-通信)
 7. [パケットフォーマット - UnisonPacket](#7-パケットフォーマット---unisonpacket)
 8. [セキュリティ - TLS 1.3](#8-セキュリティ---tls-13)
 9. [今後の拡張](#9-今後の拡張)
@@ -142,12 +142,12 @@ graph LR
     end
 
     subgraph "QUIC コネクション"
-        QS0["Stream 0: Identity"]
-        QS1["Stream 1: control"]
-        QS2["Stream 2: events"]
-        QS3["Stream 3: query"]
-        QS4["Stream 4: messaging"]
-        QS5["Stream 5: urgent"]
+        QS0["Identity stream (server 起点)"]
+        QS1["control stream"]
+        QS2["events stream"]
+        QS3["query stream"]
+        QS4["messaging stream"]
+        QS5["urgent stream"]
     end
 
     CH1 --> QS1
@@ -160,6 +160,8 @@ graph LR
 ### 3.2 チャネルルーティング
 
 クライアントがチャネルを開く際、`__channel:{name}` メソッドプレフィックスでルーティングされる。
+サーバーは同じ stream に `__channel_ack` を 1 本返してからハンドラーを起動する
+(未登録チャネルへの nack を含む詳細は [spec/02 §5.1](../02-unified-channel/SPEC.md#51-チャネル確立-routing))。
 
 ```mermaid
 sequenceDiagram
@@ -167,11 +169,12 @@ sequenceDiagram
     participant S as Server
 
     C->>S: open_bi() -- QUIC 双方向ストリーム開設
-    C->>S: write_frame(__channel:query, Request)
+    C->>S: open frame (typed frame 0x00)<br/>ProtocolMessage { id: N, method: "__channel:query", type: Request }
     Note over S: method.strip_prefix("__channel:")<br/>でチャネル名を抽出
     S->>S: get_channel_handler("query")
-    Note over S: ChannelHandler(ctx, UnisonStream) を起動
-    S-->>C: UnisonChannel 確立完了
+    S->>C: __channel_ack { id: N, type: Response }
+    Note over S: handler(ctx, UnisonStream) を起動
+    Note over C: ack を受けて UnisonChannel を返す
 ```
 
 ### 3.3 実用例: creo_sync プロトコル
@@ -192,43 +195,25 @@ sequenceDiagram
 
 ### 4.1 概要
 
-`UnisonChannel` は Unison Protocol の唯一のチャネル型であり、Request/Response と Event の両パターンをサポートする。
+チャネルの型は backend と用途で分かれる。 stream channel の `UnisonChannel` が中心で、
+Request/Response と Event の両パターンを 1 型でサポートする。
 
-```rust
-pub struct UnisonChannel {
-    stream: Arc<Mutex<UnisonStream>>,
-    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<ProtocolMessage>>>>,
-    event_rx: mpsc::Receiver<ProtocolMessage>,
-    recv_task: JoinHandle<()>,
-}
-```
+| 型 | backend | 用途 |
+|----|---------|------|
+| `UnisonChannel<C: Codec = JsonCodec>` | QUIC bidi stream | Request/Response と Event。 `open_channel()` が返し、 server の handler も受け取った `UnisonStream` から作る |
+| `DatagramChannel<C>` | QUIC datagram (`channel_id` で demux) | best-effort な Event のみ ([spec/02 §8.5](../02-unified-channel/SPEC.md#85-datagram-channel-v0100-で-channel-api-統合完了)) |
+| `DynamicChannel` | stream (`UnisonChannel` を内包) | discovery で取得した schema で request payload を送信前に検証する ([spec/04](../04-discovery/SPEC.md)) |
 
-### 4.2 API
+API (シグネチャ、 受信 queue、 終端の判定) は [spec/02 §5.5](../02-unified-channel/SPEC.md#55-unisonchannel-api) を正とする。
 
-```rust
-impl UnisonChannel {
-    /// Request/Response（メッセージ ID で紐付け）
-    pub async fn request(&self, method: &str, payload: Value) -> Result<Value, NetworkError>;
-
-    /// 一方向送信（応答不要）
-    pub async fn send_event(&self, method: &str, payload: Value) -> Result<(), NetworkError>;
-
-    /// イベント受信（サーバーからのプッシュ）
-    pub async fn recv(&mut self) -> Result<ProtocolMessage, NetworkError>;
-
-    /// チャネルを閉じる
-    pub async fn close(&mut self) -> Result<(), NetworkError>;
-}
-```
-
-### 4.3 使用例
+### 4.2 使用例
 
 ```rust
 // チャネルを開く
-let mut query = client.open_channel("query").await?;
+let query = client.open_channel("query").await?;
 
-// Request/Response
-let result = query.request("Query", json!({
+// Request/Response (応答の型は呼び出し側が注釈する)
+let result: serde_json::Value = query.request("Query", &json!({
     "method": "search",
     "params": {"keyword": "rust"}
 })).await?;
@@ -237,8 +222,9 @@ let result = query.request("Query", json!({
 let event = query.recv().await?;
 println!("Received: {:?}", event);
 
-// Event 送信（サーバー側）
-channel.send_event("MemoryEvent", json!({
+// Event 送信（サーバー側: handler が受け取った UnisonStream から channel を作る）
+let channel: UnisonChannel = UnisonChannel::new(stream);
+channel.send_event("MemoryEvent", &json!({
     "event_type": "created",
     "memory_id": "abc-123"
 })).await?;
@@ -285,15 +271,8 @@ sequenceDiagram
 
 ### 5.3 ConnectionContext
 
-各接続に対して `ConnectionContext` が生成され、Identity 情報とアクティブなチャネルを管理する。
-
-```rust
-pub struct ConnectionContext {
-    pub connection_id: Uuid,
-    identity: Arc<RwLock<Option<ServerIdentity>>>,
-    channels: Arc<RwLock<HashMap<String, ChannelHandle>>>,
-}
-```
+各接続に対して `ConnectionContext` が生成され、Identity 情報、 認証済み主体、 アクティブなチャネル等の
+接続単位の状態を持つ。 中身は [spec/02 §5.6](../02-unified-channel/SPEC.md#56-connectioncontext) を正とする。
 
 ---
 
@@ -311,13 +290,19 @@ pub struct ConnectionContext {
 
 ### 6.2 Length-Prefixed フレーミング
 
-QUIC ストリーム上のメッセージは、4 バイト Big-Endian 長 + データのフレーム形式で送受信される。
+QUIC ストリーム上のメッセージは、 type tag 付きの typed frame `[4B BE len][1B type tag][payload]`
+で送受信される。 `len` は type tag + payload のバイト数で、 最大 8MB (`MAX_MESSAGE_SIZE`)。
+
+| type tag | 種別 | payload |
+|----------|------|---------|
+| `0x00` | protocol frame | `ProtocolMessage` を包んだ UnisonPacket (§7) |
+| `0x01` | raw frame | caller の bytes そのもの (codec / 圧縮を通さない、 `send_raw` / `recv_raw`) |
 
 ```mermaid
 graph LR
-    subgraph "Length-Prefixed Frame"
+    subgraph "Typed Frame"
         direction LR
-        LEN["長さ<br/>4 bytes BE<br/>(u32)"] --> DATA["データ<br/>可変長<br/>(最大 8MB)"]
+        LEN["長さ<br/>4 bytes BE (u32)<br/>= tag + payload"] --> TAG["type tag<br/>1 byte<br/>0x00 / 0x01"] --> DATA["payload<br/>可変長<br/>(最大 8MB)"]
     end
 ```
 
@@ -340,8 +325,9 @@ sequenceDiagram
     S->>C: Identity ストリーム<br/>（サーバー起点 open_bi）
 
     loop 双方向ストリーム受付
-        C->>S: open_bi() + ProtocolFrame 送信
+        C->>S: open_bi() + open frame (typed frame 0x00) 送信
         Note over S: __channel:{name} で<br/>チャネルハンドラーにルーティング
+        S->>C: __channel_ack
         S->>S: ChannelHandler 起動<br/>UnisonChannel として処理
     end
 ```
@@ -392,7 +378,8 @@ pub struct ProtocolMessage {
 
 ### 7.4 自動圧縮
 
-ペイロードが 2KB 以上の場合、zstd Level 1 で自動圧縮される。
+エンコード後の `ProtocolMessage` (= UnisonPacket の payload) が 2KB 以上なら zstd level 1 で圧縮を試み、
+圧縮後のほうが小さい場合だけ圧縮形を送る (header の `COMPRESSED` flag を立てる)。 raw frame (0x01) は圧縮しない。
 
 ---
 
@@ -404,18 +391,31 @@ pub struct ProtocolMessage {
 |------|------|
 | プロトコル | TLS 1.3 (QUIC 内蔵) |
 | 前方秘匿性 | あり |
-| 0-RTT | サポート |
-| クライアント認証 | なし（現在の実装） |
+| 0-RTT | 未使用 (early data は有効化していない) |
+| クライアント認証 | TLS client 証明書は使わない。 接続単位の認証は opt-in の `unison.auth` channel で行う (`ProtocolServer::enable_auth` / `ProtocolClient::connect_with_credential`、 [design/connection-auth.md](../../design/connection-auth.md)) |
 
 ### 8.2 証明書管理
 
-1. **埋め込みアセット**: rust-embed によるバイナリ埋め込み（`crates/unison-protocol/assets/certs/`）
-2. **自己署名証明書**: rcgen による自動生成（フォールバック）
+library は trust model を選ばない。 server の証明書は `CertSource`、 client の検証方法は `TrustAnchors` で
+運用者が明示的に選ぶ ([cert.rs](../../crates/unison-protocol/src/network/cert.rs) /
+[trust.rs](../../crates/unison-protocol/src/network/trust.rs))。
+
+| server: `CertSource` | 用途 |
+|----------------------|------|
+| `SelfSigned { subject_alt_names }` | 起動時に rcgen で自己署名証明書を生成する。 `CertSource::dev_localhost()` (localhost / 127.0.0.1 / ::1、 **dev 専用**) と `CertSource::internal_mesh(sans)` はこの形を返す |
+| `Provided { certified_key }` | メモリ上の証明書チェーンと鍵。 内部 mesh の私設 CA (`MeshCa::issue`) もこの形を返す |
+| `FromFile { cert_path, key_path }` | PEM ファイルから読む (k8s secret、 cert-manager 等) |
+
+| client: `TrustAnchors` | 用途 |
+|------------------------|------|
+| `System` | 公開 CA (webpki-roots の Mozilla bundle) を信頼する |
+| `Custom(certs)` | 指定した証明書だけを信頼する。 内部 mesh 用 (`InternalMeshKeypair::generate` / `MeshCa::trust_anchors`) |
+| `SkipVerification` | **dev 専用**。 server 証明書を検証しない。 接続先は loopback に限られ、 それ以外は接続前に error |
 
 ### 8.3 現在の制約
 
-- クライアント側は証明書検証をスキップしている（`SkipServerVerification`）
-- 本番環境では適切な証明書検証の実装が必要
+- builder で未指定のとき、 server は `CertSource::dev_localhost()`、 client は `TrustAnchors::SkipVerification`
+  になる。 dev では設定なしで動くが、 loopback 以外へは繋がらない。 公開する server / 検証する client は明示的に選ぶ
 
 ---
 
@@ -424,7 +424,7 @@ pub struct ProtocolMessage {
 初期構想では、Agent/Hub/Root の 3 層ネットワークアーキテクチャと mDNS ディスカバリー、IPv6 ULA アドレッシングを計画していた。現在は 1 対 1 の Client-Server 通信（Unified Channel）に注力しており、3 層アーキテクチャは将来の拡張として位置づけられる。
 
 拡張ロードマップ:
-- **短期**: NAT traversal、証明書検証の本番対応
+- **短期**: NAT traversal
 - **中期**: Hub 層の導入（複数 Agent 集約）、mDNS ディスカバリー
 - **長期**: Root 層によるグローバルネットワーク管理
 
@@ -453,5 +453,5 @@ pub struct ProtocolMessage {
 ---
 
 **仕様バージョン**: 0.3.0-draft
-**最終更新**: 2026-02-16
+**最終更新**: 2026-11-04
 **ステータス**: Draft

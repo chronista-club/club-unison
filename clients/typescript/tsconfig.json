@@ -8,7 +8,7 @@
     "noFallthroughCasesInSwitch": true,
     "noPropertyAccessFromIndexSignature": true,
 
-    // Module / target (= modern web + Node 20+)
+    // Module / target (= modern web + Node 26+)
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",

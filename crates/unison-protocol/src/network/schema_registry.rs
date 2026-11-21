@@ -4,7 +4,7 @@
 //! KDL を parse して構築する。 channel → request/event の型情報を保持し、 client が
 //! request を送る前に payload validation を実行できるようにする。
 //!
-//! 設計: `spec/04-discovery/SPEC.md` §8 (= client 側 TypeRegistry 構築)。
+//! 設計: `spec/04-discovery/SPEC.md` §8 (= client 側 SchemaRegistry 構築)。
 //!
 //! # 役割
 //! - channel / request / event の **存在** 検証
@@ -14,11 +14,6 @@
 //! v0.1.0 では constraint (min/max/pattern) や response 側 validation は **out of
 //! scope** (= 別 Epic / phase)。 `FieldType::Custom`、 `FieldType::Enum` も
 //! v0.1.0 では type check を passthrough する (= 後続 phase で本格対応)。
-//!
-//! # 既存 `parser::TypeRegistry` との違い
-//! `parser::TypeRegistry` は **build-time codegen** 用の型名 mapping (= KDL の
-//! `typedef` 名から Rust / TypeScript の型文字列を引く)。 本 `SchemaRegistry` は
-//! **runtime channel schema lookup** + validation。 役割が直交するため別 type。
 
 use std::collections::HashMap;
 use thiserror::Error;
@@ -85,11 +80,15 @@ pub enum ValidationError {
 impl SchemaRegistry {
     /// KDL ソースから SchemaRegistry を構築する。
     ///
-    /// 既存 [`SchemaParser`] を使用。 `protocol` block を欠く KDL は Err。
+    /// `protocol` block を欠く KDL は Err。
+    ///
+    /// registry は相手の server から届いた schema を読む側なので、 この版が知らない
+    /// node は読み飛ばす ([`SchemaParser::parse_lenient`])。 相手が新しい版の語彙を
+    /// 使っていても、 知っている channel / request はそのまま使える。
     pub fn from_kdl(kdl: &str) -> Result<Self, RegistryError> {
         let parser = SchemaParser::new();
         let schema = parser
-            .parse(kdl)
+            .parse_lenient(kdl)
             .map_err(|e| RegistryError::Parse(e.to_string()))?;
         if schema.protocol.is_none() {
             return Err(RegistryError::NoProtocol);
@@ -582,6 +581,38 @@ protocol "x" version="0.1.0" {
             }
             other => panic!("expected TypeMismatch, got {other:?}"),
         }
+    }
+
+    /// 相手の server が新しい版の語彙 (= この版が知らない node) を使っていても、
+    /// 知っている channel / request は読める。 discovery で届いた schema を
+    /// 弾くと、 型付きの tool が 1 つも生えなくなる。
+    #[test]
+    fn from_kdl_skips_nodes_it_does_not_know() {
+        let kdl = r#"
+protocol "future" version="9.0.0" {
+    capability "streams"
+    channel "chat" from="client" lifetime="persistent" {
+        stream "Upload" {
+            field "chunk" type="string"
+        }
+        request "Send" {
+            field "msg" type="string" required=#true
+            returns "Ack" {
+                field "ok" type="bool"
+                deprecated "use Ack2"
+            }
+        }
+    }
+}
+extension "x" {}
+"#;
+        let r = SchemaRegistry::from_kdl(kdl).expect("知らない node は読み飛ばす");
+        assert!(r.channel("chat").is_some());
+        assert!(r.request("chat", "Send").is_some());
+        assert!(
+            r.validate_request("chat", "Send", &json!({ "msg": "hi" }))
+                .is_ok()
+        );
     }
 
     #[test]
