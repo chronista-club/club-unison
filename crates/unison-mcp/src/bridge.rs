@@ -14,6 +14,7 @@
 //! 起動できる (= 部分動作の resilience)。
 
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use anyhow::Result;
 
@@ -24,8 +25,16 @@ use unison::network::quic::QuicClient;
 use crate::config::{BridgeConfig, TrustMode};
 
 /// MCP bridge 全体の state。
+/// endpoint 未設定時の問い返し (MCP elicitation) を待つ既定の上限。
+///
+/// 人が画面で答えるには足り、 答える人がいない session (= agent が動かしていて、
+/// 問い返しが画面に出ない) では tool の呼び出しが止まり続けない長さ。
+pub const DEFAULT_ELICITATION_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub struct UnisonBridge {
     config: BridgeConfig,
+    /// endpoint 未設定時の問い返し (MCP elicitation) を待つ上限。
+    elicitation_timeout: Duration,
     /// 現在 active な discovery 結果。 起動時に config.endpoint から fetch し、
     /// 以後 `unison_discover` (= default endpoint 宛) が refresh する。
     /// None = endpoint 未設定 or 未 discovery (= synthesized tools 不可、 static のみ)。
@@ -80,6 +89,7 @@ impl UnisonBridge {
         };
         Ok(Self {
             config,
+            elicitation_timeout: DEFAULT_ELICITATION_TIMEOUT,
             discovered: RwLock::new(discovered.map(Arc::new)),
         })
     }
@@ -101,6 +111,17 @@ impl UnisonBridge {
         let old_hash = guard.as_ref().map(|p| p.proto.hash().to_string());
         *guard = Some(Arc::new(d));
         old_hash
+    }
+
+    /// endpoint 未設定時の問い返しを待つ上限 (既定 [`DEFAULT_ELICITATION_TIMEOUT`]) を変える。
+    pub fn with_elicitation_timeout(mut self, timeout: Duration) -> Self {
+        self.elicitation_timeout = timeout;
+        self
+    }
+
+    /// endpoint 未設定時の問い返しを待つ上限。
+    pub fn elicitation_timeout(&self) -> Duration {
+        self.elicitation_timeout
     }
 
     /// Tool arg で endpoint が未指定の場合、 config の default endpoint を返す。
@@ -218,6 +239,7 @@ mod tests {
         // 純粋 sync な resolve は async constructor を経由せず構築できるよう、
         // 直接 struct を組む (= test only)
         let bridge = UnisonBridge {
+            elicitation_timeout: DEFAULT_ELICITATION_TIMEOUT,
             config: BridgeConfig {
                 endpoint: Some("default".to_string()),
                 trust: None,
@@ -231,6 +253,7 @@ mod tests {
     #[test]
     fn endpoint_resolution_empty_returns_none() {
         let bridge = UnisonBridge {
+            elicitation_timeout: DEFAULT_ELICITATION_TIMEOUT,
             config: BridgeConfig::default(),
             discovered: RwLock::new(None),
         };
@@ -240,6 +263,7 @@ mod tests {
     #[test]
     fn trust_resolution_arg_priority() {
         let bridge = UnisonBridge {
+            elicitation_timeout: DEFAULT_ELICITATION_TIMEOUT,
             config: BridgeConfig {
                 endpoint: None,
                 trust: Some(TrustMode::System),
@@ -260,6 +284,7 @@ mod tests {
     #[test]
     fn trust_default_is_skip_for_loopback() {
         let bridge = UnisonBridge {
+            elicitation_timeout: DEFAULT_ELICITATION_TIMEOUT,
             config: BridgeConfig::default(),
             discovered: RwLock::new(None),
         };
@@ -281,6 +306,7 @@ mod tests {
     #[test]
     fn trust_default_is_system_for_remote() {
         let bridge = UnisonBridge {
+            elicitation_timeout: DEFAULT_ELICITATION_TIMEOUT,
             config: BridgeConfig::default(),
             discovered: RwLock::new(None),
         };

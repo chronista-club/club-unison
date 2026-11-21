@@ -146,6 +146,9 @@ impl<C: Codec> UnisonChannel<C> {
     /// recv() で受けた Request に Response を返す（サーバー側）
     pub async fn send_response<T: Encodable<C>>(&self, request_id: u64, method: &str, payload: &T) -> Result<(), NetworkError>;
 
+    /// recv() で受けた Request を断る（サーバー側）。相手の request() は NetworkError::Protocol になる
+    pub async fn send_error<T: Serialize>(&self, request_id: u64, method: &str, error: &T) -> Result<(), NetworkError>;
+
     /// Response 以外のメッセージを受信（Event、サーバー側では Request も）
     pub async fn recv(&self) -> Result<ProtocolMessage, NetworkError>;
 
@@ -163,6 +166,7 @@ impl<C: Codec> UnisonChannel<C> {
 - `request()`: メッセージIDを振り、`pending` マップに oneshot を登録。recv ループが Response（または Error）を受信すると対応する oneshot に送信。タイムアウトまでに来なければ `NetworkError::Timeout`
 - `send_event()`: Event 型メッセージを送信。応答を待たない
 - `send_response()`: 受けた Request の `id` を引き継いだ Response を送信。client の `request()` はこれで解決する
+- `send_error()`: 受けた Request を処理できないときに、理由を error frame で返す。client の `request()` は `NetworkError::Protocol`（文面に理由が入る）で戻る。**失敗を成功の Response に詰めて返さない**（例: `send_response(.., &json!({"error": "..."}))`）。受け取る側は成功の形として decode / 検証しようとして、断られた理由を取りこぼす（MCP の型付き tool では、output schema の検証に落ちて理由が読めなくなる）
 - `recv()`: recv ループが Response 以外（Event / Request、対応する request の無い Error）を `event_rx` に流す。アプリケーションはここから読み取る
 
 ---
@@ -173,7 +177,7 @@ impl<C: Codec> UnisonChannel<C> {
 |--------|------|------|
 | `NetworkError::NotConnected` | `connect()` の前に `open_channel()` 等を呼んだ | `connect()` を先に呼ぶ |
 | `NetworkError::Quic(...)` | channel の stream を開けない（接続が切れている等） | 接続状態を確認し、必要なら再接続する |
-| `NetworkError::Protocol(...)` | サーバーに登録されていない channel を open した（nack で即 reject）／サーバーが Error で応答した（`request()` 中に接続が切れた場合も） | channel 名とサーバー側の `register_channel` を確認／エラー内容を確認 |
+| `NetworkError::Protocol(...)` | サーバーに登録されていない channel を open した（nack で即 reject）／サーバーの handler が `send_error` で request を断った（`request()` 中に接続が切れた場合も） | channel 名とサーバー側の `register_channel` を確認／文面に入っている理由を確認 |
 | `NetworkError::Codec(...)` | payload を `Req` / `Resp` の型に encode / decode できない | 受け取る型が応答の形と合っているか確認 |
 | `NetworkError::Timeout` | `request()` の応答が既定 30 秒以内に来ない | サーバーが `send_response` で応答しているか確認。待ち時間は `with_request_timeout` で変えられる |
 | `NetworkError::ChannelEof(_)` | 相手が channel を正常に閉じた（`e.is_normal_close()` が true） | エラーではない。受信ループを抜ける |

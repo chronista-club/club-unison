@@ -6,6 +6,27 @@
 このプロジェクトは [セマンティックバージョニング](https://semver.org/lang/ja/) に準拠しています。
 ## [Unreleased]
 
+### Added
+
+- `UnisonChannel::send_error()` — handler が request を断るための API。 error frame
+  (`MessageType::Error`) を返し、 相手の `request()` は `NetworkError::Protocol` (文面に
+  理由が入る) で戻る。 受け取る側 (Rust / TS / Swift / MCP bridge) は以前から error frame に
+  対応していたが、 送る口が無かったため、 失敗を成功の Response に詰めて返すしかなかった。
+
+### Fixed
+
+- **unison-mcp: server の返事が agent に届かない場合があった**。
+  - handler が断った request / timeout / 接続断は、 JSON-RPC の error ではなく tool の結果
+    (`isError: true`) として、 理由を text で返す。
+  - 返事が `returns` の形と違う場合も、 `isError: true` の結果として、 違う箇所と返事の
+    中身を text で返す。 これまでは `structuredContent` に載せていたため、 MCP client の
+    output schema 検証が返事ごと落とし、 agent には検証の文句だけが届いていた。
+  - `output_schema` は、 `required` でない field に null を許す (`{"type": ["string",
+    "null"]}`)。 任意の field を null で返すだけで、 返事ごと落ちていた。
+- **unison-mcp: endpoint 未設定で tool を呼ぶと、 返らないことがあった**。 接続先の
+  問い返し (MCP elicitation) に期限 (30 秒) を付けた。 答える人がいない session では、
+  期限のあと 「`endpoint` を渡すか `--config` を」 という error に落ちる。
+
 ### Changed
 
 - `chrono` への依存を外す。 全バージョンが unmaintained と認定された

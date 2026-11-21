@@ -42,3 +42,7 @@ anyhow.workspace = true
 # Logging
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+# 答えない MCP client をテストの中で立てる (test_small_elicitation.rs)。
+rmcp = { workspace = true, features = ["client"] }
