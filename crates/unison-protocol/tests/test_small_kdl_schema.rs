@@ -671,3 +671,54 @@ message "User" {
     assert!(err.contains(r#"unknown node "feild""#), "{err}");
     assert!(err.contains(r#"message "User""#), "{err}");
 }
+
+// ---- 受け取った schema (parse_lenient) ----
+// discovery で相手の server から届いた schema は、 この版が知らない node をどの位置でも
+// 読み飛ばす (= 新しい版の server に、 古い client が繋げなくならないように)。
+
+#[test]
+fn parse_lenient_skips_unknown_nodes_at_any_depth() {
+    let schema = SchemaParser::new()
+        .parse_lenient(
+            r#"
+protocol "x" version="1.0.0" {
+    capability "streams"
+    channel "users" from="client" lifetime="persistent" {
+        stream "Upload" {}
+        request "Get" {
+            field "id" type="string" {
+                note "x"
+            }
+        }
+    }
+}
+extension "y" {}
+"#,
+        )
+        .expect("知らない node は読み飛ばす");
+    let protocol = schema.protocol.unwrap();
+    assert_eq!(protocol.channels[0].requests.len(), 1);
+    assert_eq!(protocol.channels[0].requests[0].fields.len(), 1);
+}
+
+#[test]
+fn parse_lenient_still_rejects_broken_kdl_and_invalid_channels() {
+    let parser = SchemaParser::new();
+    assert!(parser.parse_lenient("not valid kdl }{").is_err());
+    // semantic な検証 (datagram channel の channel_id 必須) は緩めない
+    let err = parser
+        .parse_lenient(
+            r#"
+protocol "x" version="1.0.0" {
+    channel "pos" from="server" lifetime="persistent" backend="datagram" {
+        event "Tick" {}
+    }
+}
+"#,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, unison::parser::ParseError::Validation(_)),
+        "{err}"
+    );
+}

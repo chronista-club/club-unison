@@ -29,10 +29,11 @@ impl SchemaParser {
 
     /// Parse a KDL schema string into a ParsedSchema
     ///
-    /// その位置に書けない名前のノード (= 旧 `service` / `send` / `recv` 構文、
-    /// タイプミス) は [`ParseError::Kdl`] で弾く。 パース後に [`Channel::validate`] を
-    /// 全 channel に対して呼び、 datagram channel の `channel_id` 必須性等の semantic
-    /// constraint を検証する。
+    /// 自分が書いた schema 用 (= server が配るもの、 lint するもの)。 その位置に書けない
+    /// 名前のノード (= 旧 `service` / `send` / `recv` 構文、 タイプミス) は
+    /// [`ParseError::Kdl`] で弾く。 パース後に [`Channel::validate`] を全 channel に
+    /// 対して呼び、 datagram channel の `channel_id` 必須性等の semantic constraint を
+    /// 検証する。 相手から受け取った schema には [`Self::parse_lenient`] を使う。
     pub fn parse(&self, input: &str) -> Result<ParsedSchema, ParseError> {
         Self::parse_with(input, ForeignNodes::Reject)
     }
@@ -41,19 +42,32 @@ impl SchemaParser {
     /// `schema-diff` 用。 例: Creo の REST の約束にある `route`)。
     ///
     /// top level の知らない node は子孫ごと読み飛ばす。 Unison の node (`message` /
-    /// `enum` / `protocol` 等) の中は [`Self::parse`] と同じく厳密に見る。 server /
-    /// client が読み込む schema には [`Self::parse`] を使う。
+    /// `enum` / `protocol` 等) の中は [`Self::parse`] と同じく厳密に見る。
     pub fn parse_contract(&self, input: &str) -> Result<ParsedSchema, ParseError> {
         Self::parse_with(input, ForeignNodes::SkipAtTopLevel)
     }
 
+    /// 相手から受け取った schema を読む (= discovery で server から届いたもの)。
+    ///
+    /// この版が知らない node は、 どの位置にあっても読み飛ばす。 厳密に見るのは
+    /// schema を書く側の役目で、 受け取る側が弾くと、 新しい版の語彙を使う server に
+    /// 古い client が繋げなくなる (= 知っている channel / request まで使えなくなる)。
+    /// KDL として壊れているもの、 [`Channel::validate`] に反するものは弾く。
+    pub fn parse_lenient(&self, input: &str) -> Result<ParsedSchema, ParseError> {
+        Self::parse_with(input, ForeignNodes::Skip)
+    }
+
     fn parse_with(input: &str, foreign: ForeignNodes) -> Result<ParsedSchema, ParseError> {
         let doc = Document::parse(input).map_err(|e| ParseError::Kdl(e.to_string()))?;
-        for node in doc.nodes() {
-            if foreign == ForeignNodes::SkipAtTopLevel && !TOP_LEVEL_NODES.contains(&node.name()) {
-                continue;
+        if foreign != ForeignNodes::Skip {
+            for node in doc.nodes() {
+                if foreign == ForeignNodes::SkipAtTopLevel
+                    && !TOP_LEVEL_NODES.contains(&node.name())
+                {
+                    continue;
+                }
+                reject_unknown_nodes(std::slice::from_ref(node), TOP_LEVEL_NODES, "")?;
             }
-            reject_unknown_nodes(std::slice::from_ref(node), TOP_LEVEL_NODES, "")?;
         }
         let schema: ParsedSchema =
             club_kdl::from_doc(&doc).map_err(|e| ParseError::Kdl(e.to_string()))?;
@@ -69,11 +83,15 @@ impl SchemaParser {
     }
 }
 
-/// top level にある、 Unison の語彙に無い node の扱い。
+/// Unison の語彙に無い node の扱い。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ForeignNodes {
+    /// どの位置でも弾く (= 自分が書いた schema)
     Reject,
+    /// top level だけ読み飛ばす (= 他の方言の node を持つ約束)
     SkipAtTopLevel,
+    /// どの位置でも読み飛ばす (= 相手から受け取った schema)
+    Skip,
 }
 
 /// ファイルの一番上に書いてよいノード。

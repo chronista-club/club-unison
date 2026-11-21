@@ -25,7 +25,10 @@ unknown node "send" in protocol "x" > channel "users" (allowed: request, event)
 
 - 上げる前に `unison schema-lint <file>` を通す。エラーが出たら、その node を直すか消す
 - 一時的に外したい node は `/-`（KDL のコメントアウト）を付ける
-- server / client / MCP が読み込む schema も同じ規則で弾かれる（= 起動時に気づける）
+- server が自分の schema を読み込むとき（`enable_discovery` など）も同じ規則で弾かれる
+  （= 起動時に気づける）
+- discovery で相手の server から届いた schema を読む側（client の `DynamicProtocol`、
+  MCP bridge）は弾かない。知らない node は読み飛ばし、知っている channel / request を使う
 - `schema-check` / `schema-diff` だけは、他の方言の約束（top level に `route` などを持つ
   もの）を読めるよう、top level の知らない node を読み飛ばす
 - Rust の API と wire bytes は変わらない

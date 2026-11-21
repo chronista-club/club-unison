@@ -57,11 +57,15 @@
 - **KDL schema の知らない node を parse error にする**。 これまで `SchemaParser` は、
   その位置に書けない名前の node (= 旧 `service` / `method` / `send` / `recv` 構文、
   `requst` のようなタイプミス) を黙って捨てていたため、 `schema-lint` が ok を返す
-  「空の channel」ができていた。 server / client / MCP / `schema-lint` / `mock` が
-  読む schema はすべて対象。 エラーは `unknown node "send" in protocol "x" > channel
+  「空の channel」ができていた。 対象は schema を書く側: `schema-lint` / `mock` と、
+  server が自分の schema を読み込むとき (`enable_discovery` など)。 エラーは `unknown node "send" in protocol "x" > channel
   "users" (allowed: request, event)` の形で場所を示す。
   **既存の schema に余分な node があると読み込めなくなる** (`/-` でコメントアウトした
   node は対象外)。
+- discovery で相手の server から届いた schema を読む側 (`DynamicProtocol` /
+  `SchemaRegistry::from_kdl`、 MCP bridge) は、 これまでどおり知らない node を読み飛ばす
+  (`SchemaParser::parse_lenient` を追加)。 新しい版の語彙を使う server に、 古い client が
+  繋げなくならないようにするため。
 - `SchemaParser::parse_contract` を追加。 `schema-check` / `schema-diff` はこれで約束を
   読み、 top level にある他の方言の node (例: Creo の REST の `route`) だけを読み飛ばす。
   Unison の node の中は `parse` と同じく厳密。
