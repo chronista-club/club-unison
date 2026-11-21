@@ -6,6 +6,11 @@
 このプロジェクトは [セマンティックバージョニング](https://semver.org/lang/ja/) に準拠しています。
 ## [Unreleased]
 
+### Changed
+
+- Ruby native extension を `club-unison 2.3.0` に上げ、 依存の floor も 2.3.0 に。 Ruby 側の
+  lockfile から unmaintained の `chrono` (RUSTSEC-2026-0543) が消える。
+
 ## [2.3.0] - 2026-11-21 — 待ちが必ず戻る Swift client、 agent に返事が届く unison-mcp、 schema の厳格化
 
 > 利用側 (lnx / Vantage Point) からの報告と、 2026-10 の security-audit の残りをまとめて
