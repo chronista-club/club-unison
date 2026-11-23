@@ -18,6 +18,7 @@ Unisonプロトコルの正式な要求仕様・機能仕様です。
 | 01 | [コアネットワーク](01-core-concept/SPEC.md) | QUIC採用、Everything is a Channel、ServerIdentity | Draft |
 | 02 | [Unified Channel](02-unified-channel/SPEC.md) | KDL スキーマ、channel routing、request / event、datagram channel | Stable |
 | 04 | [Discovery](04-discovery/SPEC.md) | `unison.discovery` channel による KDL の runtime 配布と hash | Stable |
+| 05 | [State Sync](05-sync/SPEC.md) | `unison::sync` — Origin ↔ Slave の自動同期、2 チャネル QUIC 運び方、多段 Relay | Stable |
 
 番号 03 は欠番 (旧「Stream Channels」spec は 02 に統合)。
 
