@@ -1,16 +1,14 @@
-// Unison Sync — Origin ↔ Slave の自動同期プロトコル（2 チャネル QUIC + 多段 Relay）。
+// Unison Sync — Origin ↔ Slave の自動同期プロトコル（2 チャネル QUIC + 多段 Relay + buffa binary wire）。
 //
-// 仕様: spec/05-sync/SPEC.md ／ 設計: design/sync.md
+// 仕様: spec/05-sync/SPEC.md ／ 設計: design/sync.md ／ Wire proto: crates/unison-protocol/proto/sync.proto
 //
 // 入った人の手元には、正本（Origin）の写し（Slave）ができる。道は 2 本:
 // - unison.sync（入る人が開く）: 入る（Join）と、置き換えの頼み（Set）
 // - unison.sync.feed（配り手が開く）: 要素の変動（Update）。入った人の Slave が直接吸い上げる
 //
-// 「出ていく」という操作は無い。unison.sync を閉じることが、出ていくこと。
-// 配り手（Origin または Relay）が止まると、配り手の側から feed と control が閉じられる。
-//
-// 中継（Relay）も、同じプロトコルで下流を待ち受ける。下流から見ると Origin に入るのと同じ。
-// 代（life）は Origin のもの、rev は Origin が振ったまま。Set は中継を経て Origin で確定する。
+// 各要素の値の正本は連続バイト列（Bytes）。Rust クライアントは buffa（Protocol Buffers）の
+// MessageView<'a> によりヒープ確保ゼロ（no-alloc / zero-copy）で直接読み取れるほか、
+// JSON / 任意バイナリも同じ要素モデルの上で扱える。
 
 protocol "unison-sync" version="0.1.0" {
     namespace "club.chronista.unison.sync"
@@ -22,7 +20,7 @@ protocol "unison-sync" version="0.1.0" {
             returns "JoinReply" {
                 // 何代めの Origin か。立ち上がり直すたびに大きくなる
                 field "life" type="int"
-                // 要素ごとの状態: { "<要素名>": { "rev": int, "value": any } }
+                // 要素ごとの状態: { "<要素名>": { "rev": int, "value": any } } (buffa wire 上は repeated SlotEntryProto)
                 field "slots" type="json"
                 // 入れなかった理由: "stopped" | "already_joined" | "bad_request" | "feed_unavailable"
                 field "error" type="string"

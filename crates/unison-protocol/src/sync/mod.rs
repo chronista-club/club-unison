@@ -1,18 +1,16 @@
-//! Origin ↔ Slave の自動同期（同期コア・中継・QUIC 2 チャネル運び方）。
+//! Origin ↔ Slave の自動同期（`bytes::Bytes` + `buffa` 正本・`MessageView` no-alloc 読み取り・中継・QUIC 2 チャネル運び方）。
 //!
-//! 仕様: `spec/05-sync/SPEC.md` ／ 設計: `design/sync.md`
+//! 仕様: `spec/05-sync/SPEC.md` ／ 設計: `design/sync.md` ／ Wire proto: `crates/unison-protocol/proto/sync.proto`
 //!
-//! - 状態は、名前の付いた要素（slot）の集まり。要素ごとに `(rev, value)` を持つ
-//! - 正本は [`Origin`] の 1 つだけ。[`Origin::set`] が、その要素の rev を 1 つ進めて確定する
-//! - 手元の写しが [`Slave`]。届いた変動で、自分の要素を書き換える（自動で同期する）。
-//!   手元の利用者は通信を意識せず、[`Slave::get`] / [`Slave::snapshot`] で今の値を読み、
-//!   [`Slave::changed`] で変動を待ち、[`Slave::set`] で Origin に置き換えを頼む
-//! - Slave の合流の決まり: **同じ代で、手元より新しい rev だけを受け入れる**。
-//!   rev は要素ごとに独立しているので、別々の道（stream、応答）から順不同で届いても矛盾しない
-//! - Slave も Origin と同じ形の状態を持つので、そのまま下流の Slave への配り手（中継）になれる
-//!   （[`Source`] / [`Relay`]）。rev は Origin が振ったものをそのまま運ぶ
-//! - 配り手は、購読者ごとに「前回から変わった要素」だけを、今の値で渡す（途中の rev は畳む）。
-//!   受け取りが遅い購読者がいても、溜まるのは要素の数まで
+//! - 状態は、名前の付いた要素（slot）の集まり。要素ごとに `(rev, payload: Bytes)` を持つ
+//! - 値の正本は不変・参照カウント共有の連続バイト列 [`Bytes`]。複製はすべて O(1)・no-alloc
+//! - [`buffa::MessageView`] により、[`SlotState::decode_view`] / [`Slave::with_slot`] / [`Origin::with_slot`] から
+//!   **ヒープ確保 0 回（no-alloc / zero-copy）** で構造体のフィールドを直接読み取れる
+//! - 正本は [`Origin`] の 1 つだけ。`Origin::set*` が、その要素の rev を 1 つ進めて確定する
+//! - 手元の写しが [`Slave`]。届いた変動で、自分の要素を書き換える（自動で同期する）
+//! - Slave の合流の決まり: **同じ代で、手元より新しい rev だけを受け入れる**
+//! - Slave も Origin と同じ形の状態を持つので、そのまま下流の Slave への配り手（中継）になれる（[`Source`] / [`Relay`]）
+//! - 配り手は、購読者ごとに「前回から変わった要素」だけを、今の値で渡す（途中の rev は畳む）
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -23,17 +21,28 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use ::buffa::{
+    Message as BuffaMessage, MessageView as BuffaMessageView, OwnedView as BuffaOwnedView,
+};
+use bytes::Bytes;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use tokio::sync::{Semaphore, oneshot, watch};
 use tokio::task::JoinHandle;
 
+use crate::codec::{CodecError, Decodable, Encodable, JsonCodec, ProtoCodec};
 use crate::network::context::ConnectionContext;
 use crate::network::server::ServerHandle;
 use crate::network::{
     MessageType, NetworkError, ProtocolClient, ProtocolMessage, ProtocolServer, UnisonChannel,
     UnisonStream,
 };
+
+/// `proto/sync.proto` から `buffa-build` が生成した wire メッセージ型と zero-copy `*View` 型
+#[allow(clippy::derivable_impls, clippy::match_single_binding)]
+pub mod proto {
+    include!(concat!(env!("OUT_DIR"), "/sync.mod.rs"));
+}
 
 /// スキーマの正本（`schemas/sync.kdl`）。ビルドに焼き込み、discovery で配る
 pub const SYNC_KDL: &str = include_str!("../../../../schemas/sync.kdl");
@@ -56,30 +65,327 @@ pub const FEED_PATIENCE: Duration = Duration::from_secs(5);
 /// 応答を待ったまま時間切れになる。同時に出す数をそれより小さく抑え、超えたぶんは手元で待たせる
 pub const MAX_SETS_IN_FLIGHT: usize = 128;
 
-/// 要素 1 つの状態
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+fn encode_json_bytes<T: Serialize>(value: &T) -> Bytes {
+    Bytes::from(serde_json::to_vec(value).expect("JSON serialize failed"))
+}
+
+fn payload_to_json_value(payload: &[u8]) -> Value {
+    serde_json::from_slice(payload)
+        .unwrap_or_else(|_| Value::Array(payload.iter().copied().map(Value::from).collect()))
+}
+
+fn json_value_to_payload(value: &Value) -> Bytes {
+    encode_json_bytes(value)
+}
+
+fn is_json_object_payload(bytes: &[u8]) -> bool {
+    bytes
+        .iter()
+        .copied()
+        .find(|b| !b.is_ascii_whitespace())
+        .is_some_and(|b| b == b'{')
+}
+
+/// 要素 1 つの状態。値の正本は連続バイト列 [`Bytes`]（複製は O(1)・no-alloc）。
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SlotState {
     /// 世代番号。Origin が確定するたびに 1 つ進む。最初の確定が 1
     pub rev: u64,
-    pub value: Value,
+    /// エンコード済みの値バイト列（buffa protobuf / JSON / 任意バイナリ）
+    pub payload: Bytes,
 }
 
-/// 要素 1 つの変動。Origin が振った rev をそのまま運ぶ
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+impl SlotState {
+    /// 生のバイト列から作る
+    pub fn from_bytes(rev: u64, payload: impl Into<Bytes>) -> Self {
+        Self {
+            rev,
+            payload: payload.into(),
+        }
+    }
+
+    /// `buffa::Message`（Protocol Buffers）をエンコードして作る
+    pub fn from_proto<M: BuffaMessage>(rev: u64, msg: &M) -> Self {
+        Self {
+            rev,
+            payload: Bytes::from(msg.encode_to_vec()),
+        }
+    }
+
+    /// `serde::Serialize` な値を JSON バイト列にエンコードして作る
+    pub fn from_json<T: Serialize>(rev: u64, value: &T) -> Self {
+        Self {
+            rev,
+            payload: encode_json_bytes(value),
+        }
+    }
+
+    /// 生のバイトスライスへの参照（no-alloc）
+    #[inline]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.payload
+    }
+
+    /// 内部の [`Bytes`] への参照（no-alloc）
+    #[inline]
+    pub fn bytes(&self) -> &Bytes {
+        &self.payload
+    }
+
+    /// `buffa::MessageView<'a>` として **ヒープ確保 0 回（no-alloc / zero-copy）** でデコードする
+    #[inline]
+    pub fn decode_view<'a, V: BuffaMessageView<'a>>(&'a self) -> Result<V, ::buffa::DecodeError> {
+        V::decode_view(&self.payload)
+    }
+
+    /// [`Bytes`] バッファと zero-copy View を一体で保持する `'static` な [`::buffa::OwnedView`] を返す（ヒープ確保 0 回）
+    #[inline]
+    pub fn decode_owned_view<V>(&self) -> Result<BuffaOwnedView<V>, ::buffa::DecodeError>
+    where
+        V: BuffaMessageView<'static>,
+    {
+        BuffaOwnedView::decode(self.payload.clone())
+    }
+
+    /// 所有型の `buffa::Message` としてデコードする
+    #[inline]
+    pub fn decode_proto<M: BuffaMessage + Default>(&self) -> Result<M, ::buffa::DecodeError> {
+        M::decode_from_slice(&self.payload)
+    }
+
+    /// `serde::de::DeserializeOwned` な型として JSON デコードする
+    #[inline]
+    pub fn decode_json<T: serde::de::DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
+        serde_json::from_slice(&self.payload)
+    }
+
+    /// JSON [`Value`] として取り出す
+    pub fn value(&self) -> Value {
+        payload_to_json_value(&self.payload)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct SlotStateSerde {
+    rev: u64,
+    value: Value,
+}
+
+impl Serialize for SlotState {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        SlotStateSerde {
+            rev: self.rev,
+            value: self.value(),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for SlotState {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let helper = SlotStateSerde::deserialize(deserializer)?;
+        Ok(Self {
+            rev: helper.rev,
+            payload: json_value_to_payload(&helper.value),
+        })
+    }
+}
+
+/// 要素 1 つの変動。Origin が振った rev とエンコード済み payload をそのまま運ぶ。
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SlotUpdate {
     /// 何代めの Origin の変動か
     pub life: u64,
     pub slot: String,
     pub rev: u64,
-    pub value: Value,
+    /// エンコード済みの値バイト列（複製は O(1)・no-alloc）
+    pub payload: Bytes,
+}
+
+impl SlotUpdate {
+    /// 生のバイト列から作る
+    pub fn from_bytes(
+        life: u64,
+        slot: impl Into<String>,
+        rev: u64,
+        payload: impl Into<Bytes>,
+    ) -> Self {
+        Self {
+            life,
+            slot: slot.into(),
+            rev,
+            payload: payload.into(),
+        }
+    }
+
+    /// `buffa::Message`（Protocol Buffers）をエンコードして作る
+    pub fn from_proto<M: BuffaMessage>(
+        life: u64,
+        slot: impl Into<String>,
+        rev: u64,
+        msg: &M,
+    ) -> Self {
+        Self {
+            life,
+            slot: slot.into(),
+            rev,
+            payload: Bytes::from(msg.encode_to_vec()),
+        }
+    }
+
+    /// `serde::Serialize` な値を JSON バイト列にエンコードして作る
+    pub fn from_json<T: Serialize>(
+        life: u64,
+        slot: impl Into<String>,
+        rev: u64,
+        value: &T,
+    ) -> Self {
+        Self {
+            life,
+            slot: slot.into(),
+            rev,
+            payload: encode_json_bytes(value),
+        }
+    }
+
+    /// 生のバイトスライスへの参照（no-alloc）
+    #[inline]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.payload
+    }
+
+    /// 内部の [`Bytes`] への参照（no-alloc）
+    #[inline]
+    pub fn bytes(&self) -> &Bytes {
+        &self.payload
+    }
+
+    /// `buffa::MessageView<'a>` として **ヒープ確保 0 回（no-alloc / zero-copy）** でデコードする
+    #[inline]
+    pub fn decode_view<'a, V: BuffaMessageView<'a>>(&'a self) -> Result<V, ::buffa::DecodeError> {
+        V::decode_view(&self.payload)
+    }
+
+    /// [`Bytes`] バッファと zero-copy View を一体で保持する `'static` な [`::buffa::OwnedView`] を返す（ヒープ確保 0 回）
+    #[inline]
+    pub fn decode_owned_view<V>(&self) -> Result<BuffaOwnedView<V>, ::buffa::DecodeError>
+    where
+        V: BuffaMessageView<'static>,
+    {
+        BuffaOwnedView::decode(self.payload.clone())
+    }
+
+    /// 所有型の `buffa::Message` としてデコードする
+    #[inline]
+    pub fn decode_proto<M: BuffaMessage + Default>(&self) -> Result<M, ::buffa::DecodeError> {
+        M::decode_from_slice(&self.payload)
+    }
+
+    /// `serde::de::DeserializeOwned` な型として JSON デコードする
+    #[inline]
+    pub fn decode_json<T: serde::de::DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
+        serde_json::from_slice(&self.payload)
+    }
+
+    /// JSON [`Value`] として取り出す
+    pub fn value(&self) -> Value {
+        payload_to_json_value(&self.payload)
+    }
+
+    pub(crate) fn to_proto(&self) -> proto::SlotUpdateProto {
+        proto::SlotUpdateProto {
+            life: self.life,
+            slot: self.slot.clone(),
+            rev: self.rev,
+            payload: self.payload.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn from_proto_view(view: &proto::SlotUpdateProtoView<'_>) -> Self {
+        Self {
+            life: view.life,
+            slot: view.slot.to_string(),
+            rev: view.rev,
+            payload: Bytes::copy_from_slice(view.payload),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct SlotUpdateSerde {
+    life: u64,
+    slot: String,
+    rev: u64,
+    value: Value,
+}
+
+impl Serialize for SlotUpdate {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        SlotUpdateSerde {
+            life: self.life,
+            slot: self.slot.clone(),
+            rev: self.rev,
+            value: self.value(),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for SlotUpdate {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let helper = SlotUpdateSerde::deserialize(deserializer)?;
+        Ok(Self {
+            life: helper.life,
+            slot: helper.slot,
+            rev: helper.rev,
+            payload: json_value_to_payload(&helper.value),
+        })
+    }
 }
 
 /// ある時点の状態を丸ごと
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Snapshot {
     /// 何代めの Origin の状態か
     pub life: u64,
     pub slots: BTreeMap<String, SlotState>,
+}
+
+impl Snapshot {
+    pub(crate) fn to_proto(&self) -> proto::SnapshotProto {
+        proto::SnapshotProto {
+            life: self.life,
+            slots: self
+                .slots
+                .iter()
+                .map(|(slot, state)| proto::SlotEntryProto {
+                    slot: slot.clone(),
+                    rev: state.rev,
+                    payload: state.payload.to_vec(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn from_proto_view(view: &proto::SnapshotProtoView<'_>) -> Self {
+        let mut slots = BTreeMap::new();
+        for entry in view.slots.iter() {
+            slots.insert(
+                entry.slot.to_string(),
+                SlotState {
+                    rev: entry.rev,
+                    payload: Bytes::copy_from_slice(entry.payload),
+                },
+            );
+        }
+        Self {
+            life: view.life,
+            slots,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -98,7 +404,7 @@ pub enum SyncError {
 // ── 状態（IO も同期の道具も持たない）──────────────────────
 
 /// 要素の集まり。Origin と Slave が同じものを持ち、違うのは書き換え方
-/// （[`Slots::set`] で確定する / [`Slots::merge`] で合流する）だけ
+/// （[`Slots::set_bytes`] / [`Slots::set_proto`] / [`Slots::set`] で確定する / [`Slots::merge`] で合流する）だけ
 #[derive(Clone, Debug)]
 pub struct Slots {
     life: u64,
@@ -160,22 +466,34 @@ impl Slots {
         }
     }
 
-    /// 置き換える（Origin）: その要素の rev を 1 つ進めて確定する
-    pub fn set(&mut self, slot: &str, value: Value) -> SlotUpdate {
+    /// 生のバイト列で置き換える（Origin）: その要素の rev を 1 つ進めて確定する。
+    /// 名前の検証は [`Origin::set_bytes`] 側で行う
+    pub fn set_bytes(&mut self, slot: &str, payload: impl Into<Bytes>) -> SlotUpdate {
+        let payload = payload.into();
         let rev = self.get(slot).map_or(0, |state| state.rev) + 1;
         self.put(
             slot.to_string(),
             SlotState {
                 rev,
-                value: value.clone(),
+                payload: payload.clone(),
             },
         );
         SlotUpdate {
             life: self.life,
             slot: slot.to_string(),
             rev,
-            value,
+            payload,
         }
+    }
+
+    /// `buffa::Message`（Protocol Buffers）で置き換える（Origin）
+    pub fn set_proto<M: BuffaMessage>(&mut self, slot: &str, msg: &M) -> SlotUpdate {
+        self.set_bytes(slot, Bytes::from(msg.encode_to_vec()))
+    }
+
+    /// JSON [`Value`] で置き換える（Origin）: その要素の rev を 1 つ進めて確定する
+    pub fn set(&mut self, slot: &str, value: Value) -> SlotUpdate {
+        self.set_bytes(slot, encode_json_bytes(&value))
     }
 
     /// 合流する（Slave）: 同じ代で、手元より新しい rev だけを受け入れる。受け入れたら `true`。
@@ -194,7 +512,7 @@ impl Slots {
             update.slot.clone(),
             SlotState {
                 rev: update.rev,
-                value: update.value.clone(),
+                payload: update.payload.clone(),
             },
         );
         true
@@ -210,7 +528,7 @@ impl Slots {
                     life: self.life,
                     slot: name.clone(),
                     rev: state.rev,
-                    value: state.value.clone(),
+                    payload: state.payload.clone(),
                 }
             })
             .collect()
@@ -361,17 +679,60 @@ impl Origin {
         self.shared.lock().life()
     }
 
+    /// ある要素の今の状態（[`Bytes::clone`] のみなので **ヒープ確保 0 回 / O(1)**）
     pub fn get(&self, slot: &str) -> Option<SlotState> {
         self.shared.lock().get(slot).cloned()
+    }
+
+    /// ロック内で `&SlotState` を直接借用して読む（[`SlotState::decode_view`] と組み合わせて **完全 no-alloc 読み取り**）
+    #[inline]
+    pub fn with_slot<R>(&self, slot: &str, f: impl FnOnce(&SlotState) -> R) -> Option<R> {
+        let slots = self.shared.lock();
+        let state = slots.get(slot)?;
+        Some(f(state))
+    }
+
+    /// `'static` な [`::buffa::OwnedView`] として要素を読む（**ヒープ確保 0 回**）
+    pub fn get_owned_view<V>(
+        &self,
+        slot: &str,
+    ) -> Option<Result<(u64, BuffaOwnedView<V>), ::buffa::DecodeError>>
+    where
+        V: BuffaMessageView<'static>,
+    {
+        let state = self.get(slot)?;
+        Some(state.decode_owned_view::<V>().map(|v| (state.rev, v)))
+    }
+
+    /// 所有型の `buffa::Message` として要素を読む
+    pub fn get_proto<M: BuffaMessage + Default>(
+        &self,
+        slot: &str,
+    ) -> Option<Result<(u64, M), ::buffa::DecodeError>> {
+        let state = self.get(slot)?;
+        Some(state.decode_proto::<M>().map(|m| (state.rev, m)))
+    }
+
+    /// `serde::de::DeserializeOwned` な型として要素を読む
+    pub fn get_json<T: serde::de::DeserializeOwned>(
+        &self,
+        slot: &str,
+    ) -> Option<Result<(u64, T), serde_json::Error>> {
+        let state = self.get(slot)?;
+        Some(state.decode_json::<T>().map(|v| (state.rev, v)))
     }
 
     pub fn snapshot(&self) -> Snapshot {
         self.shared.lock().snapshot()
     }
 
-    /// 置き換える: その要素の rev を 1 つ進めて確定し、購読者に知らせる。
+    /// 生のバイト列で置き換える: その要素の rev を 1 つ進めて確定し、購読者に知らせる。
     /// 空の要素名は `SyncError::Refused("bad_request")` で断る
-    pub fn set(&self, slot: &str, value: Value) -> Result<SlotUpdate, SyncError> {
+    pub fn set_bytes(
+        &self,
+        slot: &str,
+        payload: impl Into<Bytes>,
+    ) -> Result<SlotUpdate, SyncError> {
         let mut slots = self.shared.lock();
         if self.shared.is_closed() {
             return Err(SyncError::Closed);
@@ -379,9 +740,24 @@ impl Origin {
         if slot.is_empty() {
             return Err(SyncError::Refused("bad_request".into()));
         }
-        let update = slots.set(slot, value);
+        let update = slots.set_bytes(slot, payload);
         self.shared.publish(&slots);
         Ok(update)
+    }
+
+    /// `buffa::Message`（Protocol Buffers）で置き換える
+    pub fn set_proto<M: BuffaMessage>(&self, slot: &str, msg: &M) -> Result<SlotUpdate, SyncError> {
+        self.set_bytes(slot, Bytes::from(msg.encode_to_vec()))
+    }
+
+    /// `serde::Serialize` な値（構造体等）を JSON エンコードして置き換える
+    pub fn set_json<T: Serialize>(&self, slot: &str, value: &T) -> Result<SlotUpdate, SyncError> {
+        self.set_bytes(slot, encode_json_bytes(value))
+    }
+
+    /// JSON [`Value`] で置き換える
+    pub fn set(&self, slot: &str, value: Value) -> Result<SlotUpdate, SyncError> {
+        self.set_bytes(slot, encode_json_bytes(&value))
     }
 
     /// 変動を購読する。購読した時点の状態と、以後の変動の購読を返す
@@ -406,13 +782,18 @@ pub type SetFuture<'a> = Pin<Box<dyn Future<Output = Result<SlotUpdate, SyncErro
 
 /// 上流（Origin の側）へ置き換えを頼む口。運び方ごとに実装する
 pub trait Upstream: Send + Sync {
-    /// 置き換えを頼み、Origin が確定した変動を返す
-    fn set(&self, slot: String, value: Value) -> SetFuture<'_>;
+    /// エンコード済みバイト列で置き換えを頼み、Origin が確定した変動を返す
+    fn set_bytes(&self, slot: String, payload: Bytes) -> SetFuture<'_>;
+
+    /// JSON [`Value`] で置き換えを頼む
+    fn set(&self, slot: String, value: Value) -> SetFuture<'_> {
+        self.set_bytes(slot, encode_json_bytes(&value))
+    }
 }
 
 impl Upstream for Origin {
-    fn set(&self, slot: String, value: Value) -> SetFuture<'_> {
-        Box::pin(std::future::ready(Origin::set(self, &slot, value)))
+    fn set_bytes(&self, slot: String, payload: Bytes) -> SetFuture<'_> {
+        Box::pin(std::future::ready(Origin::set_bytes(self, &slot, payload)))
     }
 }
 
@@ -455,7 +836,7 @@ struct Link {
 }
 
 impl Upstream for Link {
-    fn set(&self, slot: String, value: Value) -> SetFuture<'_> {
+    fn set_bytes(&self, slot: String, payload: Bytes) -> SetFuture<'_> {
         Box::pin(async move {
             if self.shared.is_closed() {
                 return Err(SyncError::Closed);
@@ -465,7 +846,7 @@ impl Upstream for Link {
             let mut closed = self.shared.closed.subscribe();
             let confirmed = tokio::select! {
                 biased;
-                confirmed = self.upstream.set(slot, value) => confirmed?,
+                confirmed = self.upstream.set_bytes(slot, payload) => confirmed?,
                 _ = closed.wait_for(|closed| *closed) => return Err(SyncError::Closed),
             };
             // 応答の道でも合流させる。頼んだ側は、変動の知らせを待たずに確定した値を持つ
@@ -551,9 +932,47 @@ impl Slave {
         self.link.shared.lock().life()
     }
 
-    /// 手元の、ある要素の今の値
+    /// 手元の、ある要素の今の状態（[`Bytes::clone`] のみなので **ヒープ確保 0 回 / O(1)**）
     pub fn get(&self, slot: &str) -> Option<SlotState> {
         self.link.shared.lock().get(slot).cloned()
+    }
+
+    /// ロック内で `&SlotState` を直接借用して読む（[`SlotState::decode_view`] と組み合わせて **完全 no-alloc 読み取り**）
+    #[inline]
+    pub fn with_slot<R>(&self, slot: &str, f: impl FnOnce(&SlotState) -> R) -> Option<R> {
+        let slots = self.link.shared.lock();
+        let state = slots.get(slot)?;
+        Some(f(state))
+    }
+
+    /// `'static` な [`::buffa::OwnedView`] として手元の要素を読む（**ヒープ確保 0 回**）
+    pub fn get_owned_view<V>(
+        &self,
+        slot: &str,
+    ) -> Option<Result<(u64, BuffaOwnedView<V>), ::buffa::DecodeError>>
+    where
+        V: BuffaMessageView<'static>,
+    {
+        let state = self.get(slot)?;
+        Some(state.decode_owned_view::<V>().map(|v| (state.rev, v)))
+    }
+
+    /// 所有型の `buffa::Message` として手元の要素を読む
+    pub fn get_proto<M: BuffaMessage + Default>(
+        &self,
+        slot: &str,
+    ) -> Option<Result<(u64, M), ::buffa::DecodeError>> {
+        let state = self.get(slot)?;
+        Some(state.decode_proto::<M>().map(|m| (state.rev, m)))
+    }
+
+    /// `serde::de::DeserializeOwned` な型として手元の要素を読む
+    pub fn get_json<T: serde::de::DeserializeOwned>(
+        &self,
+        slot: &str,
+    ) -> Option<Result<(u64, T), serde_json::Error>> {
+        let state = self.get(slot)?;
+        Some(state.decode_json::<T>().map(|v| (state.rev, v)))
     }
 
     /// 手元の状態を丸ごと
@@ -567,9 +986,36 @@ impl Slave {
         self.watch.next().await
     }
 
-    /// Origin に置き換えを頼む。確定した変動を返し、手元にも合流させる
+    /// 生のバイト列で Origin に置き換えを頼む。確定した変動を返し、手元にも合流させる
+    pub async fn set_bytes(
+        &self,
+        slot: &str,
+        payload: impl Into<Bytes>,
+    ) -> Result<SlotUpdate, SyncError> {
+        Upstream::set_bytes(&*self.link, slot.to_string(), payload.into()).await
+    }
+
+    /// `buffa::Message`（Protocol Buffers）で Origin に置き換えを頼む
+    pub async fn set_proto<M: BuffaMessage>(
+        &self,
+        slot: &str,
+        msg: &M,
+    ) -> Result<SlotUpdate, SyncError> {
+        self.set_bytes(slot, Bytes::from(msg.encode_to_vec())).await
+    }
+
+    /// `serde::Serialize` な値（構造体等）で Origin に置き換えを頼む
+    pub async fn set_json<T: Serialize>(
+        &self,
+        slot: &str,
+        value: &T,
+    ) -> Result<SlotUpdate, SyncError> {
+        self.set_bytes(slot, encode_json_bytes(value)).await
+    }
+
+    /// JSON [`Value`] で Origin に置き換えを頼む。確定した変動を返し、手元にも合流させる
     pub async fn set(&self, slot: &str, value: Value) -> Result<SlotUpdate, SyncError> {
-        Upstream::set(&*self.link, slot.to_string(), value).await
+        self.set_bytes(slot, encode_json_bytes(&value)).await
     }
 
     /// 上流から外れたか
@@ -680,11 +1126,12 @@ impl Relay {
         Ok((state, presence))
     }
 
-    /// 下流からの置き換えの頼みを、上流へ運ぶ。上流で確定した変動を返し、中継の手元にも合流させる
-    pub async fn set(
+    /// 生のバイト列で下流からの置き換えの頼みを、上流へ運ぶ。
+    /// 上流で確定した変動を返し、中継の手元にも合流させる
+    pub async fn set_bytes(
         &self,
         slot: impl Into<String>,
-        value: Value,
+        payload: impl Into<Bytes>,
     ) -> Result<SlotUpdate, SyncError> {
         let slot = slot.into();
         if slot.is_empty() {
@@ -698,7 +1145,34 @@ impl Relay {
                 _ => return Err(SyncError::Closed),
             }
         };
-        upstream.set(slot, value).await
+        upstream.set_bytes(slot, payload.into()).await
+    }
+
+    /// `buffa::Message`（Protocol Buffers）で下流からの置き換えの頼みを上流へ運ぶ
+    pub async fn set_proto<M: BuffaMessage>(
+        &self,
+        slot: impl Into<String>,
+        msg: &M,
+    ) -> Result<SlotUpdate, SyncError> {
+        self.set_bytes(slot, Bytes::from(msg.encode_to_vec())).await
+    }
+
+    /// `serde::Serialize` な値（構造体等）で下流からの置き換えの頼みを上流へ運ぶ
+    pub async fn set_json<T: Serialize>(
+        &self,
+        slot: impl Into<String>,
+        value: &T,
+    ) -> Result<SlotUpdate, SyncError> {
+        self.set_bytes(slot, encode_json_bytes(value)).await
+    }
+
+    /// JSON [`Value`] で下流からの置き換えの頼みを上流へ運ぶ
+    pub async fn set(
+        &self,
+        slot: impl Into<String>,
+        value: Value,
+    ) -> Result<SlotUpdate, SyncError> {
+        self.set_bytes(slot, encode_json_bytes(&value)).await
     }
 
     /// 中継の手元の状態。止めていれば `None`
@@ -751,6 +1225,20 @@ impl RelayInner {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct JoinRequest {}
 
+impl Encodable<ProtoCodec> for JoinRequest {
+    fn encode(&self) -> Result<Vec<u8>, CodecError> {
+        Ok(proto::JoinRequestProto::default().encode_to_vec())
+    }
+}
+
+impl Decodable<ProtoCodec> for JoinRequest {
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let _ = proto::JoinRequestProtoView::decode_view(bytes)
+            .map_err(|e| CodecError::Decode(e.to_string()))?;
+        Ok(Self {})
+    }
+}
+
 /// 標準の `Join` 応答。入れたら状態、入れなかったら理由
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -759,11 +1247,122 @@ pub enum JoinReply {
     Refused { error: String },
 }
 
-/// `Set` の中身
-#[derive(Clone, Debug, Serialize, Deserialize)]
+impl Encodable<ProtoCodec> for JoinReply {
+    fn encode(&self) -> Result<Vec<u8>, CodecError> {
+        let proto = match self {
+            JoinReply::Joined(snapshot) => proto::JoinReplyProto {
+                snapshot: ::buffa::MessageField::some(snapshot.to_proto()),
+                error: String::new(),
+                ..Default::default()
+            },
+            JoinReply::Refused { error } => proto::JoinReplyProto {
+                snapshot: ::buffa::MessageField::none(),
+                error: error.clone(),
+                ..Default::default()
+            },
+        };
+        Ok(proto.encode_to_vec())
+    }
+}
+
+impl Decodable<ProtoCodec> for JoinReply {
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let view = proto::JoinReplyProtoView::decode_view(bytes)
+            .map_err(|e| CodecError::Decode(e.to_string()))?;
+        if !view.error.is_empty() {
+            return Ok(JoinReply::Refused {
+                error: view.error.to_string(),
+            });
+        }
+        let snapshot = view
+            .snapshot
+            .as_option()
+            .map(Snapshot::from_proto_view)
+            .unwrap_or_default();
+        Ok(JoinReply::Joined(snapshot))
+    }
+}
+
+/// `Set` の中身。`payload` が正本の連続バイト列。
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SetRequest {
     pub slot: String,
-    pub value: Value,
+    pub payload: Bytes,
+}
+
+impl SetRequest {
+    pub fn from_bytes(slot: impl Into<String>, payload: impl Into<Bytes>) -> Self {
+        Self {
+            slot: slot.into(),
+            payload: payload.into(),
+        }
+    }
+
+    pub fn from_proto<M: BuffaMessage>(slot: impl Into<String>, msg: &M) -> Self {
+        Self {
+            slot: slot.into(),
+            payload: Bytes::from(msg.encode_to_vec()),
+        }
+    }
+
+    pub fn from_json<T: Serialize>(slot: impl Into<String>, value: &T) -> Self {
+        Self {
+            slot: slot.into(),
+            payload: encode_json_bytes(value),
+        }
+    }
+
+    pub fn value(&self) -> Value {
+        payload_to_json_value(&self.payload)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct SetRequestSerde {
+    slot: String,
+    value: Value,
+}
+
+impl Serialize for SetRequest {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        SetRequestSerde {
+            slot: self.slot.clone(),
+            value: self.value(),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for SetRequest {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let helper = SetRequestSerde::deserialize(deserializer)?;
+        Ok(Self {
+            slot: helper.slot,
+            payload: json_value_to_payload(&helper.value),
+        })
+    }
+}
+
+impl Encodable<ProtoCodec> for SetRequest {
+    fn encode(&self) -> Result<Vec<u8>, CodecError> {
+        Ok(proto::SetRequestProto {
+            slot: self.slot.clone(),
+            payload: self.payload.to_vec(),
+            ..Default::default()
+        }
+        .encode_to_vec())
+    }
+}
+
+impl Decodable<ProtoCodec> for SetRequest {
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let view = proto::SetRequestProtoView::decode_view(bytes)
+            .map_err(|e| CodecError::Decode(e.to_string()))?;
+        Ok(Self {
+            slot: view.slot.to_string(),
+            payload: Bytes::copy_from_slice(view.payload),
+        })
+    }
 }
 
 /// `Set` の応答。確定したら変動、しなかったら理由
@@ -772,6 +1371,42 @@ pub struct SetRequest {
 pub enum SetReply {
     Set(SlotUpdate),
     Refused { error: String },
+}
+
+impl Encodable<ProtoCodec> for SetReply {
+    fn encode(&self) -> Result<Vec<u8>, CodecError> {
+        let proto = match self {
+            SetReply::Set(update) => proto::SetReplyProto {
+                update: ::buffa::MessageField::some(update.to_proto()),
+                error: String::new(),
+                ..Default::default()
+            },
+            SetReply::Refused { error } => proto::SetReplyProto {
+                update: ::buffa::MessageField::none(),
+                error: error.clone(),
+                ..Default::default()
+            },
+        };
+        Ok(proto.encode_to_vec())
+    }
+}
+
+impl Decodable<ProtoCodec> for SetReply {
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let view = proto::SetReplyProtoView::decode_view(bytes)
+            .map_err(|e| CodecError::Decode(e.to_string()))?;
+        if !view.error.is_empty() {
+            return Ok(SetReply::Refused {
+                error: view.error.to_string(),
+            });
+        }
+        let update = view
+            .update
+            .as_option()
+            .map(SlotUpdate::from_proto_view)
+            .ok_or_else(|| CodecError::Decode("missing SlotUpdate in SetReplyProto".into()))?;
+        Ok(SetReply::Set(update))
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -805,10 +1440,10 @@ pub trait SyncTarget: Send + Sync + 'static {
     type Presence: FeedSource;
     fn join(&self)
     -> impl Future<Output = Result<(Snapshot, Self::Presence), &'static str>> + Send;
-    fn set(
+    fn set_bytes(
         &self,
         slot: String,
-        value: Value,
+        payload: Bytes,
     ) -> impl Future<Output = Result<SlotUpdate, SyncError>> + Send;
 }
 
@@ -822,11 +1457,8 @@ impl SyncTarget for Origin {
         Ok(self.subscribe())
     }
 
-    async fn set(&self, slot: String, value: Value) -> Result<SlotUpdate, SyncError> {
-        if slot.is_empty() {
-            return Err(SyncError::Refused("bad_request".into()));
-        }
-        Origin::set(self, &slot, value)
+    async fn set_bytes(&self, slot: String, payload: Bytes) -> Result<SlotUpdate, SyncError> {
+        Origin::set_bytes(self, &slot, payload)
     }
 }
 
@@ -837,37 +1469,28 @@ impl SyncTarget for Relay {
         Relay::join(self).map_err(|_| "stopped")
     }
 
-    async fn set(&self, slot: String, value: Value) -> Result<SlotUpdate, SyncError> {
-        Relay::set(self, slot, value).await
+    async fn set_bytes(&self, slot: String, payload: Bytes) -> Result<SlotUpdate, SyncError> {
+        Relay::set_bytes(self, slot, payload).await
     }
 }
 
-/// 配り手の変動を、入っている人の server 起点 `feed` へ書き続けるタスクを起動する。
+/// 配り手の変動を、入っている人の server 起点 `feed` へ `buffa` バイナリ（[`proto::SlotUpdateProto`]）で
+/// 書き続けるタスクを起動する。
 ///
 /// 配り手（または中継・上流）が止まったとき、または `feed` に書けなくなったとき
 /// （相手が `feed` を受け取っていない、切れた）は、先に `updates` を手放して退室させてから
 /// `feed` と `channel`（control）を閉じて終わる。
-pub fn spawn_feed<F: FeedSource>(
+pub fn spawn_feed<F: FeedSource, C: crate::codec::Codec>(
     mut updates: F,
     feed: UnisonStream,
-    channel: Arc<UnisonChannel>,
+    channel: Arc<UnisonChannel<C>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         'feed: while let Some(batch) = updates.next().await {
             for update in &batch {
-                let frame = serde_json::to_value(update).and_then(|payload| {
-                    ProtocolMessage::new_with_json(
-                        0,
-                        UPDATE.to_string(),
-                        MessageType::Event,
-                        payload,
-                    )
-                    .map_err(serde::ser::Error::custom)
-                });
-                let Ok(frame) = frame else {
-                    tracing::warn!("Update を組み立てられない: {update:?}");
-                    continue;
-                };
+                let bytes = update.to_proto().encode_to_vec();
+                let frame =
+                    ProtocolMessage::new_encoded(0, UPDATE.to_string(), MessageType::Event, bytes);
                 if let Err(error) = feed.send_frame(&frame).await {
                     tracing::debug!("feed に書けない。出ていったことにする: {error}");
                     break 'feed;
@@ -881,13 +1504,14 @@ pub fn spawn_feed<F: FeedSource>(
     })
 }
 
-/// `Set` request メッセージを検証して取り出す（空の要素名は `"bad_request"` で断る）
+/// `Set` request メッセージを検証して取り出す（`buffa` バイナリと JSON の両方を受理し、空の要素名は `"bad_request"` で断る）
 pub fn parse_set_request(message: &ProtocolMessage) -> Result<SetRequest, &'static str> {
-    let request: SetRequest = message
-        .payload_as_value()
-        .ok()
-        .and_then(|value| serde_json::from_value(value).ok())
-        .ok_or("bad_request")?;
+    let request = if is_json_object_payload(&message.payload) {
+        <SetRequest as Decodable<JsonCodec>>::decode(&message.payload).map_err(|_| "bad_request")?
+    } else {
+        <SetRequest as Decodable<ProtoCodec>>::decode(&message.payload)
+            .map_err(|_| "bad_request")?
+    };
     if request.slot.is_empty() {
         return Err("bad_request");
     }
@@ -911,11 +1535,34 @@ pub fn into_set_reply(result: Result<SlotUpdate, SyncError>) -> SetReply {
     }
 }
 
-/// control チャネル 1 本ぶんの応対
-pub async fn serve_sync_channel<T: SyncTarget>(
+async fn send_reply<T, C>(
+    channel: &UnisonChannel<C>,
+    request: &ProtocolMessage,
+    reply: &T,
+) -> Result<(), NetworkError>
+where
+    T: Encodable<ProtoCodec> + Encodable<JsonCodec>,
+    C: crate::codec::Codec,
+{
+    let bytes = if is_json_object_payload(&request.payload) {
+        Encodable::<JsonCodec>::encode(reply).map_err(NetworkError::Codec)?
+    } else {
+        Encodable::<ProtoCodec>::encode(reply).map_err(NetworkError::Codec)?
+    };
+    let msg = ProtocolMessage::new_encoded(
+        request.id,
+        request.method.clone(),
+        MessageType::Response,
+        bytes,
+    );
+    channel.stream().send_frame(&msg).await
+}
+
+/// control チャネル 1 本ぶんの応対（`ProtoCodec` バイナリと `JsonCodec` の両方に応答可能）
+pub async fn serve_sync_channel<T: SyncTarget, C: crate::codec::Codec>(
     target: Arc<T>,
     ctx: Arc<ConnectionContext>,
-    channel: Arc<UnisonChannel>,
+    channel: Arc<UnisonChannel<C>>,
     feed_channel: &'static str,
 ) -> Result<(), NetworkError> {
     let mut joined: Option<JoinHandle<()>> = None;
@@ -954,9 +1601,7 @@ pub async fn serve_sync_channel<T: SyncTarget>(
                         },
                     }
                 };
-                channel
-                    .send_response(message.id, &message.method, &reply)
-                    .await
+                send_reply(&channel, &message, &reply).await
             }
             SET => {
                 let reply = if joined.is_none() {
@@ -966,16 +1611,14 @@ pub async fn serve_sync_channel<T: SyncTarget>(
                 } else {
                     match parse_set_request(&message) {
                         Ok(request) => {
-                            into_set_reply(target.set(request.slot, request.value).await)
+                            into_set_reply(target.set_bytes(request.slot, request.payload).await)
                         }
                         Err(reason) => SetReply::Refused {
                             error: reason.into(),
                         },
                     }
                 };
-                channel
-                    .send_response(message.id, &message.method, &reply)
-                    .await
+                send_reply(&channel, &message, &reply).await
             }
             other => {
                 tracing::warn!("知らない request: {other}");
@@ -1018,7 +1661,7 @@ pub async fn register_sync_channel_with<T: SyncTarget>(
                 serve_sync_channel(
                     target,
                     ctx,
-                    Arc::new(UnisonChannel::new(stream)),
+                    Arc::new(UnisonChannel::<ProtoCodec>::new(stream)),
                     feed_channel,
                 )
                 .await
@@ -1095,14 +1738,18 @@ impl FeedAcceptor {
 }
 
 /// 置き換えの頼みを、control チャネルの `Set` で配り手へ運ぶ
-struct QuicUpstream {
-    channel: Arc<UnisonChannel>,
+struct QuicUpstream<C: crate::codec::Codec> {
+    channel: Arc<UnisonChannel<C>>,
     /// 同時に出している頼みの数を抑える（[`MAX_SETS_IN_FLIGHT`]）
     in_flight: Semaphore,
 }
 
-impl Upstream for QuicUpstream {
-    fn set(&self, slot: String, value: Value) -> SetFuture<'_> {
+impl<C: crate::codec::Codec> Upstream for QuicUpstream<C>
+where
+    SetRequest: Encodable<C>,
+    SetReply: Decodable<C>,
+{
+    fn set_bytes(&self, slot: String, payload: Bytes) -> SetFuture<'_> {
         Box::pin(async move {
             let _permit = self
                 .in_flight
@@ -1111,7 +1758,7 @@ impl Upstream for QuicUpstream {
                 .map_err(|_| SyncError::Closed)?;
             let reply: SetReply = self
                 .channel
-                .request(SET, &SetRequest { slot, value })
+                .request(SET, &SetRequest { slot, payload })
                 .await
                 .map_err(|error| SyncError::Unreachable(error.to_string()))?;
             match reply {
@@ -1124,22 +1771,25 @@ impl Upstream for QuicUpstream {
 
 /// `feed` を吸い上げて `Slave` に流し込む係。
 ///
-/// 配り手が止まる・切れると、`Slave` に「外れた」を伝えて終わる。
-/// `Slave` が手放されると、つながりを閉じて終わる（= 出ていく）
-async fn pump(
+/// `buffa` の [`proto::SlotUpdateProtoView::decode_view`] を第一優先で **no-alloc デコード** し、
+/// JSON イベントフレームが来た場合にもフォールバックで対応する。
+async fn pump<C: crate::codec::Codec>(
     feed: UnisonStream,
     inlet: Inlet,
-    channel: Arc<UnisonChannel>,
+    channel: Arc<UnisonChannel<C>>,
     client: ProtocolClient,
 ) {
     loop {
         tokio::select! {
             frame = feed.recv_frame() => match frame {
                 Ok(message) if message.msg_type == MessageType::Event && message.method == UPDATE => {
-                    let update = message
-                        .payload_as_value()
-                        .ok()
-                        .and_then(|value| serde_json::from_value::<SlotUpdate>(value).ok());
+                    let update = if is_json_object_payload(&message.payload) {
+                        serde_json::from_slice::<SlotUpdate>(&message.payload).ok()
+                    } else {
+                        proto::SlotUpdateProtoView::decode_view(&message.payload)
+                            .ok()
+                            .map(|view| SlotUpdate::from_proto_view(&view))
+                    };
                     match update {
                         Some(update) => {
                             inlet.apply(&update);
@@ -1160,7 +1810,8 @@ async fn pump(
 
 /// QUIC で上流の配り手に入っている、手元の写し。
 ///
-/// [`Slave`] として読める（`get` / `snapshot` / `changed` / `set`、中継の `Source`）。
+/// [`Slave`] として読める（`with_slot` / `get` / `get_owned_view` / `get_proto` / `get_json` /
+/// `snapshot` / `changed` / `set_proto` / `set_bytes` / `set_json` / `set`、中継の `Source`）。
 /// 手放す（drop する）か [`ConnectedSlave::leave`] を呼ぶと出ていく。
 pub struct ConnectedSlave {
     slave: Slave,
@@ -1171,12 +1822,16 @@ pub struct ConnectedSlave {
 impl ConnectedSlave {
     /// 取得済みの初期 `Snapshot`、control チャネル、server 起点 `feed` stream、`ProtocolClient` から
     /// 手元の [`ConnectedSlave`] を組み立て、裏で `feed` の吸い上げを始める
-    pub fn attach(
+    pub fn attach<C: crate::codec::Codec>(
         snapshot: Snapshot,
-        channel: Arc<UnisonChannel>,
+        channel: Arc<UnisonChannel<C>>,
         feed: UnisonStream,
         client: ProtocolClient,
-    ) -> Self {
+    ) -> Self
+    where
+        SetRequest: Encodable<C>,
+        SetReply: Decodable<C>,
+    {
         let upstream = Arc::new(QuicUpstream {
             channel: channel.clone(),
             in_flight: Semaphore::new(MAX_SETS_IN_FLIGHT),
@@ -1186,12 +1841,12 @@ impl ConnectedSlave {
         Self { slave, pump }
     }
 
-    /// 既定のチャネル名（[`CONTROL_CHANNEL`] / [`FEED_CHANNEL`]）で `addr` の配り手に入る
+    /// 既定のチャネル名（[`CONTROL_CHANNEL`] / [`FEED_CHANNEL`]）で `addr` の配り手に入る（`ProtoCodec` バイナリ通信）
     pub async fn join(addr: SocketAddr) -> Result<Self, JoinError> {
         Self::join_with(addr, CONTROL_CHANNEL, FEED_CHANNEL).await
     }
 
-    /// チャネル名を指定して `addr` の配り手に入る
+    /// チャネル名を指定して `addr` の配り手に入る（`ProtoCodec` バイナリ通信）
     pub async fn join_with(
         addr: SocketAddr,
         control_channel: &str,
@@ -1209,7 +1864,7 @@ impl ConnectedSlave {
                 .map_err(|e| network(&e))?;
             let channel = Arc::new(
                 client
-                    .open_channel(control_channel)
+                    .open_channel_with::<ProtoCodec>(control_channel)
                     .await
                     .map_err(|e| network(&e))?,
             );

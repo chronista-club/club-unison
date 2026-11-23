@@ -171,6 +171,15 @@ impl ProtocolClient {
     /// `open_ack` を待つことで、 fire-and-forget だった旧挙動の「accept されたか
     /// 分からない」問題を解消する。
     pub async fn open_channel(&self, channel_name: &str) -> Result<UnisonChannel, NetworkError> {
+        self.open_channel_with::<crate::codec::JsonCodec>(channel_name)
+            .await
+    }
+
+    /// Codec を指定してチャネルを開く（`UnisonChannel<C>` を返す）
+    pub async fn open_channel_with<C: crate::codec::Codec>(
+        &self,
+        channel_name: &str,
+    ) -> Result<UnisonChannel<C>, NetworkError> {
         // Connection を clone して guard は即座に手放す。 以降 open_bi / ack 待ちで
         // await するため、 guard を握ったままだと server の応答を待つ間ずっと
         // `disconnect()` の write lock が取れなくなる (= open_datagram_channel_with と同形)。

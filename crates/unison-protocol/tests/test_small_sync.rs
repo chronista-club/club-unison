@@ -3,34 +3,67 @@
 //!
 //! Memory: mem_1ChKdJTLL17QHAFpktCt6S
 
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
 
 use unison::parser::SchemaParser;
+use unison::proto::{MessageType as ProtoMsgType, ProtocolMessage, ProtocolMessageView};
 use unison::sync::{
     CONTROL_CHANNEL, FEED_CHANNEL, Origin, Relay, SYNC_KDL, SetFuture, Slave, SlotState,
     SlotUpdate, Slots, Snapshot, SyncError, Upstream,
 };
 
-const PATIENCE: Duration = Duration::from_secs(5);
+struct CountingAllocator;
 
-fn update(life: u64, slot: &str, rev: u64, value: Value) -> SlotUpdate {
-    SlotUpdate {
-        life,
-        slot: slot.into(),
-        rev,
-        value,
+thread_local! {
+    static TRACK_ALLOC: Cell<bool> = const { Cell::new(false) };
+    static ALLOC_COUNT: Cell<usize> = const { Cell::new(0) };
+}
+
+unsafe impl GlobalAlloc for CountingAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        TRACK_ALLOC.with(|track| {
+            if track.get() {
+                ALLOC_COUNT.with(|count| count.set(count.get() + 1));
+            }
+        });
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(ptr, layout) }
     }
 }
 
+#[global_allocator]
+static GLOBAL: CountingAllocator = CountingAllocator;
+
+fn measure_allocs<R>(f: impl FnOnce() -> R) -> (usize, R) {
+    ALLOC_COUNT.with(|c| c.set(0));
+    TRACK_ALLOC.with(|t| t.set(true));
+    let result = f();
+    TRACK_ALLOC.with(|t| t.set(false));
+    let count = ALLOC_COUNT.with(|c| c.get());
+    (count, result)
+}
+
+const PATIENCE: Duration = Duration::from_secs(5);
+
+fn update(life: u64, slot: &str, rev: u64, value: Value) -> SlotUpdate {
+    SlotUpdate::from_json(life, slot, rev, &value)
+}
+
 fn state(rev: u64, value: Value) -> SlotState {
-    SlotState { rev, value }
+    SlotState::from_json(rev, &value)
 }
 
 async fn until(what: &str, mut done: impl FnMut() -> bool) {
@@ -262,7 +295,7 @@ async fn origin_decides_concurrent_sets() {
         second
     };
     assert_eq!(winner.rev, 2);
-    assert_eq!(origin.get("light"), Some(state(2, winner.value.clone())));
+    assert_eq!(origin.get("light"), Some(state(2, winner.value())));
     until("全員が揃う", || {
         a.get("light") == origin.get("light") && b.get("light") == origin.get("light")
     })
@@ -272,7 +305,7 @@ async fn origin_decides_concurrent_sets() {
 struct Canned(SlotUpdate);
 
 impl Upstream for Canned {
-    fn set(&self, _slot: String, _value: Value) -> SetFuture<'_> {
+    fn set_bytes(&self, _slot: String, _payload: bytes::Bytes) -> SetFuture<'_> {
         Box::pin(std::future::ready(Ok(self.0.clone())))
     }
 }
@@ -315,7 +348,7 @@ async fn reply_first_then_feed() {
 struct Silent;
 
 impl Upstream for Silent {
-    fn set(&self, _slot: String, _value: Value) -> SetFuture<'_> {
+    fn set_bytes(&self, _slot: String, _payload: bytes::Bytes) -> SetFuture<'_> {
         Box::pin(std::future::pending())
     }
 }
@@ -339,7 +372,7 @@ async fn pending_set_ends_when_slave_is_closed() {
 struct Counting(Arc<AtomicUsize>);
 
 impl Upstream for Counting {
-    fn set(&self, _slot: String, _value: Value) -> SetFuture<'_> {
+    fn set_bytes(&self, _slot: String, _payload: bytes::Bytes) -> SetFuture<'_> {
         let polls = self.0.clone();
         Box::pin(std::future::poll_fn(move |_| {
             polls.fetch_add(1, Ordering::Relaxed);
@@ -517,7 +550,7 @@ impl Gate {
 }
 
 impl Upstream for Gate {
-    fn set(&self, slot: String, value: Value) -> SetFuture<'_> {
+    fn set_bytes(&self, slot: String, payload: bytes::Bytes) -> SetFuture<'_> {
         Box::pin(async move {
             if slot == "slow" {
                 let _ = self.open.acquire().await;
@@ -526,7 +559,7 @@ impl Upstream for Gate {
                 life: 1,
                 slot,
                 rev: self.rev.fetch_add(1, Ordering::Relaxed) + 1,
-                value,
+                payload,
             })
         })
     }
@@ -567,7 +600,7 @@ async fn relay_handle_set_is_confirmed_upstream_and_merged() {
     let (_, mut presence) = relay.join().unwrap();
 
     let confirmed = within("頼む", relay.set("light", json!(2))).await.unwrap();
-    assert_eq!((confirmed.rev, &confirmed.value), (1, &json!(2)));
+    assert_eq!((confirmed.rev, &confirmed.value()), (1, &json!(2)));
     assert_eq!(origin.get("light"), Some(state(1, json!(2))));
     assert_eq!(
         relay.snapshot().unwrap().slots.get("light"),
@@ -656,4 +689,146 @@ async fn relay_handle_stop_ends_pending_set() {
         within("頼みが終わる", slow).await.unwrap(),
         Err(SyncError::Closed)
     );
+}
+
+// ── buffa (Protocol Buffers) 高速シリアライズ & no-alloc MessageView 読み取り ──
+
+fn sample_proto(id: u64, method: &str, payload: &[u8]) -> ProtocolMessage {
+    ProtocolMessage {
+        id,
+        method: method.into(),
+        msg_type: ::buffa::EnumValue::Known(ProtoMsgType::EVENT),
+        payload: payload.to_vec(),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn proto_set_and_no_alloc_view_read() {
+    let origin = Origin::new(1);
+    let msg = sample_proto(42, "camera.pose", &[10, 20, 30, 40]);
+    let confirmed = origin.set_proto("pose", &msg).unwrap();
+    assert_eq!(confirmed.rev, 1);
+
+    let mut slave = Slave::follow(&origin);
+    until("Slave に届く", || slave.get("pose").is_some()).await;
+
+    // 1. with_slot + decode_view: ロック内で &SlotState の &[u8] を直接 zero-copy デコード。
+    //    ヒープアロケーションが厳密に 0 回 (no-alloc) であることを実証する。
+    let (allocs_with_slot, matched) = measure_allocs(|| {
+        slave
+            .with_slot("pose", |slot_state| {
+                let view: ProtocolMessageView<'_> = slot_state.decode_view().unwrap();
+                slot_state.rev == 1
+                    && view.id == 42
+                    && view.method == "camera.pose"
+                    && view.payload == [10, 20, 30, 40]
+            })
+            .unwrap()
+    });
+    assert!(matched);
+    assert_eq!(
+        allocs_with_slot, 0,
+        "with_slot + decode_view must perform 0 heap allocations"
+    );
+
+    // 2. slave.get + decode_view: SlotState の取得も Bytes::clone() (参照カウント +1 のみ) なので
+    //    get から decode_view まで通してもヒープアロケーションは 0 回 (no-alloc)。
+    let (allocs_get_view, matched_get) = measure_allocs(|| {
+        let slot_state = slave.get("pose").unwrap();
+        let view: ProtocolMessageView<'_> = slot_state.decode_view().unwrap();
+        let ok = slot_state.rev == 1
+            && view.id == 42
+            && view.method == "camera.pose"
+            && view.payload == [10, 20, 30, 40];
+        drop(slot_state);
+        ok
+    });
+    assert!(matched_get);
+    assert_eq!(
+        allocs_get_view, 0,
+        "Slave::get + SlotState::decode_view must perform 0 heap allocations"
+    );
+
+    // 3. Slave::set_proto で上流へ buffa メッセージを更新し、changed() の SlotUpdate からも
+    //    no-alloc で decode_view できることを確かめる。
+    let next_msg = sample_proto(99, "camera.zoom", &[7, 8]);
+    let updated = slave.set_proto("pose", &next_msg).await.unwrap();
+    let (allocs_update_view, update_ok) = measure_allocs(|| {
+        let view: ProtocolMessageView<'_> = updated.decode_view().unwrap();
+        updated.rev == 2 && view.id == 99 && view.method == "camera.zoom" && view.payload == [7, 8]
+    });
+    assert!(update_ok);
+    assert_eq!(
+        allocs_update_view, 0,
+        "SlotUpdate::decode_view must perform 0 heap allocations"
+    );
+
+    let batch = within("変動", slave.changed()).await.unwrap();
+    assert_eq!(batch.len(), 1);
+    let view: ProtocolMessageView<'_> = batch[0].decode_view().unwrap();
+    assert_eq!(view.id, 99);
+    assert_eq!(view.method, "camera.zoom");
+}
+
+#[tokio::test]
+async fn owned_view_and_typed_proto_roundtrip() {
+    let origin = Origin::new(1);
+    let slave = Slave::follow(&origin);
+    let relay = Relay::from_slave(slave);
+
+    let msg = sample_proto(777, "synth.note", &[60, 127]);
+    relay.set_proto("synth", &msg).await.unwrap();
+
+    // OwnedView: Bytes バッファと View を一体で保持する 'static ハンドル（ヒープ確保 0 回）
+    let (allocs_owned_view, owned) = measure_allocs(|| {
+        origin
+            .get_owned_view::<ProtocolMessageView<'static>>("synth")
+            .unwrap()
+            .unwrap()
+    });
+    assert_eq!(
+        allocs_owned_view, 0,
+        "get_owned_view must perform 0 heap allocations"
+    );
+    assert_eq!(owned.0, 1);
+    assert_eq!(owned.1.reborrow().id, 777);
+    assert_eq!(owned.1.reborrow().method, "synth.note");
+    assert_eq!(owned.1.reborrow().payload, &[60, 127]);
+
+    // 所有型 (buffa::Message) へのデコード
+    let (rev, decoded): (u64, ProtocolMessage) = origin.get_proto("synth").unwrap().unwrap();
+    assert_eq!(rev, 1);
+    assert_eq!(decoded, msg);
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct LightConfig {
+    intensity: f64,
+    color: String,
+}
+
+#[tokio::test]
+async fn bytes_and_typed_json_roundtrip() {
+    let origin = Origin::new(1);
+    let slave = Slave::follow(&origin);
+    let relay = Relay::from_slave(slave);
+
+    // 1. 生 Bytes の読み書き (as_bytes は no-alloc)
+    relay
+        .set_bytes("pcm", bytes::Bytes::from_static(&[1, 2, 3, 4]))
+        .await
+        .unwrap();
+    let pcm_state = origin.get("pcm").unwrap();
+    assert_eq!(pcm_state.as_bytes(), &[1, 2, 3, 4]);
+
+    // 2. 型付き serde 構造体 (set_json / get_json)
+    let cfg = LightConfig {
+        intensity: 0.75,
+        color: "warm".into(),
+    };
+    relay.set_json("light", &cfg).await.unwrap();
+    let (rev, got): (u64, LightConfig) = origin.get_json("light").unwrap().unwrap();
+    assert_eq!(rev, 1);
+    assert_eq!(got, cfg);
 }

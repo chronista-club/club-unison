@@ -293,6 +293,10 @@ impl<C: Codec> UnisonChannel<C> {
         // ストリームを閉じる
         self.stream.close_stream().await
     }
+
+    pub(crate) fn stream(&self) -> &UnisonStream {
+        &self.stream
+    }
 }
 
 /// built-in channel (= `unison.auth` / `unison.discovery`) の recv ループで、
