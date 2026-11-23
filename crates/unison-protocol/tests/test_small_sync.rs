@@ -86,6 +86,11 @@ async fn within<T>(what: &str, work: impl Future<Output = T>) -> T {
 
 #[test]
 fn sync_kdl_parses_cleanly() {
+    assert_eq!(
+        SYNC_KDL,
+        include_str!("../../../schemas/sync.kdl"),
+        "SYNC_KDL must match schemas/sync.kdl byte-for-byte"
+    );
     let parsed = SchemaParser::new()
         .parse(SYNC_KDL)
         .expect("SYNC_KDL must parse without errors");

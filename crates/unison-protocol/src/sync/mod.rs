@@ -44,8 +44,66 @@ pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/sync.mod.rs"));
 }
 
-/// スキーマの正本（`schemas/sync.kdl`）。ビルドに焼き込み、discovery で配る
-pub const SYNC_KDL: &str = include_str!("../../../../schemas/sync.kdl");
+/// スキーマの正本（`schemas/sync.kdl` と同一、`test_small_sync` で一致を検証）。
+/// `cargo publish -p club-unison` のパッケージ単体ビルドでも参照できるよう crate 内に定義する。
+pub const SYNC_KDL: &str = r#"// Unison Sync — Origin ↔ Slave の自動同期プロトコル（2 チャネル QUIC + 多段 Relay + buffa binary wire）。
+//
+// 仕様: spec/05-sync/SPEC.md ／ 設計: design/sync.md ／ Wire proto: crates/unison-protocol/proto/sync.proto
+//
+// 入った人の手元には、正本（Origin）の写し（Slave）ができる。道は 2 本:
+// - unison.sync（入る人が開く）: 入る（Join）と、置き換えの頼み（Set）
+// - unison.sync.feed（配り手が開く）: 要素の変動（Update）。入った人の Slave が直接吸い上げる
+//
+// 各要素の値の正本は連続バイト列（Bytes）。Rust クライアントは buffa（Protocol Buffers）の
+// MessageView<'a> によりヒープ確保ゼロ（no-alloc / zero-copy）で直接読み取れるほか、
+// JSON / 任意バイナリも同じ要素モデルの上で扱える。
+
+protocol "unison-sync" version="0.1.0" {
+    namespace "club.chronista.unison.sync"
+
+    channel "unison.sync" from="client" lifetime="persistent" {
+        // 入る。応答は、その時点の状態（life と slots）。入れないときは error だけが返る。
+        // 応答の前に、配り手の側から unison.sync.feed が開かれる
+        request "Join" description="Enter a sync source. Returns its current snapshot; later changes arrive on the feed channel." {
+            returns "JoinReply" {
+                // 何代めの Origin か。立ち上がり直すたびに大きくなる
+                field "life" type="int"
+                // 要素ごとの状態: { "<要素名>": { "rev": int, "value": any } } (buffa wire 上は repeated SlotEntryProto)
+                field "slots" type="json"
+                // 入れなかった理由: "stopped" | "already_joined" | "bad_request" | "feed_unavailable"
+                field "error" type="string"
+            }
+        }
+
+        // 置き換えを頼む。Origin が、その要素の rev を 1 つ進めて確定する。
+        // 応答は確定した変動。同じ変動は、入っている全員（頼んだ人も）に feed でも届く
+        request "Set" description="Ask the origin to replace one slot. The origin confirms it with the next rev." {
+            field "slot" type="string" required=#true
+            field "value" type="json" required=#true
+            returns "SetReply" {
+                field "life" type="int"
+                field "slot" type="string"
+                field "rev" type="int"
+                field "value" type="json"
+                // 確定しなかった理由: "not_joined" | "stopped" | "bad_request" | "unreachable"
+                field "error" type="string"
+            }
+        }
+    }
+
+    channel "unison.sync.feed" from="server" lifetime="persistent" {
+        // 配り手 → 入っている人。要素 1 つの変動。
+        // 受け取りが遅いと、同じ要素の途中の rev は飛ばされ、最新の値だけが届く。
+        // 受け取る側は、同じ代で、手元より新しい rev だけを受け入れる
+        event "Update" {
+            field "life" type="int" required=#true
+            field "slot" type="string" required=#true
+            field "rev" type="int" required=#true
+            field "value" type="json" required=#true
+        }
+    }
+}
+"#;
 
 pub const PROTOCOL_NAME: &str = "unison-sync";
 pub const NAMESPACE: &str = "club.chronista.unison.sync";
