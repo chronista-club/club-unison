@@ -164,4 +164,4 @@ MIT — see [LICENSE](./LICENSE) (bundled) or [LICENSE](../../LICENSE) in the re
 
 ## Contributing
 
-This SDK is part of the `chronista-club/club-unison` monorepo. Issues + PRs at https://github.com/chronista-club/club-unison.
+This SDK is part of the `chronista-club/club-unison` monorepo. Issues + PRs at [https://github.com/chronista-club/club-unison](https://github.com/chronista-club/club-unison).
