@@ -6,9 +6,20 @@
 このプロジェクトは [セマンティックバージョニング](https://semver.org/lang/ja/) に準拠しています。
 ## [Unreleased]
 
+## [2.4.1] - 2026-11-24 — README の State Sync (unison::sync) 紹介追加と crates.io / GitHub リンク修正
+
+> crates.io 上の README 表示にも `State Sync (unison::sync)` セクションと修正済み絶対 URL リンクを反映するドキュメント・メタデータ更新パッチ。Rust API・wire format の変更なし。
+
 ### Changed
 
-- Ruby native extension を `club-unison 2.4.0` に上げ、 依存の floor も 2.4.0 に。
+- `README.md` / `README.ja.md` に `State Sync (unison::sync)` セクション（2 チャネル QUIC トランスポート、 `Bytes` + `buffa::MessageView<'a>` ゼロアロケーション読み取り、 コード例、 `spec/05-sync/SPEC.md` / `design/sync.md` への導線）を追加 (#142, #143)。
+- `README.ja.md` に「多言語クライアント (Polyglot clients)」セクションを同期追加し、 `README.md` の Swift SPM 注記を英語化 (#142)。
+- Ruby native extension を `club-unison 2.4.0` に上げ、 依存の floor も 2.4.0 に (#141)。
+
+### Fixed
+
+- `README.md` / `README.ja.md` 冒頭の言語切替リンクと License バッジを絶対 URL に統一し、 crates.io 描画時に `crates/unison-protocol/` 相対解決で 404 になる問題を修正。 CI バッジ URL を `/actions/workflows/ci.yml/badge.svg` に更新 (#142)。
+- `.claude/developer.md`・`CONTRIBUTING.md`・`clients/typescript/README.md`・`crates/unison-mcp/README.md` のリンク切れ・URL 不整合を修正 (#142)。
 
 ## [2.4.0] - 2026-11-24 — Origin ↔ Slave 自動同期層 (unison::sync) と buffa no-alloc 読み取り
 
