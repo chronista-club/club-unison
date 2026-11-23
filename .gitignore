@@ -67,3 +67,6 @@ crates/unison-protocol/assets/certs/*.der
 
 # gitnexus local artifacts
 .gitnexus/
+
+# Vantage Point lane workspaces (repo-local lane refactor)
+.vp/

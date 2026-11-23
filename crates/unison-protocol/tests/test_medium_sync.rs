@@ -12,6 +12,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use unison::network::{MessageType, UnisonChannel};
+use unison::proto::{MessageType as ProtoMsgType, ProtocolMessage, ProtocolMessageView};
 use unison::sync::{
     CONTROL_CHANNEL, ConnectedSlave, FEED_CHANNEL, JOIN, JoinError, JoinReply, JoinRequest,
     NAMESPACE, Origin, PROTOCOL_NAME, Relay, SET, SetReply, SetRequest, Slave, SlotState,
@@ -21,7 +22,11 @@ use unison::sync::{
 const PATIENCE: Duration = Duration::from_secs(5);
 
 fn state(rev: u64, value: Value) -> SlotState {
-    SlotState { rev, value }
+    SlotState::from_json(rev, &value)
+}
+
+fn update(life: u64, slot: &str, rev: u64, value: Value) -> SlotUpdate {
+    SlotUpdate::from_json(life, slot, rev, &value)
 }
 
 async fn within<T>(what: &str, work: impl Future<Output = T>) -> T {
@@ -100,12 +105,7 @@ async fn origin_set_reaches_slave() {
     origin.set("camera", json!("wide")).unwrap();
     assert_eq!(
         within("変動", slave.changed()).await,
-        Some(vec![SlotUpdate {
-            life: 1,
-            slot: "camera".into(),
-            rev: 1,
-            value: json!("wide"),
-        }])
+        Some(vec![update(1, "camera", 1, json!("wide"))])
     );
     assert_eq!(slave.get("camera"), Some(state(1, json!("wide"))));
 
@@ -120,7 +120,7 @@ async fn slave_set_is_confirmed_by_origin_and_reaches_others() {
     let mut other = join(&server).await;
 
     let confirmed = within("頼む", writer.set("light", json!(2))).await.unwrap();
-    assert_eq!((confirmed.rev, &confirmed.value), (1, &json!(2)));
+    assert_eq!((confirmed.rev, &confirmed.value()), (1, &json!(2)));
     assert_eq!(writer.get("light"), Some(state(1, json!(2))));
     assert_eq!(origin.get("light"), Some(state(1, json!(2))));
     until(&mut other, "ほかの Slave に届く", |slave| {
@@ -189,12 +189,7 @@ async fn slow_consumer_slave_is_always_current() {
     .await;
     assert_eq!(
         within("変動", slave.changed()).await,
-        Some(vec![SlotUpdate {
-            life: 1,
-            slot: "light".into(),
-            rev: 200,
-            value: json!(200),
-        }])
+        Some(vec![update(1, "light", 200, json!(200))])
     );
 
     server.shutdown().await;
@@ -275,13 +270,7 @@ async fn set_without_join_and_double_join_are_refused() {
         .unwrap();
     let reply: SetReply = within(
         "頼む",
-        channel.request(
-            SET,
-            &SetRequest {
-                slot: "light".into(),
-                value: json!(1),
-            },
-        ),
+        channel.request(SET, &SetRequest::from_json("light", &json!(1))),
     )
     .await
     .unwrap();
@@ -369,13 +358,7 @@ async fn client_without_feed_is_dropped() {
 
     let after: Result<SetReply, _> = within(
         "頼む",
-        channel.request(
-            SET,
-            &SetRequest {
-                slot: "light".into(),
-                value: json!(-1),
-            },
-        ),
+        channel.request(SET, &SetRequest::from_json("light", &json!(-1))),
     )
     .await;
     assert!(after.is_err(), "{after:?}");
@@ -455,7 +438,7 @@ async fn leaf_set_through_relay_reaches_everyone() {
     let confirmed = within("中継を経て頼む", writer.set("light", json!(2)))
         .await
         .unwrap();
-    assert_eq!((confirmed.rev, &confirmed.value), (1, &json!(2)));
+    assert_eq!((confirmed.rev, &confirmed.value()), (1, &json!(2)));
     assert_eq!(origin.get("light"), Some(state(1, json!(2))));
     assert_eq!(
         relay.snapshot().unwrap().slots.get("light"),
@@ -661,7 +644,7 @@ async fn start_stalling_upstream() -> (
         .register_channel(CONTROL_CHANNEL, move |ctx, stream| {
             let heard = heard.clone();
             async move {
-                let channel = UnisonChannel::new(stream);
+                let channel = UnisonChannel::<unison::codec::ProtoCodec>::new(stream);
                 let mut rev = 0;
                 let mut _feed = None;
                 loop {
@@ -683,8 +666,10 @@ async fn start_stalling_upstream() -> (
                                 .await?;
                         }
                         SET => {
-                            let request: SetRequest =
-                                serde_json::from_value(message.payload_as_value()?).unwrap();
+                            let request = <SetRequest as unison::codec::Decodable<
+                                unison::codec::ProtoCodec,
+                            >>::decode(&message.payload)
+                            .unwrap();
                             if request.slot == "slow" {
                                 heard.notify_one();
                                 continue;
@@ -694,7 +679,7 @@ async fn start_stalling_upstream() -> (
                                 life: 1,
                                 slot: request.slot,
                                 rev,
-                                value: request.value,
+                                payload: request.payload,
                             };
                             channel
                                 .send_response(message.id, SET, &SetReply::Set(update))
@@ -736,7 +721,7 @@ async fn relay_waiting_upstream_holds_up_no_other_leaf() {
     let fast = within("ほかの Leaf の頼み", other.set("fast", json!(2)))
         .await
         .unwrap();
-    assert_eq!((fast.rev, &fast.value), (1, &json!(2)));
+    assert_eq!((fast.rev, &fast.value()), (1, &json!(2)));
     assert!(!slow.is_finished());
     assert_eq!(
         other.set("", json!(1)).await,
@@ -749,4 +734,69 @@ async fn relay_waiting_upstream_holds_up_no_other_leaf() {
 
     relay_server.shutdown().await;
     let _ = upstream.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
+async fn quic_proto_sync_and_no_alloc_view_through_relay() {
+    let (origin, origin_server) = start_origin(1).await;
+    let (relay, relay_server) = start_relay(&origin_server).await;
+    let leaf = join(&relay_server).await;
+    let mut direct = join(&origin_server).await;
+
+    let msg = ProtocolMessage {
+        id: 555,
+        method: "stage.lighting".into(),
+        msg_type: ::buffa::EnumValue::Known(ProtoMsgType::EVENT),
+        payload: vec![0xDE, 0xAD, 0xBE, 0xEF],
+        ..Default::default()
+    };
+
+    // Leaf から Relay 経由で Origin へ buffa protobuf メッセージを書き込む
+    let confirmed = within("buffa 頼み", leaf.set_proto("lighting", &msg))
+        .await
+        .unwrap();
+    assert_eq!(confirmed.rev, 1);
+    let confirmed_view: ProtocolMessageView<'_> = confirmed.decode_view().unwrap();
+    assert_eq!(confirmed_view.id, 555);
+    assert_eq!(confirmed_view.method, "stage.lighting");
+    assert_eq!(confirmed_view.payload, &[0xDE, 0xAD, 0xBE, 0xEF]);
+
+    // Origin / Relay / 直結 Slave の全員にバイナリのまま届き、MessageView で zero-copy 読み取りできる
+    assert!(
+        origin
+            .with_slot("lighting", |s| {
+                let v: ProtocolMessageView<'_> = s.decode_view().unwrap();
+                s.rev == 1 && v.id == 555 && v.method == "stage.lighting"
+            })
+            .unwrap()
+    );
+    assert_eq!(
+        relay
+            .snapshot()
+            .unwrap()
+            .slots
+            .get("lighting")
+            .unwrap()
+            .decode_view::<ProtocolMessageView>()
+            .unwrap()
+            .method,
+        "stage.lighting"
+    );
+
+    until(&mut direct, "直結 Slave に届く", |s| {
+        s.get("lighting").is_some()
+    })
+    .await;
+    assert!(
+        direct
+            .with_slot("lighting", |s| {
+                let v: ProtocolMessageView<'_> = s.decode_view().unwrap();
+                v.id == 555 && v.payload == [0xDE, 0xAD, 0xBE, 0xEF]
+            })
+            .unwrap()
+    );
+
+    relay_server.shutdown().await;
+    origin_server.shutdown().await;
 }
