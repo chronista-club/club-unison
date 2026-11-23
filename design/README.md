@@ -25,6 +25,7 @@
 | [connection-auth.md](connection-auth.md) | Connection-level auth primitive（mechanism/policy 分離） | — |
 | [datagram-channel.md](datagram-channel.md) | Datagram Channel 設計（best-effort lane、v0.10.0） | — |
 | [server-initiated-stream.md](server-initiated-stream.md) | Server-initiated reliable stream（`ServerToClient` を起こす、ADR-020 §S4） | — |
+| [sync.md](sync.md) | `unison::sync` — Origin ↔ Slave 自動同期・2 チャネル QUIC 運び方・多段 Relay | [spec/05](../spec/05-sync/SPEC.md) |
 | [happy-eyeballs-dial.md](happy-eyeballs-dial.md) | `connect_race` — Happy Eyeballs v2 staggered-race dialer（ADR-020 §S6） | — |
 | [swift-client-api.md](swift-client-api.md) | Swift Client SDK API 設計 | — |
 | [typescript-client-api.md](typescript-client-api.md) | TypeScript Client SDK API 設計（v1.0 Phase 3a） | — |

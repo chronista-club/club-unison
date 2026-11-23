@@ -54,6 +54,7 @@
 pub mod codec;
 pub mod network;
 pub mod parser;
+pub mod sync;
 
 // フレーム層モジュール
 pub mod packet;
