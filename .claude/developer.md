@@ -405,8 +405,8 @@ Closes #42
 
 ## 参考リンク
 
-- [仕様書](../../spec/) - プロジェクト仕様
-- [設計ドキュメント](../../design/) - 実装設計詳細
-- [実装ガイド](../../guides/) - 実装時の参考資料
+- [仕様書](../spec/) - プロジェクト仕様
+- [設計ドキュメント](../design/) - 実装設計詳細
+- [実装ガイド](../guides/) - 実装時の参考資料
 - [The Rust Book](https://doc.rust-lang.org/book/) - Rust公式ガイド
 - [Tokio Tutorial](https://tokio.rs/tokio/tutorial) - Tokio公式チュートリアル

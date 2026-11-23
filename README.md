@@ -1,12 +1,12 @@
-English | [日本語](README.ja.md)
+English | [日本語](https://github.com/chronista-club/club-unison/blob/main/README.ja.md)
 
 # Unison Protocol
 
 A type-safe QUIC communication framework, defined by KDL schema.
 
 [![Crates.io](https://img.shields.io/crates/v/club-unison.svg)](https://crates.io/crates/club-unison)
-[![Build Status](https://github.com/chronista-club/club-unison/workflows/CI/badge.svg)](https://github.com/chronista-club/club-unison/actions)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Build Status](https://github.com/chronista-club/club-unison/actions/workflows/ci.yml/badge.svg)](https://github.com/chronista-club/club-unison/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/chronista-club/club-unison/blob/main/LICENSE)
 
 ```toml
 [dependencies]
@@ -213,11 +213,52 @@ protocol "my-service" version="1.0.0" {
 
 ---
 
+## State Sync (`unison::sync`)
+
+Keep an in-memory object store (`Origin` ↔ `Slave`) automatically synchronized over QUIC — including multi-hop `Relay` nodes (`Origin → Relay(Slave+Origin) → Slave`):
+
+- **2-channel QUIC transport**:
+  - `unison.sync` (client → server): `Join` handshake (`SyncSnapshot`) and Slave `PushBatch` (`SyncBatch`).
+  - `unison.sync.feed` (server → client, server-initiated stream): continuous `SyncFrame` broadcast feed from `Origin` to all joined Slaves.
+- **Canonical Protobuf wire + zero-allocation reads**: payloads are stored as `bytes::Bytes` and encoded with [`buffa`](https://crates.io/crates/buffa) (`proto/sync.proto`). Callers can inspect slot payloads in place with **0 heap allocations** via `buffa::MessageView<'a>` (`with_slot` / `get_owned_view` / `decode_view`).
+- **Convergence guarantees** (formally verified with Quint): monotone `version`, `origin_seq` ordering, idempotent `apply`, `dirty` protection while local edits are in flight, and automatic periodic `Flush` + `KeepAlive` tasks.
+
+```rust
+use std::sync::Arc;
+use bytes::Bytes;
+use unison::{ProtocolClient, ProtocolServer};
+use unison::sync::{ConnectedSlave, Origin, Relay, Slave, SyncConfig, SyncServer, decode_view};
+use unison::sync::proto::SyncObjectView;
+
+// 1. Attach SyncServer (Origin) to a ProtocolServer
+let origin = Arc::new(Origin::new());
+origin.insert(1, Bytes::from_static(b"initial-state"), 100);
+let sync_server = Arc::new(SyncServer::new(origin.clone(), SyncConfig::default()));
+
+let server = Arc::new(ProtocolServer::with_identity("sync-node", "2.4.0", "club.chronista.sync"));
+sync_server.attach(&server).await;
+
+// 2. Connect a Slave over QUIC — initial Snapshot + background Flush / KeepAlive / Feed loops run automatically
+let client = Arc::new(ProtocolClient::insecure_localhost()?);
+client.connect("[::1]:8080").await?;
+let connected = ConnectedSlave::connect(client, Arc::new(Slave::new()), SyncConfig::default()).await?;
+
+// 3. Zero-allocation read from a slot via buffa::MessageView<'a>
+let state: Option<Bytes> = connected.slave().with_slot(1, |obj| obj.state.clone());
+
+// Or borrow a zero-copy MessageView<'a> directly from a protobuf-encoded payload buffer:
+// let view: SyncObjectView<'_> = decode_view(&buf)?;
+```
+
+See [spec/05-sync/SPEC.md](https://github.com/chronista-club/club-unison/blob/main/spec/05-sync/SPEC.md) and [design/sync.md](https://github.com/chronista-club/club-unison/blob/main/design/sync.md) for the protocol specification and architecture.
+
+---
+
 ## Workspace crates
 
 | Crate | Description |
 |-------|-------------|
-| [`unison-protocol`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-protocol) | Core library. Published on crates.io as `club-unison`; the Rust crate identifier is `unison`. KDL schema, QUIC, channels, packets. |
+| [`unison-protocol`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-protocol) | Core library. Published on crates.io as `club-unison`; the Rust crate identifier is `unison`. KDL schema, QUIC, channels, packets, `unison::sync`. |
 | [`unison-mcp`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-mcp) | MCP bridge (`unison-mcp` binary). Discovers a server's KDL at runtime and synthesizes one MCP tool per `request`, so AI agents can call Unison servers. |
 | [`unison-cli`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-cli) | Developer CLI (`unison` binary): `ping`, `call`, `sniff`, `mock` (stub server from a KDL file), `schema-lint`, `schema-diff`, `schema-check`. |
 
@@ -231,18 +272,14 @@ The server stays Rust; clients are first-class siblings under [`clients/`](https
 | [`clients/ruby`](https://github.com/chronista-club/club-unison/tree/main/clients/ruby) | raw QUIC (FFI → Rust) | RubyGems `unison-client` |
 | [`clients/swift`](https://github.com/chronista-club/club-unison/tree/main/clients/swift) | raw QUIC (Apple `NWProtocolQUIC`, ALPN `"unison"`) | SPM (`Package.swift` at repo root) — see note |
 
-> **Swift package consumption**: `Package.swift` は **repo root** にあり (SPM の
-> version 指定 remote 依存 `.package(url:from:)` は root manifest を要求するため)。
-> source 実体は `clients/swift/` 配下で、root manifest が `path:` で参照する
-> (= monorepo にコード集約しつつ SPM 配布も成立)。版数は monorepo の git tag
-> (`vX.Y.Z` = Rust workspace 版) に連動する (Swift client は独立 versioning しない)。
+> **Swift package consumption**: `Package.swift` lives at the **repo root** (because SPM's versioned remote dependency `.package(url:from:)` requires a root manifest). The implementation lives under `clients/swift/` and is referenced via `path:` from the root manifest. Releases track the monorepo git tag (`vX.Y.Z` = Rust workspace version).
 >
 > ```swift
-> .package(url: "https://github.com/chronista-club/club-unison.git", from: "2.3.0")
+> .package(url: "https://github.com/chronista-club/club-unison.git", from: "2.4.0")
 > // target: .product(name: "UnisonClient", package: "club-unison")
 > ```
 >
-> monorepo 隣接の開発なら path 依存も可: `.package(path: "../club-unison")`。
+> For local side-by-side development, a path dependency also works: `.package(path: "../club-unison")`.
 
 ---
 
@@ -262,8 +299,11 @@ RUSTFLAGS="-C symbol-mangling-version=v0" cargo test --workspace
 ## Documentation
 
 - [Core concept](https://github.com/chronista-club/club-unison/blob/main/spec/01-core-concept/SPEC.md) — Everything is a Channel
-- [Unified Channel Protocol](https://github.com/chronista-club/club-unison/blob/main/spec/02-unified-channel/SPEC.md) — KDL schema, code generation
+- [Unified Channel Protocol](https://github.com/chronista-club/club-unison/blob/main/spec/02-unified-channel/SPEC.md) — KDL schema, channel routing, code generation
+- [Discovery](https://github.com/chronista-club/club-unison/blob/main/spec/04-discovery/SPEC.md) — Runtime KDL schema discovery (`unison.discovery`)
+- [State Sync](https://github.com/chronista-club/club-unison/blob/main/spec/05-sync/SPEC.md) & [Sync Design](https://github.com/chronista-club/club-unison/blob/main/design/sync.md) — `unison::sync` Origin ↔ Slave state synchronization & zero-allocation `buffa::MessageView` reads
 - [Channel guide](https://github.com/chronista-club/club-unison/blob/main/guides/channel-guide.md) — practical guide
+- [Specs](https://github.com/chronista-club/club-unison/tree/main/spec) / [Design docs](https://github.com/chronista-club/club-unison/tree/main/design) / [Guides](https://github.com/chronista-club/club-unison/tree/main/guides) — full documentation index
 
 ## License
 
