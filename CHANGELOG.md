@@ -6,6 +6,10 @@
 このプロジェクトは [セマンティックバージョニング](https://semver.org/lang/ja/) に準拠しています。
 ## [Unreleased]
 
+### Changed
+
+- Ruby native extension を `club-unison 2.4.0` に上げ、 依存の floor も 2.4.0 に。
+
 ## [2.4.0] - 2026-11-24 — Origin ↔ Slave 自動同期層 (unison::sync) と buffa no-alloc 読み取り
 
 > `club-field` で Quint 形式検証と実機検証を通した Origin ↔ Slave 自動同期層 (`unison::sync`) と、

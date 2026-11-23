@@ -20,8 +20,8 @@ magnus = "0.8"
 # ProtocolClient::insecure_localhost への改名が入った。2.2.1 で圧縮 payload の
 # 展開が申告サイズで打ち切られる (悪意あるサーバーからの decompression bomb 対策)
 # ようになった。2.3.0 で unmaintained の chrono (RUSTSEC-2026-0543) への依存が
-# 外れたので floor を 2.3.0 にする。
-club-unison = "2.3.0"
+# 外れ、2.4.0 で unison::sync (Bytes + buffa) と rmcp/zstd 最新化が入った。
+club-unison = "2.4.0"
 # block_on で async API を Ruby の同期呼び出しへ橋渡しするための runtime。
 tokio = { version = "1", features = ["rt-multi-thread"] }
 # channel payload の Ruby 値 ⇄ serde_json::Value 変換。serde_magnus は magnus
