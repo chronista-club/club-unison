@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+// Unison Sync wire format (buffa protobuf + zero-copy MessageView)
+//
+// 仕様: spec/05-sync/SPEC.md
+// 設計: design/sync.md
+
+package sync;
+
+// スナップショット内の要素 1 つ
+message SlotEntryProto {
+  string slot = 1;
+  uint64 rev = 2;
+  bytes payload = 3;
+}
+
+// 要素 1 つの変動（Origin が振った rev とエンコード済み payload をそのまま運ぶ）
+message SlotUpdateProto {
+  uint64 life = 1;
+  string slot = 2;
+  uint64 rev = 3;
+  bytes payload = 4;
+}
+
+// ある時点の状態丸ごと
+message SnapshotProto {
+  uint64 life = 1;
+  repeated SlotEntryProto slots = 2;
+}
+
+// Join request
+message JoinRequestProto {}
+
+// Join 応答（error が空なら Joined、空でなければ Refused）
+message JoinReplyProto {
+  SnapshotProto snapshot = 1;
+  string error = 2;
+}
+
+// Set request
+message SetRequestProto {
+  string slot = 1;
+  bytes payload = 2;
+}
+
+// Set 応答（error が空なら Set、空でなければ Refused）
+message SetReplyProto {
+  SlotUpdateProto update = 1;
+  string error = 2;
+}
