@@ -168,6 +168,6 @@ Internally:
 
 ## Related
 
-- `crates/unison-protocol` — core protocol (= `DynamicProtocol`, `SchemaRegistry`, `ProtocolCache`)
-- `spec/04-discovery/SPEC.md` — discovery channel specification
-- `DEMO.md` — Claude Code を driver にした E2E demo 手順
+- [`crates/unison-protocol`](../unison-protocol) — core protocol (= `DynamicProtocol`, `SchemaRegistry`, `ProtocolCache`)
+- [`spec/04-discovery/SPEC.md`](../../spec/04-discovery/SPEC.md) — discovery channel specification
+- [`DEMO.md`](DEMO.md) — Claude Code を driver にした E2E demo 手順

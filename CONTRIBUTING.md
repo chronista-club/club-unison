@@ -16,7 +16,7 @@ Unison Protocol への貢献に興味を持っていただきありがとうご�
 
 ## 行動規範
 
-このプロジェクトとその参加者は、[行動規範](CODE_OF_CONDUCT.ja.md)に従います。参加することで、この規範を守ることが期待されます。受け入れがたい行動は contact@chronista.club に報告してください。
+このプロジェクトへの参加にあたっては、互いを尊重し建設的なコミュニケーションを心がけてください。受け入れがたい行動は contact@chronista.club に報告してください。
 
 ## はじめに
 
@@ -31,8 +31,8 @@ Unison Protocol への貢献に興味を持っていただきありがとうご�
 1. GitHub でリポジトリをフォーク
 2. フォークをローカルにクローン：
    ```bash
-   git clone https://github.com/your-username/unison.git
-   cd unison
+   git clone https://github.com/your-username/club-unison.git
+   cd club-unison
    ```
 
 3. アップストリームリポジトリをリモートとして追加：
@@ -232,7 +232,7 @@ cargo doc --document-private-items
 
 ヘルプが必要な場合：
 
-1. [ドキュメント](https://docs.rs/unison)を確認
+1. [ドキュメント](https://docs.rs/club-unison)を確認
 2. 既存の Issue を検索
 3. GitHub Discussions で質問
 4. Discord でお問い合わせ

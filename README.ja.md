@@ -1,12 +1,12 @@
-[English](README.md) | 日本語
+[English](https://github.com/chronista-club/club-unison/blob/main/README.md) | 日本語
 
 # Unison Protocol
 
 KDL スキーマベースの型安全な QUIC 通信フレームワーク。
 
 [![Crates.io](https://img.shields.io/crates/v/club-unison.svg)](https://crates.io/crates/club-unison)
-[![Build Status](https://github.com/chronista-club/club-unison/workflows/CI/badge.svg)](https://github.com/chronista-club/club-unison/actions)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Build Status](https://github.com/chronista-club/club-unison/actions/workflows/ci.yml/badge.svg)](https://github.com/chronista-club/club-unison/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/chronista-club/club-unison/blob/main/LICENSE)
 
 ```toml
 [dependencies]
@@ -213,13 +213,77 @@ protocol "my-service" version="1.0.0" {
 
 ---
 
+## State Sync (`unison::sync`)
+
+Origin（正本）と Slave（複製）の間でインメモリのオブジェクトストアを QUIC 越しに自動同期する。多段 `Relay`（`Origin → Relay(Slave+Origin) → Slave`）にも対応。
+
+- **2 チャネル QUIC トランスポート**:
+  - `unison.sync`（client → server）: `Join` ハンドシェイク（初期 `SyncSnapshot` 応答）と Slave の `PushBatch`（`SyncBatch`）。
+  - `unison.sync.feed`（server → client、server-initiated stream）: `Origin` の更新（`SyncFrame`）を参加済み全 Slave へリアルタイム配信。
+- **Protobuf (buffa) wire + ゼロアロケーション読み取り**: ペイロードは `bytes::Bytes`、wire 表現は [`buffa`](https://crates.io/crates/buffa)（`proto/sync.proto`）に統一。`buffa::MessageView<'a>`（`with_slot` / `get_owned_view` / `decode_view`）により **ヒープ割り当てゼロ（0 alloc）** でスロットのデータを直接参照できる。
+- **収束性と整合性保証**（Quint で形式検証済み）: 単調増加 `version`・`origin_seq` 順序保証・べき等 `apply`・未送信ローカル変更の `dirty` 保護・定期 `Flush` / `KeepAlive` 自動実行。
+
+```rust
+use std::sync::Arc;
+use bytes::Bytes;
+use unison::{ProtocolClient, ProtocolServer};
+use unison::sync::{ConnectedSlave, Origin, Relay, Slave, SyncConfig, SyncServer, decode_view};
+use unison::sync::proto::SyncObjectView;
+
+// 1. ProtocolServer に SyncServer (Origin) をアタッチ
+let origin = Arc::new(Origin::new());
+origin.insert(1, Bytes::from_static(b"initial-state"), 100);
+let sync_server = Arc::new(SyncServer::new(origin.clone(), SyncConfig::default()));
+
+let server = Arc::new(ProtocolServer::with_identity("sync-node", "2.4.0", "club.chronista.sync"));
+sync_server.attach(&server).await;
+
+// 2. Slave を QUIC 接続 — 初期 Snapshot 適用と Flush / KeepAlive / Feed 受信タスクが自動起動
+let client = Arc::new(ProtocolClient::insecure_localhost()?);
+client.connect("[::1]:8080").await?;
+let connected = ConnectedSlave::connect(client, Arc::new(Slave::new()), SyncConfig::default()).await?;
+
+// 3. スロットのゼロアロケーション参照 (buffa::MessageView<'a>)
+let state: Option<Bytes> = connected.slave().with_slot(1, |obj| obj.state.clone());
+
+// または protobuf エンコード済みバッファから直接ゼロコピーの MessageView<'a> を借用:
+// let view: SyncObjectView<'_> = decode_view(&buf)?;
+```
+
+仕様と内部設計の詳細は [spec/05-sync/SPEC.md](https://github.com/chronista-club/club-unison/blob/main/spec/05-sync/SPEC.md) と [design/sync.md](https://github.com/chronista-club/club-unison/blob/main/design/sync.md) を参照。
+
+---
+
 ## ワークスペースクレート
 
 | クレート | 説明 |
 |---------|------|
-| [`unison-protocol`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-protocol) | コアライブラリ。crates.io では `club-unison` として公開、Rust crate identifier は `unison`。KDL スキーマ、QUIC、チャネル、パケット |
+| [`unison-protocol`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-protocol) | コアライブラリ。crates.io では `club-unison` として公開、Rust crate identifier は `unison`。KDL スキーマ、QUIC、チャネル、パケット、`unison::sync` |
 | [`unison-mcp`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-mcp) | MCP bridge（`unison-mcp` バイナリ）。サーバーの KDL を実行時に discovery し、`request` ごとに MCP tool を合成して AI agent から呼べるようにする |
 | [`unison-cli`](https://github.com/chronista-club/club-unison/tree/main/crates/unison-cli) | 開発者向け CLI（`unison` バイナリ）: `ping` / `call` / `sniff` / `mock`（KDL から stub server）/ `schema-lint` / `schema-diff` / `schema-check` |
+
+## 多言語クライアント (Polyglot clients)
+
+サーバーは Rust に集約し、各言語のクライアントを [`clients/`](https://github.com/chronista-club/club-unison/tree/main/clients) 配下でファーストクラスに提供する。wire format の適合性とプロトコル意味論をこのフレームワーク側で持つため、どのクライアントも Rust サーバーとバイト単位で相互運用できる。
+
+| クライアント | トランスポート | 配布形態 |
+|------------|--------------|---------|
+| [`clients/typescript`](https://github.com/chronista-club/club-unison/tree/main/clients/typescript) | WebTransport (HTTP/3) | npm `@chronista-club/unison-client` |
+| [`clients/ruby`](https://github.com/chronista-club/club-unison/tree/main/clients/ruby) | raw QUIC (FFI → Rust) | RubyGems `unison-client` |
+| [`clients/swift`](https://github.com/chronista-club/club-unison/tree/main/clients/swift) | raw QUIC (Apple `NWProtocolQUIC`, ALPN `"unison"`) | SPM（repo root の `Package.swift`）— 下記注記 |
+
+> **Swift パッケージの利用**: `Package.swift` は **repo root** にあり（SPM の
+> version 指定 remote 依存 `.package(url:from:)` は root manifest を要求するため）、
+> source 実体は `clients/swift/` 配下で、root manifest が `path:` で参照する
+> （= monorepo にコード集約しつつ SPM 配布も成立）。版数は monorepo の git tag
+> （`vX.Y.Z` = Rust workspace 版）に連動する（Swift client は独立 versioning しない）。
+>
+> ```swift
+> .package(url: "https://github.com/chronista-club/club-unison.git", from: "2.4.0")
+> // target: .product(name: "UnisonClient", package: "club-unison")
+> ```
+>
+> monorepo 隣接の開発なら path 依存も可: `.package(path: "../club-unison")`。
 
 ---
 
@@ -239,8 +303,11 @@ RUSTFLAGS="-C symbol-mangling-version=v0" cargo test --workspace
 ## ドキュメント
 
 - [コアコンセプト](https://github.com/chronista-club/club-unison/blob/main/spec/01-core-concept/SPEC.md) — Everything is a Channel
-- [Unified Channel Protocol](https://github.com/chronista-club/club-unison/blob/main/spec/02-unified-channel/SPEC.md) — KDL スキーマ、コード生成
+- [Unified Channel Protocol](https://github.com/chronista-club/club-unison/blob/main/spec/02-unified-channel/SPEC.md) — KDL スキーマ、チャネルルーティング、コード生成
+- [Discovery](https://github.com/chronista-club/club-unison/blob/main/spec/04-discovery/SPEC.md) — KDL スキーマの実行時配布（`unison.discovery`）
+- [State Sync 仕様](https://github.com/chronista-club/club-unison/blob/main/spec/05-sync/SPEC.md) / [State Sync 設計](https://github.com/chronista-club/club-unison/blob/main/design/sync.md) — `unison::sync` Origin ↔ Slave 自動同期・`buffa::MessageView` ゼロアロケーション読み取り
 - [チャネルガイド](https://github.com/chronista-club/club-unison/blob/main/guides/channel-guide.md) — 実践ガイド
+- [仕様書一覧](https://github.com/chronista-club/club-unison/tree/main/spec) / [設計ドキュメント一覧](https://github.com/chronista-club/club-unison/tree/main/design) / [実装ガイド一覧](https://github.com/chronista-club/club-unison/tree/main/guides)
 
 ## ライセンス
 
