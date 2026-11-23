@@ -58,11 +58,7 @@ fn sync_kdl_parses_cleanly() {
         .expect("SYNC_KDL must parse without errors");
     let protocol = parsed.protocol.expect("protocol node");
     assert_eq!(protocol.name, "unison-sync");
-    let names: Vec<&str> = protocol
-        .channels
-        .iter()
-        .map(|c| c.name.as_str())
-        .collect();
+    let names: Vec<&str> = protocol.channels.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, vec![CONTROL_CHANNEL, FEED_CHANNEL]);
 }
 
@@ -202,6 +198,26 @@ fn cannot_set_closed() {
     let origin = Origin::new(1);
     origin.close();
     assert_eq!(origin.set("light", json!(1)), Err(SyncError::Closed));
+}
+
+#[tokio::test]
+async fn empty_slot_name_is_refused_everywhere() {
+    let origin = Origin::new(1);
+    assert_eq!(
+        origin.set("", json!(1)),
+        Err(SyncError::Refused("bad_request".into()))
+    );
+    let slave = Slave::follow(&origin);
+    assert_eq!(
+        slave.set("", json!(1)).await,
+        Err(SyncError::Refused("bad_request".into()))
+    );
+    let relay = Relay::from_slave(slave);
+    assert_eq!(
+        relay.set("", json!(1)).await,
+        Err(SyncError::Refused("bad_request".into()))
+    );
+    assert!(origin.snapshot().slots.is_empty());
 }
 
 // ── Slave ──
@@ -345,7 +361,10 @@ async fn pending_set_is_not_woken_by_updates() {
         let slave = slave.clone();
         async move { slave.set("light", json!(0)).await }
     });
-    until("頼みが上流へ出る", || polls.load(Ordering::Relaxed) > 0).await;
+    until("頼みが上流へ出る", || {
+        polls.load(Ordering::Relaxed) > 0
+    })
+    .await;
     let before = polls.load(Ordering::Relaxed);
     for rev in 1..=100 {
         assert!(inlet.apply(&update(1, "camera", rev, json!(rev))));

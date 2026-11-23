@@ -369,11 +369,15 @@ impl Origin {
         self.shared.lock().snapshot()
     }
 
-    /// 置き換える: その要素の rev を 1 つ進めて確定し、購読者に知らせる
+    /// 置き換える: その要素の rev を 1 つ進めて確定し、購読者に知らせる。
+    /// 空の要素名は `SyncError::Refused("bad_request")` で断る
     pub fn set(&self, slot: &str, value: Value) -> Result<SlotUpdate, SyncError> {
         let mut slots = self.shared.lock();
         if self.shared.is_closed() {
             return Err(SyncError::Closed);
+        }
+        if slot.is_empty() {
+            return Err(SyncError::Refused("bad_request".into()));
         }
         let update = slots.set(slot, value);
         self.shared.publish(&slots);
@@ -799,7 +803,8 @@ impl FeedSource for RelayPresence {
 /// QUIC の sync チャネルで待ち受けられる配り手（[`Origin`] または [`Relay`]）
 pub trait SyncTarget: Send + Sync + 'static {
     type Presence: FeedSource;
-    fn join(&self) -> impl Future<Output = Result<(Snapshot, Self::Presence), &'static str>> + Send;
+    fn join(&self)
+    -> impl Future<Output = Result<(Snapshot, Self::Presence), &'static str>> + Send;
     fn set(
         &self,
         slot: String,
@@ -960,7 +965,9 @@ pub async fn serve_sync_channel<T: SyncTarget>(
                     }
                 } else {
                     match parse_set_request(&message) {
-                        Ok(request) => into_set_reply(target.set(request.slot, request.value).await),
+                        Ok(request) => {
+                            into_set_reply(target.set(request.slot, request.value).await)
+                        }
                         Err(reason) => SetReply::Refused {
                             error: reason.into(),
                         },
@@ -1008,8 +1015,13 @@ pub async fn register_sync_channel_with<T: SyncTarget>(
         .register_channel(control_channel, move |ctx, stream| {
             let target = target.clone();
             async move {
-                serve_sync_channel(target, ctx, Arc::new(UnisonChannel::new(stream)), feed_channel)
-                    .await
+                serve_sync_channel(
+                    target,
+                    ctx,
+                    Arc::new(UnisonChannel::new(stream)),
+                    feed_channel,
+                )
+                .await
             }
         })
         .await;

@@ -483,6 +483,136 @@ async fn leaf_set_through_relay_reaches_everyone() {
 
 #[tokio::test]
 #[ignore = "Medium: 実 QUIC runtime が要る"]
+async fn concurrent_leaf_sets_converge() {
+    let (origin, origin_server) = start_origin(1).await;
+    let (relay, relay_server) = start_relay(&origin_server).await;
+    let mut a = join(&relay_server).await;
+    let mut b = join(&relay_server).await;
+    let mut direct = join(&origin_server).await;
+
+    let by_owner = async {
+        for i in 0..30 {
+            origin.set("light", json!(i)).unwrap();
+            tokio::task::yield_now().await;
+        }
+    };
+    let by_a = async {
+        for i in 0..30 {
+            a.set("light", json!(-i)).await.unwrap();
+            a.set("camera", json!(i)).await.unwrap();
+        }
+    };
+    let by_b = async {
+        for i in 0..30 {
+            b.set("light", json!(100 + i)).await.unwrap();
+        }
+    };
+    let by_direct = async {
+        for i in 0..30 {
+            direct.set("sound", json!(i)).await.unwrap();
+        }
+    };
+    within("置き換える", async {
+        tokio::join!(by_owner, by_a, by_b, by_direct)
+    })
+    .await;
+
+    let expected = origin.snapshot().slots;
+    assert_eq!(expected["light"].rev, 90);
+    assert_eq!(expected["camera"].rev, 30);
+    assert_eq!(expected["sound"].rev, 30);
+    for (who, slave) in [("a", &mut a), ("b", &mut b), ("直結", &mut direct)] {
+        until(slave, who, |slave| slave.snapshot().slots == expected).await;
+    }
+    within("中継が揃う", async {
+        while relay.snapshot().unwrap().slots != expected {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+
+    relay_server.shutdown().await;
+    origin_server.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
+async fn leaf_leaving_keeps_others_running() {
+    let (origin, origin_server) = start_origin(1).await;
+    let (relay, relay_server) = start_relay(&origin_server).await;
+    let leaving = join(&relay_server).await;
+    let mut staying = join(&relay_server).await;
+    assert_eq!(relay.visitors(), 2);
+
+    leaving.leave().await;
+    within("出ていったことが中継に伝わる", async {
+        while relay.visitors() != 1 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+
+    assert!(!relay.is_stopped());
+    origin.set("light", json!(1)).unwrap();
+    until(&mut staying, "残った Leaf に届く", |slave| {
+        slave.get("light") == Some(state(1, json!(1)))
+    })
+    .await;
+    assert!(staying.set("camera", json!(2)).await.is_ok());
+
+    relay_server.shutdown().await;
+    origin_server.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
+async fn relay_stop_drops_only_its_leaves() {
+    let (origin, origin_server) = start_origin(1).await;
+    let (relay, relay_server) = start_relay(&origin_server).await;
+    let mut leaf = join(&relay_server).await;
+    let mut direct = join(&origin_server).await;
+
+    relay.stop().await;
+    until_dropped(&mut leaf, "Leaf が外れる").await;
+    assert_eq!(leaf.set("light", json!(1)).await, Err(SyncError::Closed));
+    // Origin と直結の Slave は動き続ける
+    origin.set("light", json!(1)).unwrap();
+    until(&mut direct, "直結の Slave に届く", |slave| {
+        slave.get("light") == Some(state(1, json!(1)))
+    })
+    .await;
+    // 止まった中継には入れない
+    assert_eq!(refused_reason(&relay_server).await, "stopped");
+
+    relay_server.shutdown().await;
+    origin_server.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
+async fn origin_stop_reaches_leaves_through_relay() {
+    let (origin, origin_server) = start_origin(1).await;
+    let (relay, relay_server) = start_relay(&origin_server).await;
+    let mut leaf = join(&relay_server).await;
+    let mut watching = relay.observe().unwrap();
+
+    origin.close();
+    within("中継が外れる", async {
+        while watching.next().await.is_some() {}
+    })
+    .await;
+    assert!(relay.is_stopped());
+    until_dropped(&mut leaf, "Leaf が外れる").await;
+    assert_eq!(leaf.set("light", json!(1)).await, Err(SyncError::Closed));
+    assert_eq!(refused_reason(&relay_server).await, "stopped");
+
+    relay.stop().await;
+    relay_server.shutdown().await;
+    origin_server.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "Medium: 実 QUIC runtime が要る"]
 async fn relay_chain_over_quic() {
     let (origin, origin_server) = start_origin(1).await;
     let (first, first_server) = start_relay(&origin_server).await;
