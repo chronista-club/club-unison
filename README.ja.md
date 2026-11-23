@@ -11,7 +11,7 @@ KDL スキーマベースの型安全な QUIC 通信フレームワーク。
 ```toml
 [dependencies]
 # crates.io package = `club-unison`、Rust crate identifier = `unison`
-club-unison = "2.4.0"
+club-unison = "2.4.1"
 tokio = { version = "1.52", features = ["full"] }
 ```
 
@@ -279,7 +279,7 @@ let state: Option<Bytes> = connected.slave().with_slot(1, |obj| obj.state.clone(
 > （`vX.Y.Z` = Rust workspace 版）に連動する（Swift client は独立 versioning しない）。
 >
 > ```swift
-> .package(url: "https://github.com/chronista-club/club-unison.git", from: "2.4.0")
+> .package(url: "https://github.com/chronista-club/club-unison.git", from: "2.4.1")
 > // target: .product(name: "UnisonClient", package: "club-unison")
 > ```
 >

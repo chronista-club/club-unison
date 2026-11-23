@@ -11,7 +11,7 @@ A type-safe QUIC communication framework, defined by KDL schema.
 ```toml
 [dependencies]
 # crates.io package = `club-unison`, Rust crate identifier = `unison`
-club-unison = "2.4.0"
+club-unison = "2.4.1"
 tokio = { version = "1.52", features = ["full"] }
 ```
 
@@ -275,7 +275,7 @@ The server stays Rust; clients are first-class siblings under [`clients/`](https
 > **Swift package consumption**: `Package.swift` lives at the **repo root** (because SPM's versioned remote dependency `.package(url:from:)` requires a root manifest). The implementation lives under `clients/swift/` and is referenced via `path:` from the root manifest. Releases track the monorepo git tag (`vX.Y.Z` = Rust workspace version).
 >
 > ```swift
-> .package(url: "https://github.com/chronista-club/club-unison.git", from: "2.4.0")
+> .package(url: "https://github.com/chronista-club/club-unison.git", from: "2.4.1")
 > // target: .product(name: "UnisonClient", package: "club-unison")
 > ```
 >
