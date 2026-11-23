@@ -6,10 +6,49 @@
 このプロジェクトは [セマンティックバージョニング](https://semver.org/lang/ja/) に準拠しています。
 ## [Unreleased]
 
+## [2.4.0] - 2026-11-24 — Origin ↔ Slave 自動同期層 (unison::sync) と buffa no-alloc 読み取り
+
+> `club-field` で Quint 形式検証と実機検証を通した Origin ↔ Slave 自動同期層 (`unison::sync`) と、
+> 2 チャネル QUIC 運び方・多段中継 (`Relay`) を追加した版。 各要素の値の正本と wire 運び方を
+> `bytes::Bytes` + `buffa` (Protocol Buffers) に統一し、 `buffa::MessageView<'a>` による
+> ヒープ確保 0 回 (no-alloc / zero-copy) の読み取りを実現している。 既存の公開 API は追加のみ。
+
+### Added
+
+- `unison::sync` — Origin ↔ Slave の自動同期コア・汎用中継・2 チャネル QUIC 運び方 (#138, #139)。
+  - **同期コア** (`Slots`, `Origin`, `Subscription`, `Slave`, `Inlet`, `Upstream`, `Source`,
+    `SlotState`, `SlotUpdate`, `Snapshot`, `SyncError`):
+    要素 (slot) ごとに `(rev, payload: Bytes)` を保持し、 `Origin` が単調増加の `rev` を確定、
+    `Slave` は「同じ `life` で手元より新しい `rev` のみを受け入れる」合流規則 (`streamLatestMerge`) で
+    自動同期する。 購読者ごとの待ち行列を持たず、 遅い購読者には変わった要素の最新値だけを畳んで渡す。
+    上流から外れた際は専用 `closed` watch で返事待ちの `Slave::set*` も即座に `SyncError::Closed` で解く。
+  - **`bytes::Bytes` + `buffa` 正本と no-alloc 読み取り** (`crates/unison-protocol/proto/sync.proto`,
+    `unison::sync::proto`):
+    値の正本を `bytes::Bytes` とすることで `Origin` → `Subscription` → `Relay` → `Slave` 全経路の
+    複製を O(1)・no-alloc に統一。 `SlotState::decode_view::<V>()` / `SlotUpdate::decode_view::<V>()`
+    (`V: buffa::MessageView<'a>`)、 `Origin::with_slot` / `Slave::with_slot`、 および
+    `get_owned_view::<V>()` (`buffa::OwnedView<V>`) により **ヒープ確保 0 回 (no-alloc)** で
+    読み取れる。 書き込み・互換用に `set_proto` / `get_proto`、 `set_bytes` / `as_bytes`、
+    `set_json` / `get_json`、 `set` / `value()` を備える。
+  - **汎用中継** (`Relay`, `RelayPresence`):
+    上流に繋がる `Slave` / `ConnectedSlave` を預かり、 上流の返事待ち中に lock を握らずに
+    下流の `Join` / `Set` を捌く多段中継ハンドル。
+  - **2 チャネル QUIC 運び方** (`SyncServer`, `register_sync_channel`, `register_sync_channel_with`,
+    `serve_sync_channel`, `ConnectedSlave`, `FeedAcceptor`, `FeedSource`, `SyncTarget`, `spawn_feed`,
+    `parse_set_request`, `into_set_reply`, `SYNC_KDL`, `schemas/sync.kdl`, `spec/05-sync/SPEC.md`,
+    `design/sync.md`):
+    client 起点 control (`unison.sync`: `Join` / `Set`、 同時 in-flight `Set` を `Semaphore(128)` で抑制) と
+    server 起点 feed (`unison.sync.feed`: `Update` 直読、 256 件 event queue ドロップを回避) の
+    2 チャネルで `ProtoCodec` (`buffa` バイナリ) 通信を行う (JSON クライアントからの呼び出しにも両刀対応)。
+- `ProtocolClient::open_channel_with::<C>()` — `Codec` 型パラメータ (`ProtoCodec` / `JsonCodec`) を
+  指定して双方向 stream チャネル (`UnisonChannel<C>`) を開く API (`open_datagram_channel_with` と対称) (#139)。
+
 ### Changed
 
+- 依存 crate を最新安定版へ更新: `rmcp` 3.8 → 3.11、 `zstd` 0.14.3 → 0.14.4 (#139)。
 - Ruby native extension を `club-unison 2.3.0` に上げ、 依存の floor も 2.3.0 に。 Ruby 側の
-  lockfile から unmaintained の `chrono` (RUSTSEC-2026-0543) が消える。
+  lockfile から unmaintained の `chrono` (RUSTSEC-2026-0543) が消え、 `url` を 2.5.9
+  (RUSTSEC-2026-0592 対応) に更新 (#137, #138)。
 
 ## [2.3.0] - 2026-11-21 — 待ちが必ず戻る Swift client、 agent に返事が届く unison-mcp、 schema の厳格化
 
